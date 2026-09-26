@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDisplayName</key>
+	<string>Zuri</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLName</key>
+			<string>app.rork.emy9ab9spipidt122yz59</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>zuri</string>
+			</array>
+		</dict>
+	</array>
+	<key>INAlternativeAppNames</key>
+	<array>
+		<dict>
+			<key>INAlternativeAppName</key>
+			<string>Zuri Rides</string>
+			<key>INAlternativeAppNamePronunciationHint</key>
+			<string>zoo ree rides</string>
+		</dict>
+		<dict>
+			<key>INAlternativeAppName</key>
+			<string>Zuri Taxi</string>
+			<key>INAlternativeAppNamePronunciationHint</key>
+			<string>zoo ree taxi</string>
+		</dict>
+		<dict>
+			<key>INAlternativeAppName</key>
+			<string>Zuri Ride</string>
+			<key>INAlternativeAppNamePronunciationHint</key>
+			<string>zoo ree ride</string>
+		</dict>
+	</array>
+	<key>NSSupportsLiveActivities</key>
+	<true/>
+	<key>NSSupportsLiveActivitiesFrequentUpdates</key>
+	<true/>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
+	<key>LSApplicationQueriesSchemes</key>
+	<array>
+		<string>whatsapp</string>
+		<string>tel</string>
+		<string>sms</string>
+	</array>
+</dict>
+</plist>

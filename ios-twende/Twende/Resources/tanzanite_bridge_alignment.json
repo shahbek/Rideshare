@@ -1,0 +1,15 @@
+{
+  "source": "OpenStreetMap ways 890224449 and 1032423313, carriageway midpoints; OSM snapshot 2026-07-28. Engineering span layout cross-checked with GS E&C and OVM.",
+  "widthMetres": 20.5,
+  "coordinates": [
+    {"latitude": -6.7882415, "longitude": 39.2841521},
+    {"latitude": -6.7915552, "longitude": 39.2850754},
+    {"latitude": -6.7950280, "longitude": 39.2860226},
+    {"latitude": -6.7958018, "longitude": 39.2862319},
+    {"latitude": -6.7961829, "longitude": 39.2863486},
+    {"latitude": -6.7966033, "longitude": 39.2865018},
+    {"latitude": -6.7971887, "longitude": 39.2867562}
+  ],
+  "pylonChainages": [287, 412, 537, 662, 787],
+  "notes": "Deck alignment and endpoints are mapped. Pylon stations are image-derived estimates (roughly 10-20m uncertainty). Deck/tower elevations are illustrative, not survey data. Main spans: 85+125+125+125+125+85m."
+}

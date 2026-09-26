@@ -1,0 +1,12 @@
+{
+  "images": [
+    {
+      "filename": "sedan_car_miniature.png",
+      "idiom": "universal"
+    }
+  ],
+  "info": {
+    "author": "xcode",
+    "version": 1
+  }
+}

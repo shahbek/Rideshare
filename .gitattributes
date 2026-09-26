@@ -1,0 +1,11 @@
+ios-twende/Twende/Resources/vehicle_bajaji.usdz filter=lfs diff=lfs merge=lfs -text
+ios-twende/Twende/Resources/vehicle_boda.usdz filter=lfs diff=lfs merge=lfs -text
+ios-twende/Twende/Resources/vehicle_comfort.usdz filter=lfs diff=lfs merge=lfs -text
+ios-twende/Twende/Resources/vehicle_economy.usdz filter=lfs diff=lfs merge=lfs -text
+ios-twende/Twende/Resources/vehicle_bajaji.glb filter=lfs diff=lfs merge=lfs -text
+ios-twende/Twende/Resources/vehicle_boda.glb filter=lfs diff=lfs merge=lfs -text
+ios-twende/Twende/Resources/vehicle_comfort.glb filter=lfs diff=lfs merge=lfs -text
+ios-twende/Twende/Resources/vehicle_economy.glb filter=lfs diff=lfs merge=lfs -text
+ios-twende/Twende/Resources/vehicle_economy_flat.glb filter=lfs diff=lfs merge=lfs -text
+ios-twende/Twende/Resources/tanzanite_torch_pylon.usdz filter=lfs diff=lfs merge=lfs -text
+ios-twende/Twende/Resources/forma_fleet.glb filter=lfs diff=lfs merge=lfs -text

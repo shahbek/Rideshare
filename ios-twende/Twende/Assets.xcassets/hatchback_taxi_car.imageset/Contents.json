@@ -1,0 +1,12 @@
+{
+  "images": [
+    {
+      "filename": "hatchback_taxi_car.png",
+      "idiom": "universal"
+    }
+  ],
+  "info": {
+    "author": "xcode",
+    "version": 1
+  }
+}

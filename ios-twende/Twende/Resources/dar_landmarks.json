@@ -1,0 +1,39 @@
+{
+  "attribution": "© OpenStreetMap contributors, ODbL",
+  "verified": "2026-09-22",
+  "geometrySource": "https://api.openstreetmap.org/api/0.6/map.json?bbox=39.284,-6.823,39.293,-6.816",
+  "sites": [
+    {
+      "id": "st-joseph", "name": "St Joseph's Cathedral", "kind": "cathedral", "osmWay": 688369839,
+      "bearing": 139.0, "height": 46.0, "heightEvidence": "Photo-estimated; not surveyed",
+      "reference": "https://dsmarchdiocese.org/about-us/cathedral/",
+      "photo": "https://dsmarchdiocese.org/wp-content/uploads/2025/04/St._Joseph_in_Dar_es_Salaam_ShiftN-5-629x1024.jpg",
+      "orientationEvidence": "Southeast entrance toward Sokoine Drive/harbour; asymmetric tower northeast of entrance",
+      "ring": [[39.2880057,-6.8191364],[39.2880098,-6.8191305],[39.2881953,-6.8193404],[39.2879951,-6.8195113],[39.2877801,-6.8192658],[39.2878251,-6.8192265],[39.2878336,-6.8192361],[39.2878485,-6.8192231],[39.2878163,-6.8191868],[39.2878201,-6.8191403],[39.2878626,-6.8191041],[39.2879056,-6.8191105],[39.2879272,-6.8191332],[39.2879673,-6.8190955],[39.2880057,-6.8191364]]
+    },
+    {
+      "id": "azania", "name": "Azania Front Lutheran Church", "kind": "lutheran", "osmWay": 368909370,
+      "bearing": 254.0, "height": 32.0, "heightEvidence": "Photo-estimated; not surveyed",
+      "reference": "https://hamburg-daressalaam.de/en/main-church-of-st-peter-azania-front-cathedral/",
+      "photo": "https://www.cestee.com/images/70/45/207045-920w.webp",
+      "orientationEvidence": "Tower at WSW end; harbour-side elevation faces SSE. Medium-confidence photo interpretation; named POI 1535207263 inside outline",
+      "ring": [[39.2910642,-6.8174888],[39.2911603,-6.8174618],[39.2911848,-6.8175254],[39.2912630,-6.8175003],[39.2912820,-6.8175597],[39.2912656,-6.8175674],[39.2912738,-6.8175962],[39.2912739,-6.8176158],[39.2912537,-6.8176391],[39.2912621,-6.8176620],[39.2912222,-6.8176749],[39.2912289,-6.8176976],[39.2911311,-6.8177239],[39.2911245,-6.8177005],[39.2910742,-6.8177159],[39.2910796,-6.8177371],[39.2910237,-6.8177525],[39.2910149,-6.8177212],[39.2909677,-6.8177370],[39.2909580,-6.8177120],[39.2909496,-6.8177150],[39.2909412,-6.8176804],[39.2909476,-6.8176771],[39.2909387,-6.8176431],[39.2909471,-6.8176434],[39.2909473,-6.8176374],[39.2909428,-6.8176220],[39.2909687,-6.8176162],[39.2909641,-6.8176000],[39.2909741,-6.8175968],[39.2909726,-6.8175889],[39.2910339,-6.8175737],[39.2910430,-6.8175988],[39.2910931,-6.8175842],[39.2910642,-6.8174888]]
+    },
+    {
+      "id": "pspf-se", "name": "PSPF southeast tower", "kind": "tower", "osmWay": 688369315,
+      "bearing": 47.0, "height": 152.7, "heightEvidence": "CTBUH 152.7m architectural / 35 floors; architect 152.80m; contractor reports 157m. Crown included, podium outline unverified",
+      "reference": "https://www.skyscrapercenter.com/building/pspf-commercial-tower-a/14679",
+      "photo": "https://estimconstruction.co.tz/wp-content/uploads/2019/11/PSPF-II-2-web-1.jpg",
+      "orientationEvidence": "Long axis NW-SE; broad northeast elevation toward Mission Street. A/B assignment not established",
+      "ring": [[39.2862077,-6.8212619],[39.2862356,-6.8213044],[39.2861057,-6.8214354],[39.2860460,-6.8214029],[39.2860016,-6.8213659],[39.2859430,-6.8212992],[39.2858919,-6.8212170],[39.2858632,-6.8211334],[39.2859583,-6.8210472],[39.2860333,-6.8210811],[39.2861001,-6.8211356],[39.2862077,-6.8212619]]
+    },
+    {
+      "id": "pspf-nw", "name": "PSPF northwest tower", "kind": "tower", "osmWay": 688369331,
+      "bearing": 47.0, "height": 152.7, "heightEvidence": "CTBUH 152.7m architectural / 35 floors; tower B shares reported height, geographic A/B assignment unverified",
+      "reference": "https://www.skyscrapercenter.com/building/pspf-commercial-tower-b/14680",
+      "photo": "https://estimconstruction.co.tz/wp-content/uploads/2019/11/PSPF-II-1-web-1.jpg",
+      "orientationEvidence": "Long axis NW-SE; curved broad elevation northeast. Crown slope mirrors southeast tower",
+      "ring": [[39.2856625,-6.8206728],[39.2857166,-6.8207183],[39.2857783,-6.8207759],[39.2858402,-6.8208454],[39.2858752,-6.8209047],[39.2859026,-6.8209753],[39.2858081,-6.8210618],[39.2857875,-6.8210558],[39.2857317,-6.8210305],[39.2856941,-6.8210066],[39.2856563,-6.8209797],[39.2856098,-6.8209320],[39.2855729,-6.8208912],[39.2855479,-6.8208526],[39.2855246,-6.8207988],[39.2856625,-6.8206728]]
+    }
+  ]
+}

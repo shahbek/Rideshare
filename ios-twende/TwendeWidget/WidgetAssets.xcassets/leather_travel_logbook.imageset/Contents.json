@@ -1,0 +1,13 @@
+{
+  "images" : [
+    {
+      "filename" : "leather_travel_logbook.png",
+      "idiom" : "universal",
+      "scale" : "3x"
+    }
+  ],
+  "info" : {
+    "author" : "xcode",
+    "version" : 1
+  }
+}

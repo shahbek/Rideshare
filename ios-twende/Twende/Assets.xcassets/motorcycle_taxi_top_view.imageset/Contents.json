@@ -1,0 +1,12 @@
+{
+  "images": [
+    {
+      "filename": "motorcycle_taxi_top_view.png",
+      "idiom": "universal"
+    }
+  ],
+  "info": {
+    "author": "xcode",
+    "version": 1
+  }
+}

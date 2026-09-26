@@ -1,0 +1,230 @@
+import SwiftUI
+import UIKit
+
+/// B5–B9 — replaces Home while a request is live. The map is shared; the panel swaps per phase.
+struct ActiveTripView: View {
+    @Environment(AppEnvironment.self) private var env
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    let trip: Trip
+    @State private var camera: MapCameraTarget = .automatic
+    @State private var lastFramedPhase: TripPhase? = nil
+    @State private var lastFollowAt: Date = .distantPast
+    @State private var panelHeight: CGFloat = 340
+    @State private var isPanelExpanded: Bool = false
+    @State private var panelDrag: CGFloat = 0
+    @GestureState private var isDraggingPanel: Bool = false
+    @State private var reframeTask: Task<Void, Never>? = nil
+
+    private var driver: Driver? { env.trips.assignedDriver }
+    private var showsChrome: Bool { trip.phase != .searching && trip.phase != .noDrivers }
+
+    var body: some View {
+        ZStack {
+            TripMapView(
+                camera: $camera,
+                pickup: trip.phase == .inTrip ? nil : trip.pickup.point,
+                destination: trip.phase == .searching || trip.phase == .noDrivers ? nil : trip.destination.point,
+                stops: trip.phase == .searching || trip.phase == .noDrivers ? [] : trip.stopList.map(\.point),
+                routePoints: routePoints,
+                driverPosition: env.trips.driverPosition,
+                driverHeading: env.trips.driverHeading,
+                driverTier: trip.tier,
+                isSearching: trip.phase == .searching,
+                pickupEtaMinutes: trip.phase == .driverAssigned ? max(env.trips.driverEtaMinutes, 1) : nil,
+                destinationEtaMinutes: trip.phase == .inTrip ? max(env.trips.remainingTripMinutes, 1) : nil,
+                interactionModes: [.pan, .zoom],
+                illuminatedDestination: trip.destination.point
+            )
+            .ignoresSafeArea()
+
+            VStack(spacing: 12) {
+                HStack(alignment: .top) {
+                    if showsChrome {
+                        MapCircleButton(systemImage: "square.and.arrow.up", accessibilityLabel: L(.shareTrip)) {
+                            shareTrip()
+                        }
+                    }
+                    Spacer()
+                    if showsChrome {
+                        MapCircleButton(systemImage: "shield.fill", accessibilityLabel: L(.sos), tint: TwendeColor.danger, icon3D: .siren) {
+                            env.flow.activeSheet = .sos
+                        }
+                    }
+                }
+                if !env.network.isOnline {
+                    OfflineBanner()
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                }
+                Spacer()
+                HStack {
+                    Spacer()
+                    MapCircleButton(systemImage: "location.fill", accessibilityLabel: L(.recentre)) {
+                        frame(force: true)
+                    }
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 8)
+            .padding(.bottom, 12)
+            .animation(.spring(duration: 0.4), value: env.network.isOnline)
+        }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            BottomPanel(showsGrabber: showsChrome) {
+                Group {
+                    switch trip.phase {
+                    case .searching:
+                        SearchingPanel(trip: trip)
+                    case .noDrivers:
+                        NoDriversPanel(trip: trip)
+                    case .driverAssigned, .driverArrived:
+                        if let driver {
+                            DriverEnRoutePanel(trip: trip, driver: driver, isExpanded: isPanelExpanded, dragTranslation: panelDrag)
+                        }
+                    case .inTrip:
+                        if let driver {
+                            InTripPanel(trip: trip, driver: driver, isExpanded: isPanelExpanded, dragTranslation: panelDrag)
+                        }
+                    default:
+                        EmptyView()
+                    }
+                }
+                .padding(.horizontal, 20)
+                .padding(.bottom, 12)
+            }
+            .contentShape(Rectangle())
+            .simultaneousGesture(
+                DragGesture(minimumDistance: 3, coordinateSpace: .global)
+                    .updating($isDraggingPanel) { _, active, _ in active = true }
+                    .onChanged { value in
+                        guard showsChrome, abs(value.translation.height) > abs(value.translation.width) else { return }
+                        var transaction = Transaction(animation: nil)
+                        transaction.disablesAnimations = true
+                        withTransaction(transaction) { panelDrag = value.translation.height }
+                    }
+                    .onEnded { value in
+                        guard showsChrome, panelDrag != 0 else { return }
+                        let expand = value.predictedEndTranslation.height < 0
+                        if expand != isPanelExpanded { Haptics.selection() }
+                        withAnimation(reduceMotion ? nil : .spring(response: 0.36, dampingFraction: 0.88)) {
+                            isPanelExpanded = expand
+                            panelDrag = 0
+                        }
+                    }
+            )
+            .onChange(of: isDraggingPanel) { _, active in
+                if !active, panelDrag != 0 {
+                    withAnimation(reduceMotion ? nil : .spring(response: 0.36, dampingFraction: 0.88)) { panelDrag = 0 }
+                }
+            }
+            .onGeometryChange(for: CGFloat.self) { proxy in
+                proxy.size.height
+            } action: { height in
+                // Only accept settled heights: intermediate animation frames must not re-frame the camera.
+                if abs(height - panelHeight) > 24 {
+                    panelHeight = height
+                }
+            }
+            .animation(.spring(duration: 0.45), value: trip.phase)
+            .animation(reduceMotion ? nil : .spring(response: 0.55, dampingFraction: 0.92), value: isPanelExpanded)
+        }
+        .onChange(of: panelHeight) { _, _ in
+            // The map's usable area changed; re-frame once the sheet has finished moving.
+            scheduleReframe()
+        }
+        // Siri can read this ride off the screen: "where's my driver?", "what's my start code?", "cancel this".
+        .primaryOnScreen(TripEntity(trip, env: env), activity: TwendeActivity.liveTrip, title: trip.destination.name)
+        .onAppear { frame(force: true) }
+        .onDisappear { reframeTask?.cancel() }
+        .onChange(of: trip.phase) { _, _ in
+            isPanelExpanded = false
+            panelDrag = 0
+            frame(force: true)
+        }
+        .onChange(of: env.trips.driverPosition) { _, _ in
+            guard trip.phase == .inTrip || trip.phase == .driverAssigned else { return }
+            // Re-frame at most every 4s, and only when the vehicle has actually left the framed area, so the
+            // camera glides instead of restarting its ease on every fix.
+            let now = Date()
+            guard now.timeIntervalSince(lastFollowAt) >= 4 else { return }
+            lastFollowAt = now
+            followDriver()
+        }
+    }
+
+    /// Route drawn on the map. In-trip it is the full route so the line stays still while the vehicle
+    /// travels along it; trimming per fix made the map re-upload geometry four times a second.
+    private var routePoints: [GeoPoint] {
+        switch trip.phase {
+        case .driverAssigned:
+            return env.trips.approachRoute?.points ?? []
+        default:
+            return trip.route.points
+        }
+    }
+
+    private func scheduleReframe() {
+        reframeTask?.cancel()
+        reframeTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(600))
+            guard !Task.isCancelled else { return }
+            frame(force: true)
+        }
+    }
+
+    private var bottomFraction: Double {
+        min(max(panelHeight / ScreenMetrics.height, 0.25), 0.75)
+    }
+
+    private func frame(force: Bool) {
+        guard force || lastFramedPhase != trip.phase else { return }
+        lastFramedPhase = trip.phase
+        var points: [GeoPoint]
+        switch trip.phase {
+        case .searching, .noDrivers:
+            points = [
+                trip.pickup.point,
+                trip.pickup.point.offset(eastMetres: 450, northMetres: 450),
+                trip.pickup.point.offset(eastMetres: -450, northMetres: -450),
+            ]
+        case .driverAssigned:
+            points = [trip.pickup.point] + (env.trips.approachRoute?.points ?? [])
+            if let driverPosition = env.trips.driverPosition { points.append(driverPosition) }
+        case .driverArrived:
+            points = [
+                trip.pickup.point,
+                trip.pickup.point.offset(eastMetres: 300, northMetres: 300),
+                trip.pickup.point.offset(eastMetres: -300, northMetres: -300),
+            ]
+        default:
+            points = trip.route.points + trip.stopList.map(\.point) + [trip.destination.point]
+            if let driverPosition = env.trips.driverPosition { points.append(driverPosition) }
+        }
+        let rect = MapCameraHelper.rect(fitting: points, bottomFraction: bottomFraction, paddingFraction: 0.3)
+        camera = .rect(rect)
+    }
+
+    private func followDriver() {
+        guard let driverPosition = env.trips.driverPosition else { return }
+        let target = trip.phase == .inTrip ? trip.destination.point : trip.pickup.point
+        let rect = MapCameraHelper.rect(fitting: [driverPosition, target], bottomFraction: bottomFraction, paddingFraction: 0.35)
+        camera = .rect(rect)
+    }
+
+    private func shareTrip() {
+        guard let driver else { return }
+        let text = L(
+            .shareTripMessage,
+            driver.name,
+            Format.plate(driver.vehicle.plate),
+            trip.destination.name,
+            "https://zuri.app/t/\(trip.id)"
+        )
+        let controller = UIActivityViewController(activityItems: [text], applicationActivities: nil)
+        guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+              let root = scene.keyWindow?.rootViewController else { return }
+        var presenter = root
+        while let presented = presenter.presentedViewController { presenter = presented }
+        controller.popoverPresentationController?.sourceView = presenter.view
+        presenter.present(controller, animated: true)
+    }
+}
