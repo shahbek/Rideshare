@@ -15,6 +15,7 @@ struct ContentView: View {
             }
         }
         .animation(.easeInOut(duration: 0.35), value: env.settings.isOnboarded)
+        .readsFoldLayout()
         .preferredColorScheme(.light)
         .tint(TwendeColor.primary)
         .task {
@@ -49,9 +50,8 @@ struct MainShellView: View {
                     .toolbar(isFocusedRideFlow ? .hidden : .visible, for: .tabBar)
             }
             Tab(L(.tabActivity), systemImage: "clock.arrow.circlepath", value: MainTab.activity) {
-                NavigationStack(path: $activityNavigation.path) {
+                MenuSplitStack(placeholder: .logbook) {
                     TripHistoryView(isActivityRoot: true)
-                        .navigationDestination(for: MenuRoute.self) { MenuDestinationView(route: $0) }
                 }
                 .environment(activityNavigation)
             }

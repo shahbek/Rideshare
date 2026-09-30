@@ -4,6 +4,7 @@ import SwiftUI
 struct TripHistoryView: View {
     @Environment(AppEnvironment.self) private var env
     @Environment(MenuNavigation.self) private var navigation
+    @Environment(\.foldLayout) private var foldLayout
     var isActivityRoot: Bool = false
 
     nonisolated private struct MonthGroup: Identifiable, Sendable {
@@ -48,7 +49,7 @@ struct TripHistoryView: View {
                             }
                             Button {
                                 Haptics.tap()
-                                navigation.path.append(.tripDetail(trip.id))
+                                navigation.open(.tripDetail(trip.id), split: isActivityRoot && foldLayout != nil)
                             } label: {
                                 TripHistoryRow(trip: trip, driver: env.drivers.driver(id: trip.driverID))
                             }

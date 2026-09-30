@@ -6,6 +6,8 @@ struct DestinationSearchView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var search: PlaceSearchService = PlaceSearchService()
     @FocusState private var isFocused: Bool
+    @Environment(\.foldLayout) private var foldLayout
+    @State private var previewCamera: MapCameraTarget = .automatic
 
     private var isAddingStop: Bool { env.flow.searchTarget == .stop }
     private var replacingIndex: Int? {
@@ -46,6 +48,45 @@ struct DestinationSearchView: View {
     }
 
     var body: some View {
+        Group {
+            if foldLayout != nil {
+                // Open inner display: planner left of the fold, the route taking shape on the right.
+                DuoSplitView { planner } secondary: { routePreview }
+            } else {
+                planner
+            }
+        }
+        .toolbar(.hidden, for: .navigationBar)
+        .onAppear { isFocused = env.flow.destination == nil }
+        .onChange(of: env.flow.searchTarget) { _, target in isFocused = target != .destination || env.flow.destination == nil }
+        .task(id: env.flow.searchQuery) { await search.search(env.flow.searchQuery) }
+    }
+
+    private var routePreview: some View {
+        TripMapView(
+            camera: $previewCamera,
+            pickup: env.flow.pickup.point,
+            destination: env.flow.destination?.point,
+            stops: env.flow.stops.map(\.point),
+            routePoints: env.flow.route?.points ?? [],
+            interactionModes: [.pan, .zoom]
+        )
+        .ignoresSafeArea()
+        .onAppear { framePreview() }
+        .onChange(of: env.flow.waypoints) { _, _ in framePreview() }
+        .onChange(of: env.flow.route?.points.count) { _, _ in framePreview() }
+    }
+
+    private func framePreview() {
+        var points = env.flow.waypoints
+        if let route = env.flow.route { points.append(contentsOf: route.points) }
+        guard !points.isEmpty else { return }
+        previewCamera = points.count == 1
+            ? .region(MapCameraHelper.region(centre: points[0], spanKm: 2))
+            : .rect(MapCameraHelper.rect(fitting: points, paddingFraction: 0.3))
+    }
+
+    private var planner: some View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
                 MapCircleButton(systemImage: "arrow.left", accessibilityLabel: L(.back), isFloating: false, size: 44) { goBack() }
@@ -144,10 +185,6 @@ struct DestinationSearchView: View {
             }
         }
         .background(TwendeColor.surface.ignoresSafeArea())
-        .toolbar(.hidden, for: .navigationBar)
-        .onAppear { isFocused = env.flow.destination == nil }
-        .onChange(of: env.flow.searchTarget) { _, target in isFocused = target != .destination || env.flow.destination == nil }
-        .task(id: env.flow.searchQuery) { await search.search(env.flow.searchQuery) }
     }
 
     private var searchField: some View {

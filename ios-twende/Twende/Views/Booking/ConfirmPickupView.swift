@@ -6,6 +6,7 @@ struct ConfirmPickupView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var camera: MapCameraTarget = .automatic
     @FocusState private var isNoteFocused: Bool
+    @Environment(\.foldLayout) private var foldLayout
 
     var body: some View {
         ZStack(alignment: .topLeading) {
@@ -25,7 +26,7 @@ struct ConfirmPickupView: View {
             .padding(.horizontal, 16)
             .padding(.top, 8)
         }
-        .safeAreaInset(edge: .bottom, spacing: 0) {
+        .mapPanel {
             BottomPanel(showsGrabber: false) {
                 VStack(alignment: .leading, spacing: 18) {
                     Text(L(.confirmPickupTitle))
@@ -82,6 +83,7 @@ struct ConfirmPickupView: View {
         .toolbar(.hidden, for: .navigationBar)
         .primaryOnScreen(env.flow.destination.map { PlaceEntity($0) }, activity: TwendeActivity.pickup, title: env.flow.destination?.name ?? "")
         .onAppear { frame() }
+        .onChange(of: foldLayout) { _, _ in frame() }
         .onChange(of: env.flow.pickup) { _, _ in frame() }
         .onChange(of: env.flow.waypoints) { _, _ in frame() }
         .onChange(of: env.flow.route?.points.count) { _, _ in frame() }
@@ -121,7 +123,7 @@ struct ConfirmPickupView: View {
     private func frame() {
         var points = env.flow.waypoints
         if let route = env.flow.route { points.append(contentsOf: route.points) }
-        let rect = MapCameraHelper.rect(fitting: points, bottomFraction: 0.42, paddingFraction: 0.3)
+        let rect = MapCameraHelper.rect(fitting: points, bottomFraction: 0.42, paddingFraction: 0.3, fold: foldLayout)
         withAnimation(.easeInOut(duration: 0.5)) {
             camera = .rect(rect)
         }

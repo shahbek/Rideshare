@@ -6,6 +6,7 @@ struct HomeView: View {
     @State private var camera: MapCameraTarget = .region(MapCameraHelper.homeRegion(around: DarEsSalaam.upanga))
     @State private var detentIndex: Int = 0
     @State private var contentAtTop: Bool = true
+    @Environment(\.foldLayout) private var foldLayout
 
     private var nearby: [Driver] {
         env.drivers.nearbyOnline(near: env.flow.pickup.point)
@@ -64,7 +65,9 @@ struct HomeView: View {
             } content: {
                 sheetBody(bottomInset: geometry.safeAreaInsets.bottom)
             }
+            .foldPanel()
         }
+        .onChange(of: foldLayout) { _, _ in recentre() }
         .onAppear {
             env.flow.refreshPickupFromLocation()
             recentre(animated: false)
@@ -232,7 +235,7 @@ struct HomeView: View {
     }
 
     private func recentre(animated: Bool = true) {
-        let region = MapCameraHelper.homeRegion(around: env.flow.pickup.point)
+        let region = MapCameraHelper.homeRegion(around: env.flow.pickup.point, fold: foldLayout)
         if animated {
             withAnimation(.easeInOut(duration: 0.6)) { camera = .region(region) }
         } else {

@@ -14,6 +14,8 @@ struct ActiveTripView: View {
     @State private var panelDrag: CGFloat = 0
     @GestureState private var isDraggingPanel: Bool = false
     @State private var reframeTask: Task<Void, Never>? = nil
+    @State private var viewHeight: CGFloat = 844
+    @Environment(\.foldLayout) private var foldLayout
 
     private var driver: Driver? { env.trips.assignedDriver }
     private var showsChrome: Bool { trip.phase != .searching && trip.phase != .noDrivers }
@@ -68,7 +70,7 @@ struct ActiveTripView: View {
             .padding(.bottom, 12)
             .animation(.spring(duration: 0.4), value: env.network.isOnline)
         }
-        .safeAreaInset(edge: .bottom, spacing: 0) {
+        .mapPanel {
             BottomPanel(showsGrabber: showsChrome) {
                 Group {
                     switch trip.phase {
@@ -127,6 +129,8 @@ struct ActiveTripView: View {
             .animation(.spring(duration: 0.45), value: trip.phase)
             .animation(reduceMotion ? nil : .spring(response: 0.55, dampingFraction: 0.92), value: isPanelExpanded)
         }
+        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { viewHeight = max($0, 1) }
+        .onChange(of: foldLayout) { _, _ in scheduleReframe() }
         .onChange(of: panelHeight) { _, _ in
             // The map's usable area changed; re-frame once the sheet has finished moving.
             scheduleReframe()
@@ -172,7 +176,7 @@ struct ActiveTripView: View {
     }
 
     private var bottomFraction: Double {
-        min(max(panelHeight / ScreenMetrics.height, 0.25), 0.75)
+        min(max(panelHeight / viewHeight, 0.25), 0.75)
     }
 
     private func frame(force: Bool) {
@@ -199,14 +203,14 @@ struct ActiveTripView: View {
             points = trip.route.points + trip.stopList.map(\.point) + [trip.destination.point]
             if let driverPosition = env.trips.driverPosition { points.append(driverPosition) }
         }
-        let rect = MapCameraHelper.rect(fitting: points, bottomFraction: bottomFraction, paddingFraction: 0.3)
+        let rect = MapCameraHelper.rect(fitting: points, bottomFraction: bottomFraction, paddingFraction: 0.3, fold: foldLayout)
         camera = .rect(rect)
     }
 
     private func followDriver() {
         guard let driverPosition = env.trips.driverPosition else { return }
         let target = trip.phase == .inTrip ? trip.destination.point : trip.pickup.point
-        let rect = MapCameraHelper.rect(fitting: [driverPosition, target], bottomFraction: bottomFraction, paddingFraction: 0.35)
+        let rect = MapCameraHelper.rect(fitting: [driverPosition, target], bottomFraction: bottomFraction, paddingFraction: 0.35, fold: foldLayout)
         camera = .rect(rect)
     }
 

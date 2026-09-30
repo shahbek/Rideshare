@@ -7,7 +7,9 @@ enum DeviceMetrics {
     /// flat-cornered screens (clamped to 10 so a sheet never renders a hard corner).
     static let displayCornerRadius: CGFloat = {
         let key = ["Radius", "Corner", "display", "_"].reversed().joined()
-        if let value = UIScreen.main.value(forKey: key) as? CGFloat {
+        // The window scene's own screen: `UIScreen.main` is ambiguous on iPhone Duo's two displays.
+        let screen = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first?.screen
+        if let value = screen?.value(forKey: key) as? CGFloat {
             return max(value, 10)
         }
         return 44

@@ -14,6 +14,7 @@ struct RideOptionsView: View {
     @State private var footerHeight: CGFloat = 200
     @State private var mapHeight: CGFloat = 844
     @State private var reframeTask: Task<Void, Never>? = nil
+    @Environment(\.foldLayout) private var foldLayout
 
     var body: some View {
         GeometryReader { geometry in
@@ -45,7 +46,7 @@ struct RideOptionsView: View {
                 .padding(.horizontal, 16)
                 .padding(.top, 8)
             }
-            .safeAreaInset(edge: .bottom, spacing: 0) {
+            .mapPanel {
                 optionsPanel(availableHeight: geometry.size.height)
             }
             .onGeometryChange(for: CGFloat.self) { _ in
@@ -69,6 +70,7 @@ struct RideOptionsView: View {
         .onChange(of: env.flow.route?.points) { _, _ in scheduleReframe() }
         .onChange(of: env.flow.waypoints) { _, _ in scheduleReframe() }
         .onChange(of: panelHeight) { _, _ in scheduleReframe() }
+        .onChange(of: foldLayout) { _, _ in scheduleReframe() }
     }
 
     private var pickupBanner: String {
@@ -327,7 +329,7 @@ struct RideOptionsView: View {
         var points = env.flow.waypoints
         if let route = env.flow.route { points.append(contentsOf: route.points) }
         let fraction = min(max(panelHeight / max(mapHeight, 1), 0.15), 0.72)
-        let rect = MapCameraHelper.rect(fitting: points, bottomFraction: fraction, paddingFraction: 0.3)
+        let rect = MapCameraHelper.rect(fitting: points, bottomFraction: fraction, paddingFraction: 0.3, fold: foldLayout)
         withAnimation(.easeInOut(duration: 0.5)) {
             camera = .rect(rect)
         }

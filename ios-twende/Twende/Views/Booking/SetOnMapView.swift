@@ -9,6 +9,7 @@ struct SetOnMapView: View {
     @State private var mapFrame: CGRect = .zero
     @State private var pinAnchor: CGPoint? = nil
     @State private var resolved: Place? = nil
+    @Environment(\.foldLayout) private var foldLayout
 
     private var target: SetOnMapTarget { env.flow.setOnMapTarget }
     private var isPickup: Bool { target == .pickup }
@@ -85,6 +86,8 @@ struct SetOnMapView: View {
                 onAnchorChanged: { pinAnchor = $0 },
                 viewport: mapFrame
             )
+            // On the open inner display the pin sits in the middle of the map pane, never on the fold.
+            .offset(x: foldLayout?.mapPaneOffset ?? 0)
 
             VStack {
                 HStack {
@@ -98,7 +101,7 @@ struct SetOnMapView: View {
                 Spacer()
             }
         }
-        .safeAreaInset(edge: .bottom, spacing: 0) {
+        .mapPanel {
             BottomPanel(showsGrabber: false) {
                 VStack(alignment: .leading, spacing: 18) {
                     Text(title)
@@ -143,7 +146,7 @@ struct SetOnMapView: View {
         }
         .toolbar(.hidden, for: .navigationBar)
         .onAppear {
-            camera = .region(MapCameraHelper.region(centre: env.flow.mapCentre, spanKm: 1.2))
+            camera = .region(MapCameraHelper.region(focus: env.flow.mapCentre, spanKm: 1.2, fold: foldLayout))
         }
         .task(id: resolveKey) {
             // Only look up once the map settles, and never for every frame of a drag.

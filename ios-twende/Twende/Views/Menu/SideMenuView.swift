@@ -4,10 +4,11 @@ import SwiftUI
 struct SideMenuView: View {
     @Environment(AppEnvironment.self) private var env
     @Environment(MenuNavigation.self) private var navigation
+    @Environment(\.foldLayout) private var foldLayout
     var isModal: Bool = true
 
     var body: some View {
-        NavigationStack(path: Bindable(navigation).path) {
+        MenuSplitStack(placeholder: .gear) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
                     profileHeader
@@ -17,7 +18,7 @@ struct SideMenuView: View {
 
                     if isModal {
                         MenuRow(icon: .logbook, title: L(.tripHistory)) {
-                            navigation.path.append(.history)
+                            open(.history)
                         }
                     }
                     MenuRow(
@@ -25,24 +26,24 @@ struct SideMenuView: View {
                         title: L(.myDrivers),
                         badge: L(.onlineCount, env.drivers.onlineCount(ids: env.store.favouriteDriverIDs))
                     ) {
-                        navigation.path.append(.drivers)
+                        open(.drivers)
                     }
                     MenuRow(icon: .wallet, title: L(.wallet), value: Format.tzs(env.store.walletBalance)) {
-                        navigation.path.append(.wallet)
+                        open(.wallet)
                     }
                     .accessibilityIdentifier("account.wallet")
                     MenuRow(icon: .cash, title: L(.payments), value: env.store.defaultPaymentMethod.displayName) {
-                        navigation.path.append(.payments)
+                        open(.payments)
                     }
                     MenuRow(icon: .signpost, title: L(.savedPlaces)) {
-                        navigation.path.append(.savedPlaces)
+                        open(.savedPlaces)
                     }
                     MenuRow(
                         icon: .shield,
                         title: env.store.isIdentityVerified ? L(.idVerified) : L(.idVerify),
                         subtitle: env.store.isIdentityVerified ? nil : L(.idVerifySubtitle)
                     ) {
-                        navigation.path.append(.identity)
+                        open(.identity)
                     }
                     .accessibilityIdentifier("account.identity")
 
@@ -51,16 +52,16 @@ struct SideMenuView: View {
                         .padding(.vertical, 8)
 
                     MenuRow(icon: .gift, title: L(.promotions)) {
-                        navigation.path.append(.promotions)
+                        open(.promotions)
                     }
                     MenuRow(icon: .shield, title: L(.safetyCentre)) {
-                        navigation.path.append(.safety)
+                        open(.safety)
                     }
                     MenuRow(icon: .chat, title: L(.support)) {
-                        navigation.path.append(.support)
+                        open(.support)
                     }
                     MenuRow(icon: .gear, title: L(.settings), value: env.settings.language.nativeName) {
-                        navigation.path.append(.settings)
+                        open(.settings)
                     }
 
                     Text("Zuri · v1.0 · \(L(.madeInDar))")
@@ -77,30 +78,26 @@ struct SideMenuView: View {
             .toolbarBackground(TwendeColor.surface, for: .navigationBar)
             .toolbar {
                 if isModal {
-                    ToolbarItem(placement: .topBarLeading) {
-                        Button {
+                    // Icon + title and a semantic placement so the item also works in iPhone Duo's vertical bar.
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button(L(.close), systemImage: "xmark") {
                             env.flow.closeMenu()
-                        } label: {
-                            Image(systemName: "xmark")
-                                .font(.system(size: 16, weight: .semibold))
-                                .foregroundStyle(TwendeColor.ink)
-                                .frame(width: 44, height: 44)
-                                .background(TwendeColor.surfaceAlt, in: .circle)
                         }
-                        .accessibilityLabel(L(.close))
+                        .tint(TwendeColor.ink)
                     }
                 }
-            }
-            .navigationDestination(for: MenuRoute.self) { route in
-                MenuDestinationView(route: route)
             }
         }
         .tint(TwendeColor.primary)
     }
 
+    private func open(_ route: MenuRoute) {
+        navigation.open(route, split: foldLayout != nil)
+    }
+
     private var profileHeader: some View {
         Button {
-            navigation.path.append(.profile)
+            open(.profile)
         } label: {
             HStack(spacing: 16) {
                 ProfileAvatar(size: 60)

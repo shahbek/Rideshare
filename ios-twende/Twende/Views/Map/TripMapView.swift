@@ -464,7 +464,7 @@ extension TripMapView {
                 let pad = max(min(width, height) * bounds.paddingFraction * 0.5, 40)
                 let insets = UIEdgeInsets(
                     top: pad + 72,
-                    left: pad,
+                    left: pad + width * min(max(bounds.leadingFraction, 0), 0.7),
                     bottom: pad + height * bounds.bottomFraction,
                     right: pad
                 )

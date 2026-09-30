@@ -3,8 +3,18 @@ import SwiftUI
 /// Drives A1–A7. The stage is persisted so a cold start resumes at the right step.
 struct OnboardingFlowView: View {
     @Environment(AppEnvironment.self) private var env
+    @Environment(\.foldLayout) private var foldLayout
 
     var body: some View {
+        if foldLayout != nil && env.settings.onboardingStage != .splash {
+            // Open inner display: the step stays a phone-width column left of the fold; brand art fills the right.
+            DuoSplitView { stages } secondary: { OnboardingArtPane() }
+        } else {
+            stages
+        }
+    }
+
+    private var stages: some View {
         ZStack {
             TwendeColor.surface.ignoresSafeArea()
             switch env.settings.onboardingStage {
@@ -40,6 +50,29 @@ struct OnboardingFlowView: View {
             }
         }
         .animation(.spring(duration: 0.45), value: env.settings.onboardingStage)
+    }
+}
+
+/// Right-hand pane during onboarding on iPhone Duo's inner display: the brand car on a warm gold field.
+private struct OnboardingArtPane: View {
+    var body: some View {
+        ZStack {
+            LinearGradient(colors: [TwendeColor.primaryTint, TwendeColor.goldHighlight], startPoint: .top, endPoint: .bottom)
+                .ignoresSafeArea()
+            VStack(spacing: 16) {
+                Icon3DView(icon: .cityCar, size: 220)
+                Text("Zuri")
+                    .font(TwendeFont.figtree(44, weight: .bold))
+                    .foregroundStyle(TwendeColor.ink)
+                    .kerning(-1)
+                Text(L(.splashTagline))
+                    .font(TwendeFont.bodyMedium)
+                    .foregroundStyle(TwendeColor.inkSecondary)
+                    .multilineTextAlignment(.center)
+            }
+            .padding(32)
+        }
+        .accessibilityHidden(true)
     }
 }
 
