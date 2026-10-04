@@ -44,6 +44,8 @@ struct DioramaDebugPanel: View {
                         toggle("Vegetation", .vegetation)
                         toggle("Props", .props)
                         toggle("Ground", .ground)
+                        toggle("Roads", .roads)
+                        toggle("Water", .water)
                         Toggle(isOn: $state.showsDebugOverlay) {
                             Text("Tile bounds").font(TwendeFont.label)
                         }

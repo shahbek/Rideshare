@@ -12,8 +12,9 @@ nonisolated enum DioramaSwatch: Int, CaseIterable, Sendable {
     case metalCharcoal, gateGreen, gateBlue
     // Roof furniture
     case tankBlack, tankBlue, dishWhite, solarNavy
-    // Ground
-    case grass, courtyard, deck
+    // Ground, roads and water
+    case grass, courtyard, deck, earth, seabed, sea
+    case asphalt, roadEarth, pavement, kerb, marking, crossing, parkEdge
     // Vegetation
     case leafDark, leafMid, leafLight, flamboyant, trunk, palmTrunk, bougainvilleaMagenta, bougainvilleaOrange, coconut
     // Vehicles, boats and stalls
@@ -25,15 +26,16 @@ nonisolated enum DioramaSwatch: Int, CaseIterable, Sendable {
 
     /// Fixed palette. Never random RGB.
     static let defaultPalette: [DioramaSwatch: UInt32] = [
-        .whitewash: 0xF3EFE6, .cream: 0xF0E0BC, .ochre: 0xD69A4E, .sunflower: 0xF0BE45,
-        .coral: 0xEE8668, .skyBlue: 0x86BFE0, .mint: 0x98D3B8, .terracottaWall: 0xC76C48,
-        .roofTeal: 0x2F8C88, .roofRust: 0xA9472E, .roofSlate: 0x4F6B8C, .roofGreen: 0x3F7D4A,
-        .roofTerracotta: 0xC0603C, .roofConcrete: 0xD8CDB8,
+        .whitewash: 0xF4EFE7, .cream: 0xF1E2C4, .ochre: 0xD8A46A, .sunflower: 0xF0C46A,
+        .coral: 0xE8A08C, .skyBlue: 0x9FC4DD, .mint: 0xA9D4BC, .terracottaWall: 0xB9674C,
+        .roofTeal: 0x3A7F8C, .roofRust: 0xA9472E, .roofSlate: 0x4A5E8E, .roofGreen: 0x3F7D4A,
+        .roofTerracotta: 0xC0603C, .roofConcrete: 0x55638F,
         .trimWhite: 0xFAF7F0, .capTerracotta: 0xB5573A, .capCharcoal: 0x3B3A3D, .glass: 0x2C3440,
         .frame: 0xE9E4DA, .shutterGreen: 0x3E7A5A, .shutterBlue: 0x3C6E9E, .doorWood: 0x6B4126,
         .carvedWood: 0x4E2E1A, .metalCharcoal: 0x2E2F33, .gateGreen: 0x2F5E46, .gateBlue: 0x2D5785,
         .tankBlack: 0x232427, .tankBlue: 0x2B5FA8, .dishWhite: 0xECECEC, .solarNavy: 0x1F2E4E,
-        .grass: 0x6E9E4B, .courtyard: 0xE2D6C0, .deck: 0xB98E62,
+        .grass: 0x76A94C, .courtyard: 0xE7D9C6, .deck: 0xB98E62, .earth: 0xDCCBAE, .seabed: 0xB7A77F, .sea: 0x2E8FA3,
+        .asphalt: 0x5C4A58, .roadEarth: 0xC19466, .pavement: 0xEBDCD2, .kerb: 0xF6EFE8, .marking: 0xFAF4E8, .crossing: 0xFFFBF2, .parkEdge: 0xD9CBB4,
         .leafDark: 0x2F5E2E, .leafMid: 0x4C8A3A, .leafLight: 0x7DAF4A, .flamboyant: 0xE2502A,
         .trunk: 0x6D4C35, .palmTrunk: 0x8C7458, .bougainvilleaMagenta: 0xC8337E,
         .bougainvilleaOrange: 0xF07C3A, .coconut: 0x7A5A2C,
@@ -49,7 +51,7 @@ nonisolated enum DioramaSwatch: Int, CaseIterable, Sendable {
 
 /// The separately toggleable models each tile is split into.
 nonisolated enum DioramaCategory: String, CaseIterable, Codable, Sendable {
-    case buildings, walls, ground, vegetation, props, windowGlow, propGlow
+    case ground, water, roads, buildings, walls, vegetation, props, windowGlow, propGlow
 
     /// Emissive categories are drawn unlit and only at dusk/night.
     var isEmissive: Bool { self == .windowGlow || self == .propGlow }
@@ -68,12 +70,28 @@ nonisolated enum DioramaTimeOfDay: String, CaseIterable, Identifiable, Sendable 
         }
     }
     var showsLights: Bool { self != .day }
+    /// Index used by the shader to pick its sky/sun preset.
+    var shaderIndex: Float {
+        switch self {
+        case .day: 0
+        case .dusk: 1
+        case .night: 2
+        }
+    }
+}
+
+/// A real light source the shader evaluates per pixel: a lamp head, a lit kiosk, a doorway.
+nonisolated struct DioramaLight: Sendable {
+    var position: DV3
+    var color: SIMD3<Float>
+    var radius: Double
+    var intensity: Float
 }
 
 /// One place to tune the whole look without touching generation code.
 nonisolated struct DioramaConfig: Sendable {
     /// Bump to invalidate every cached tile.
-    var generatorVersion: Int = 3
+    var generatorVersion: Int = 4
 
     // MARK: Tile
     var tileZoom: Int = 16
@@ -99,11 +117,15 @@ nonisolated struct DioramaConfig: Sendable {
     /// Mapbox fills unknown heights with ~3 m; anything at or below this counts as missing.
     var placeholderHeight: Double = 3.1
     var bevel: Double = 0.22
+    /// Corner radius for the rounded footprint silhouette.
+    var cornerRadius: Double = 1.1
+    /// Soft roof-edge bevel (metres) on flat roofs.
+    var roofBevel: Double = 0.45
     var aoBandHeight: Double = 0.55
     var aoDarkening: Double = 0.7
     var roofOverhang: Double = 0.7
     var roofPitchDegrees: Double = 24
-    var hipRoofShare: Double = 0.78
+    var hipRoofShare: Double = 0.45
     var terracottaRoofShare: Double = 0.3
     var windowSpacing: Double = 3.1
     var maxWindowsPerBuilding: Int = 40
@@ -128,9 +150,17 @@ nonisolated struct DioramaConfig: Sendable {
     var parkTreesPer1000m2: Double = 10
     var coastPalmSpacing: Double = 13
 
-    // MARK: Props
+    // MARK: Roads
+    var pavementWidth: Double = 1.7
+    var kerbHeight: Double = 0.22
+    var dashLength: Double = 2.2
+    var dashGap: Double = 3.0
+
+    // MARK: Props and lights
     var vehiclesPerKm: Double = 16
-    var lampSpacing: Double = 38
+    var lampSpacing: Double = 30
+    var lampLightRadius: Double = 17
+    var maxLights: Int = 96
     var kioskChance: Double = 0.45
     var dhowsPerTile: Int = 4
 

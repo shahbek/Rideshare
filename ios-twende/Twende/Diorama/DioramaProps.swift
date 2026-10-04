@@ -14,6 +14,7 @@ nonisolated struct DioramaPropLibrary: Sendable {
     let dhow: DioramaMesh
     let lamp: DioramaMesh
     let lampGlow: DioramaMesh
+    let lampHalo: DioramaMesh
     let kiosk: [DioramaMesh]
     let kioskGlow: DioramaMesh
 
@@ -28,6 +29,7 @@ nonisolated struct DioramaPropLibrary: Sendable {
         cars = [Self.makeCar(.carSilver), Self.makeCar(.carRed), Self.makeCar(.carWhite)]
         dhow = Self.makeDhow()
         (lamp, lampGlow) = Self.makeLamp()
+        lampHalo = Self.makeHalo(radius: 2.6, .lampGlow)
         kiosk = config.canopyColors.map { Self.makeKiosk(canopy: $0) }
         kioskGlow = Self.makeKioskGlow()
     }
@@ -184,14 +186,43 @@ nonisolated struct DioramaPropLibrary: Sendable {
 
     // MARK: Street furniture
 
+    /// Height of the lamp's light source above its base.
+    static let lampHeadHeight: Double = 4.6
+
+    /// Victorian-style toy lamp post: fluted pole, a glass lantern that glows, and a round halo billboard
+    /// above it. The halo quad is drawn by the shader as a soft radial bloom facing the camera.
     private static func makeLamp() -> (DioramaMesh, DioramaMesh) {
         var m = DioramaMesh()
         var glow = DioramaMesh()
-        m.tube(from: DV3(0, 0, 0), to: DV3(0, 0, 7.5), r0: 0.14, r1: 0.09, sides: 5, .lampPole, cap: false)
-        m.tube(from: DV3(0, 0, 7.5), to: DV3(1.6, 0, 8.1), r0: 0.08, r1: 0.07, sides: 4, .lampPole)
-        m.box(centre: DV2(1.7, 0), z0: 7.85, halfLength: 0.45, halfWidth: 0.22, height: 0.22, .lampPole, bevel: 0.04)
-        glow.box(centre: DV2(1.7, 0), z0: 7.7, halfLength: 0.38, halfWidth: 0.17, height: 0.16, .lampGlow, bottom: true)
+        let h = lampHeadHeight
+        m.cylinder(centre: .zero, z0: 0, z1: 0.35, r0: 0.3, r1: 0.22, sides: 8, .lampPole)
+        m.tube(from: DV3(0, 0, 0.35), to: DV3(0, 0, h - 0.6), r0: 0.11, r1: 0.08, sides: 6, .lampPole, cap: false)
+        m.cylinder(centre: .zero, z0: h - 0.6, z1: h - 0.45, r0: 0.2, r1: 0.14, sides: 6, .lampPole)
+        // Lantern: a glowing glass box inside a dark frame, with a small cap and finial.
+        m.box(centre: .zero, z0: h - 0.45, halfLength: 0.3, halfWidth: 0.3, height: 0.08, .lampPole, bevel: 0.03)
+        glow.box(centre: .zero, z0: h - 0.37, halfLength: 0.24, halfWidth: 0.24, height: 0.62, .lampGlow, bevel: 0.05, bottom: true)
+        for (dx, dy) in [(0.26, 0.26), (-0.26, 0.26), (0.26, -0.26), (-0.26, -0.26)] {
+            m.tube(from: DV3(dx, dy, h - 0.37), to: DV3(dx, dy, h + 0.25), r0: 0.03, r1: 0.03, sides: 4, .lampPole, cap: false)
+        }
+        m.box(centre: .zero, z0: h + 0.25, halfLength: 0.36, halfWidth: 0.36, height: 0.1, .lampPole, bevel: 0.05)
+        m.tube(from: DV3(0, 0, h + 0.35), to: DV3(0, 0, h + 0.7), r0: 0.12, r1: 0.02, sides: 6, .lampPole)
         return (m, glow)
+    }
+
+    /// Camera-facing halo sprite centred on the light. Appearance code 5 in the shader; the UV-like
+    /// corner offsets are packed in the normal so the vertex stage can billboard it.
+    static func makeHalo(radius: Double, _ s: DioramaSwatch) -> DioramaMesh {
+        var m = DioramaMesh()
+        m.reserve(4)
+        let uv = DioramaAtlas.uv(s, dark: false)
+        let corners: [(Double, Double)] = [(-1, -1), (1, -1), (1, 1), (-1, 1)]
+        let base = m.positions.count
+        for (cx, cy) in corners {
+            // Normal carries the sprite corner offset (x, y) and the radius (z); the shader rebuilds the quad in view space.
+            m.vertex(DV3(0, 0, 0), DV3(cx, cy, radius), uv)
+        }
+        m.rawTriangles([UInt32(base), UInt32(base + 1), UInt32(base + 2), UInt32(base), UInt32(base + 2), UInt32(base + 3)])
+        return m
     }
 
     private static func makeKiosk(canopy: DioramaSwatch) -> DioramaMesh {
@@ -229,6 +260,11 @@ nonisolated struct DioramaPropPlacer {
     let buildings: [DioramaBuilt]
     let compounds: [DioramaCompound]
     let reduceDetail: Bool
+    let terrain: DioramaTerrain
+
+    private func ground(_ p: DV2) -> Double { terrain.height(p) }
+    private func roadSurface(_ p: DV2) -> Double { terrain.height(p) + DioramaRoadGenerator.surfaceLift }
+    private func pavement(_ p: DV2, paved: Bool) -> Double { terrain.height(p) + DioramaRoadGenerator.surfaceLift + (paved ? config.kerbHeight : 0) }
 
     private func isFree(_ p: DV2, radius: Double) -> Bool {
         guard data.rect.expanded(by: -1).contains(p) else { return false }
@@ -265,7 +301,7 @@ nonisolated struct DioramaPropPlacer {
                     defer { d += config.coastPalmSpacing * rng.range(0.7...1.3) }
                     let p = a + dir * d + inland * rng.range(6...14)
                     guard tryPlace(p, spacing: 5) else { continue }
-                    mesh.append(library.palm, DioramaTransform(rotation: rng.range(0...6.28), scale: DV3(1, 1, rng.range(0.85...1.25)), translation: DV3(p, 0)))
+                    mesh.append(library.palm, DioramaTransform(rotation: rng.range(0...6.28), scale: DV3(1, 1, rng.range(0.85...1.25)), translation: DV3(p, ground(p))))
                 }
             }
         }
@@ -281,13 +317,14 @@ nonisolated struct DioramaPropPlacer {
                 guard DioramaPolygon.contains(compound.ring, p), DioramaPolygon.distanceToRing(compound.ring, p) > 1.5 else { continue }
                 guard !compound.building.box.expanded(by: 2.2).contains(p), tryPlace(p, spacing: 4.5) else { continue }
                 let roll = crng.unit()
+                let z = ground(compound.building.feature.centroid)
                 if roll < 0.3 {
-                    mesh.append(library.palm, DioramaTransform(rotation: crng.range(0...6.28), scale: DV3(1, 1, crng.range(0.8...1.2)), translation: DV3(p, 0)))
+                    mesh.append(library.palm, DioramaTransform(rotation: crng.range(0...6.28), scale: DV3(1, 1, crng.range(0.8...1.2)), translation: DV3(p, z)))
                 } else if roll < 0.42 {
-                    mesh.append(library.flamboyant, DioramaTransform(rotation: crng.range(0...6.28), scale: DV3(0.9, 0.9, 0.9), translation: DV3(p, 0)))
+                    mesh.append(library.flamboyant, DioramaTransform(rotation: crng.range(0...6.28), scale: DV3(0.9, 0.9, 0.9), translation: DV3(p, z)))
                 } else {
                     let s = crng.range(0.75...1.1)
-                    mesh.append(crng.pick(library.mango), DioramaTransform(rotation: crng.range(0...6.28), scale: DV3(s, s, s), translation: DV3(p, 0)))
+                    mesh.append(crng.pick(library.mango), DioramaTransform(rotation: crng.range(0...6.28), scale: DV3(s, s, s), translation: DV3(p, z)))
                 }
             }
             // Bougainvillea spilling over the walls.
@@ -298,7 +335,7 @@ nonisolated struct DioramaPropPlacer {
                 guard crng.chance(min(length * config.bougainvilleaChancePerMetre, 0.6)) else { continue }
                 let dir = (b - a).normalized
                 let p = a + dir * crng.range(between: 0.8, and: max(length - 0.8, 0.9))
-                mesh.append(crng.pick(library.bougainvillea), DioramaTransform(rotation: dir.angle, scale: DV3(crng.range(0.8...1.3), 1, 1), translation: DV3(p, 0)))
+                mesh.append(crng.pick(library.bougainvillea), DioramaTransform(rotation: dir.angle, scale: DV3(crng.range(0.8...1.3), 1, 1), translation: DV3(p, ground(compound.building.feature.centroid))))
             }
         }
 
@@ -312,27 +349,28 @@ nonisolated struct DioramaPropPlacer {
                 let p = DV2(rng.range(between: bounds.minX, and: bounds.maxX), rng.range(between: bounds.minY, and: bounds.maxY))
                 guard DioramaPolygon.contains(polygon: park.rings, p), tryPlace(p, spacing: 6) else { continue }
                 let s = rng.range(0.8...1.2)
-                mesh.append(rng.chance(0.15) ? library.flamboyant : rng.pick(library.mango), DioramaTransform(rotation: rng.range(0...6.28), scale: DV3(s, s, s), translation: DV3(p, 0)))
+                mesh.append(rng.chance(0.15) ? library.flamboyant : rng.pick(library.mango), DioramaTransform(rotation: rng.range(0...6.28), scale: DV3(s, s, s), translation: DV3(p, ground(p) + 0.22)))
             }
         }
 
-        // Scattered street trees along unpaved lanes.
-        for road in data.roads where !road.isMain {
+        // Street trees: regular rows along paved streets (just behind the pavement), scattered along lanes.
+        for road in data.roads {
             let length = DioramaPolygon.length(road.line)
-            var d = rng.range(5...25)
+            let spacing = road.isPaved ? 14.0 : 26.0
+            var d = rng.range(4...12)
+            var side = rng.chance(0.5) ? 1.0 : -1.0
             while d < length {
-                defer { d += rng.range(18...40) }
+                defer { d += spacing * rng.range(0.85...1.15); if !road.isPaved { side = rng.chance(0.5) ? 1.0 : -1.0 } else { side = -side } }
                 guard let s = DioramaPolygon.sample(road.line, at: d) else { break }
-                let side = rng.chance(0.5) ? 1.0 : -1.0
-                let p = s.point + s.direction.right * side * (road.width / 2 + rng.range(2.5...4.5))
-                guard tryPlace(p, spacing: 6) else { continue }
-                let scale = rng.range(0.7...1.0)
-                mesh.append(rng.pick(library.mango), DioramaTransform(rotation: rng.range(0...6.28), scale: DV3(scale, scale, scale), translation: DV3(p, 0)))
+                let p = s.point + s.direction.right * side * (roads.corridorHalfWidth(road) + 1.6)
+                guard tryPlace(p, spacing: 5) else { continue }
+                let scale = rng.range(0.7...0.95)
+                mesh.append(rng.pick(library.mango), DioramaTransform(rotation: rng.range(0...6.28), scale: DV3(scale, scale, scale), translation: DV3(p, ground(p))))
             }
         }
     }
 
-    func props(into mesh: inout DioramaMesh, glow: inout DioramaMesh) {
+    func props(into mesh: inout DioramaMesh, glow: inout DioramaMesh, lights: inout [DioramaLight]) {
         guard !reduceDetail else { return }
         var rng = DioramaRandom(seed: UInt64(data.tile.x) << 32 | UInt64(data.tile.y), salt: 41)
 
@@ -355,23 +393,31 @@ nonisolated struct DioramaPropPlacer {
                 else if roll < 0.7 { model = library.boda }
                 else if roll < 0.8, road.isMain { model = library.dalaDala }
                 else { model = rng.pick(library.cars) }
-                mesh.append(model, DioramaTransform(rotation: dir.angle, translation: DV3(p, 0)))
+                mesh.append(model, DioramaTransform(rotation: dir.angle, translation: DV3(p, roadSurface(p))))
             }
         }
 
-        // Street lamps on main roads, alternating sides, lit at dusk/night.
-        for road in data.roads where road.isMain {
+        // Street lamps on every paved street, on the pavement, alternating sides. Each one is a real
+        // point light the shader evaluates, plus a soft halo sprite.
+        for road in data.roads where road.isPaved {
             let length = DioramaPolygon.length(road.line)
-            var d = rng.range(6...config.lampSpacing)
+            guard length > 12 else { continue }
+            var d = rng.range(6...min(config.lampSpacing, length / 2))
             var side = 1.0
-            while d < length {
+            while d < length - 4 {
                 defer { d += config.lampSpacing; side = -side }
+                guard lights.count < config.maxLights else { break }
                 guard let s = DioramaPolygon.sample(road.line, at: d) else { break }
-                let p = s.point + s.direction.right * side * (road.width / 2 + 1.2)
-                guard isFree(p, radius: 0.5) else { continue }
+                let p = s.point + s.direction.right * side * (road.width / 2 + config.pavementWidth * 0.55)
+                guard data.rect.expanded(by: -1).contains(p), !roads.isOnCarriageway(p, margin: 0.3) else { continue }
+                guard !buildings.contains(where: { $0.box.expanded(by: 0.6).contains(p) }) else { continue }
+                let z = pavement(p, paved: true)
                 let rotation = (s.direction.right * -side).angle
-                mesh.append(library.lamp, DioramaTransform(rotation: rotation, translation: DV3(p, 0)))
-                glow.append(library.lampGlow, DioramaTransform(rotation: rotation, translation: DV3(p, 0)))
+                mesh.append(library.lamp, DioramaTransform(rotation: rotation, translation: DV3(p, z)))
+                glow.append(library.lampGlow, DioramaTransform(rotation: rotation, translation: DV3(p, z)))
+                let head = DV3(p, z + DioramaPropLibrary.lampHeadHeight - 0.05)
+                glow.append(library.lampHalo, DioramaTransform(translation: head))
+                lights.append(DioramaLight(position: head, color: SIMD3<Float>(1.0, 0.82, 0.55), radius: config.lampLightRadius, intensity: 1.0))
             }
         }
 
@@ -387,8 +433,12 @@ nonisolated struct DioramaPropPlacer {
                 guard isFree(p, radius: 2), !isWater(p) else { continue }
                 kioskSpots.append(end)
                 let rotation = (away.right * -1).angle
-                mesh.append(rng.pick(library.kiosk), DioramaTransform(rotation: rotation, translation: DV3(p, 0)))
-                glow.append(library.kioskGlow, DioramaTransform(rotation: rotation, translation: DV3(p, 0)))
+                let z = ground(p)
+                mesh.append(rng.pick(library.kiosk), DioramaTransform(rotation: rotation, translation: DV3(p, z)))
+                glow.append(library.kioskGlow, DioramaTransform(rotation: rotation, translation: DV3(p, z)))
+                if lights.count < config.maxLights {
+                    lights.append(DioramaLight(position: DV3(p, z + 2.0), color: SIMD3<Float>(1.0, 0.72, 0.42), radius: 6, intensity: 0.8))
+                }
             }
         }
 
@@ -399,7 +449,7 @@ nonisolated struct DioramaPropPlacer {
             attempts += 1
             let p = DV2(rng.range(between: data.rect.minX, and: data.rect.maxX), rng.range(between: data.rect.minY, and: data.rect.maxY))
             guard isWater(p), data.water.allSatisfy({ DioramaPolygon.distanceToRing($0.rings[0], p) > 25 }) else { continue }
-            mesh.append(library.dhow, DioramaTransform(rotation: rng.range(0...6.28), translation: DV3(p, 0)))
+            mesh.append(library.dhow, DioramaTransform(rotation: rng.range(0...6.28), translation: DV3(p, DioramaTerrain.waterSurface)))
             dhows += 1
         }
     }

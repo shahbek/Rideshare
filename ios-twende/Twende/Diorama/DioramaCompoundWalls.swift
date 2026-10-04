@@ -17,13 +17,15 @@ nonisolated struct DioramaCompoundWallGenerator {
     let roads: DioramaRoadIndex
     let buildings: [DioramaBuilt]
     let tileRect: DioramaRect
+    let terrain: DioramaTerrain
     private let grid: DioramaGrid
 
-    init(config: DioramaConfig, roads: DioramaRoadIndex, buildings: [DioramaBuilt], tileRect: DioramaRect) {
+    init(config: DioramaConfig, roads: DioramaRoadIndex, buildings: [DioramaBuilt], tileRect: DioramaRect, terrain: DioramaTerrain) {
         self.config = config
         self.roads = roads
         self.buildings = buildings
         self.tileRect = tileRect
+        self.terrain = terrain
         var grid = DioramaGrid(cell: 40)
         for (i, b) in buildings.enumerated() {
             grid.insert(i, rect: DioramaRect.bounding(b.feature.ring))
@@ -35,6 +37,9 @@ nonisolated struct DioramaCompoundWallGenerator {
         var compounds: [DioramaCompound] = []
         for (index, built) in buildings.enumerated() where built.kind == .villa {
             guard built.feature.clipped.allSatisfy({ !$0 }) else { continue }
+            // Walls share the house's ground level; a plinth below z = 0 covers any slope under them.
+            mesh.baseZ = terrain.height(built.feature.centroid)
+            defer { mesh.baseZ = 0 }
             var rng = DioramaRandom(seed: built.feature.id, salt: 7)
             let offset = rng.range(config.wallOffset)
             // Walls follow the house's bounding rectangle: compounds in Masaki are rectangular plots.
@@ -133,6 +138,8 @@ nonisolated struct DioramaCompoundWallGenerator {
         guard a.distance(to: b) > 0.2 else { return }
         let ao = a + out * (t / 2), bo = b + out * (t / 2)
         let ai = a - out * (t / 2), bi = b - out * (t / 2)
+        mesh.wall(ao, bo, z0: -1.2, z1: 0, wall, ao: 0)
+        mesh.wall(bi, ai, z0: -1.2, z1: 0, wall, ao: 0)
         mesh.wall(ao, bo, z0: 0, z1: h, wall, ao: 0.45)
         mesh.wall(bi, ai, z0: 0, z1: h, wall, ao: 0.45)
         let c = config.capThickness

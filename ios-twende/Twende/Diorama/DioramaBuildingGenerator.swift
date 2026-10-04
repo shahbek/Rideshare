@@ -21,6 +21,7 @@ nonisolated struct DioramaBuilt: Sendable {
 nonisolated struct DioramaBuildingGenerator {
     let config: DioramaConfig
     let roads: DioramaRoadIndex
+    let terrain: DioramaTerrain
 
     func classify(_ f: DioramaBuildingFeature) -> (DioramaBuildingKind, Int) {
         var rng = DioramaRandom(seed: f.id, salt: 1)
@@ -47,12 +48,24 @@ nonisolated struct DioramaBuildingGenerator {
         return (.villa, min(floors, 2))
     }
 
-    func build(_ f: DioramaBuildingFeature, into mesh: inout DioramaMesh, glow: inout DioramaMesh, lights: Bool) -> DioramaBuilt {
+    /// Builds one house at z = 0 in a mesh whose `baseZ` is set to the terrain height under its centroid,
+    /// then restores `baseZ`. Returns the terrain height used so callers can place things beside it.
+    @discardableResult
+    func build(_ f: DioramaBuildingFeature, into mesh: inout DioramaMesh, glow: inout DioramaMesh, lights: Bool, pointLights: inout [DioramaLight]) -> DioramaBuilt {
+        let ground = terrain.height(f.centroid)
+        let savedMesh = mesh.baseZ, savedGlow = glow.baseZ
+        mesh.baseZ = ground
+        glow.baseZ = ground
+        defer { mesh.baseZ = savedMesh; glow.baseZ = savedGlow }
+
         var rng = DioramaRandom(seed: f.id, salt: 2)
         let (kind, floors) = classify(f)
         let height = Double(floors) * config.floorHeight
         let box = DioramaPolygon.minimumAreaRectangle(f.ring)
-        let (ring, flags) = DioramaPolygon.chamfer(f.ring, flags: f.clipped, by: config.bevel)
+        let (ring, flags) = DioramaPolygon.rounded(f.ring, flags: f.clipped, radius: config.cornerRadius)
+
+        // Plinth down into the slope so no house floats where the terrain falls away.
+        mesh.extrude(ring, z0: -2.5, z1: 0.02, .courtyard, skip: flags)
 
         let wallColor: DioramaSwatch
         switch kind {
@@ -69,8 +82,7 @@ nonisolated struct DioramaBuildingGenerator {
         if !flatRoof, f.area / max(box.area, 1) < 0.62 { flatRoof = true }
 
         if flatRoof {
-            mesh.polygon(ring, z: height, kind == .villa ? .roofConcrete : wallColor)
-            parapet(ring, flags: flags, z: height, color: wallColor, into: &mesh)
+            softRoof(ring, flags: flags, z: height, color: .roofConcrete, wall: wallColor, into: &mesh)
         } else {
             hipRoof(box, z: height, color: roofColor(&rng), into: &mesh)
         }
@@ -85,6 +97,16 @@ nonisolated struct DioramaBuildingGenerator {
         }
 
         roofFurniture(ring: ring, box: box, height: height, flatRoof: flatRoof, kind: kind, rng: &rng, into: &mesh)
+        if lights, kind != .villa || rng.chance(0.5) {
+            // A warm porch light over the entrance so the facade itself is lit, not just the windows.
+            let front = frontEdge(ring, flags: flags, centroid: f.centroid)
+            if front >= 0 {
+                let a = ring[front], b = ring[(front + 1) % ring.count]
+                let out = (b - a).normalized.right
+                let mid = (a + b) * 0.5 + out * 1.6
+                pointLights.append(DioramaLight(position: DV3(mid, ground + 3.0), color: SIMD3<Float>(1.0, 0.78, 0.5), radius: 7, intensity: 0.7))
+            }
+        }
         return DioramaBuilt(feature: f, kind: kind, floors: floors, height: height, box: box, flatRoof: flatRoof, wallColor: wallColor)
     }
 
@@ -116,15 +138,34 @@ nonisolated struct DioramaBuildingGenerator {
         mesh.tube(from: ridgeA - DV3(r.axis, 0) * 0.2, to: ridgeB + DV3(r.axis, 0) * 0.2, r0: 0.16, r1: 0.16, sides: 5, .trimWhite)
     }
 
-    private func parapet(_ ring: [DV2], flags: [Bool], z: Double, color: DioramaSwatch, into mesh: inout DioramaMesh) {
-        guard let inner = DioramaPolygon.offset(ring, by: -0.3) else { return }
+    /// Flat roof with a soft rounded edge: a pale cornice band at the top of the wall, then a bevel
+    /// curving inwards to a slate-blue roof deck (the Apple Maps toy look), with a low parapet lip.
+    private func softRoof(_ ring: [DV2], flags: [Bool], z: Double, color: DioramaSwatch, wall: DioramaSwatch, into mesh: inout DioramaMesh) {
+        let b = config.roofBevel
         let n = ring.count
+        // Cornice band.
+        mesh.extrude(ring, z0: z - 0.35, z1: z, .trimWhite, skip: flags)
+        guard let inner = DioramaPolygon.offset(ring, by: -b), inner.count == n else {
+            mesh.polygon(ring, z: z, color)
+            return
+        }
         for i in 0..<n where !flags[i] {
-            let a = ring[i], b = ring[(i + 1) % n]
-            let ia = inner[i], ib = inner[(i + 1) % n]
-            mesh.wall(a, b, z0: z, z1: z + 0.8, color)
-            mesh.wall(ib, ia, z0: z, z1: z + 0.8, color)
-            mesh.quad(DV3(a, z + 0.8), DV3(b, z + 0.8), DV3(ib, z + 0.8), DV3(ia, z + 0.8), .trimWhite, normal: .up)
+            let a0 = ring[i], a1 = ring[(i + 1) % n]
+            let i0 = inner[i], i1 = inner[(i + 1) % n]
+            let out = DV3((a1 - a0).normalized.right, 0)
+            // Two-step curve: steep then shallow, lit as a rounded edge.
+            let m0 = a0 * 0.45 + i0 * 0.55, m1 = a1 * 0.45 + i1 * 0.55
+            mesh.quad(DV3(a0, z), DV3(a1, z), DV3(m1, z + b * 0.7), DV3(m0, z + b * 0.7), .trimWhite, normal: (out * 0.8 + DV3.up * 0.6).normalized)
+            mesh.quad(DV3(m0, z + b * 0.7), DV3(m1, z + b * 0.7), DV3(i1, z + b), DV3(i0, z + b), .trimWhite, normal: (out * 0.3 + DV3.up).normalized)
+        }
+        mesh.polygon(inner, z: z + b, color)
+        // Parapet lip just inside the bevel.
+        if let lip = DioramaPolygon.offset(inner, by: -0.25), lip.count == n {
+            for i in 0..<n where !flags[i] {
+                mesh.wall(lip[(i + 1) % n], lip[i], z0: z + b, z1: z + b + 0.3, .trimWhite)
+                mesh.quad(DV3(inner[i], z + b + 0.3), DV3(inner[(i + 1) % n], z + b + 0.3), DV3(lip[(i + 1) % n], z + b + 0.3), DV3(lip[i], z + b + 0.3), .trimWhite, normal: .up)
+                mesh.wall(inner[i], inner[(i + 1) % n], z0: z + b, z1: z + b + 0.3, .trimWhite)
+            }
         }
     }
 
@@ -431,24 +472,25 @@ nonisolated struct DioramaBuildingGenerator {
             guard DioramaPolygon.contains(ring, spot), DioramaPolygon.distanceToRing(ring, spot) > 1.0 else { continue }
             let color: DioramaSwatch = rng.chance(0.6) ? .tankBlack : .tankBlue
             let scale = kind == .apartments ? 1.25 : 1.0
-            mesh.box(centre: spot, z0: height, halfLength: 0.7 * scale, halfWidth: 0.7 * scale, height: 0.22, .roofConcrete, dark: false)
-            tank(at: DV3(spot, height + 0.22), color: color, radius: 0.62 * scale, height: 1.3 * scale, into: &mesh)
+            let deck = height + config.roofBevel
+            mesh.box(centre: spot, z0: deck, halfLength: 0.7 * scale, halfWidth: 0.7 * scale, height: 0.22, .trimWhite, dark: false)
+            tank(at: DV3(spot, deck + 0.22), color: color, radius: 0.62 * scale, height: 1.3 * scale, into: &mesh)
             if k == 0, rng.chance(config.solarChance) {
                 let panel = spot + inner.axis * 2.2
                 if DioramaPolygon.contains(ring, panel), DioramaPolygon.distanceToRing(ring, panel) > 1.2 {
-                    solar(at: panel, axis: inner.axis, z: height, into: &mesh)
+                    solar(at: panel, axis: inner.axis, z: height + config.roofBevel, into: &mesh)
                 }
             }
         }
         if rng.chance(config.dishChance) {
             let edge = inner.centre + inner.across * (inner.halfWidth - 0.2)
-            if DioramaPolygon.contains(ring, edge) { dish(at: DV3(edge, height + 0.3), into: &mesh) }
+            if DioramaPolygon.contains(ring, edge) { dish(at: DV3(edge, height + config.roofBevel + 0.3), into: &mesh) }
         }
         // Stairwell head on larger flat roofs.
         if kind == .apartments, inner.halfLength > 4 {
             let head = inner.centre - inner.axis * (inner.halfLength - 1.6)
             if DioramaPolygon.contains(ring, head) {
-                mesh.box(centre: head, z0: height, axis: inner.axis, halfLength: 1.4, halfWidth: 1.1, height: 2.4, .whitewash, top: .roofConcrete, bevel: config.bevel)
+                mesh.box(centre: head, z0: height + config.roofBevel, axis: inner.axis, halfLength: 1.4, halfWidth: 1.1, height: 2.4, .trimWhite, top: .roofConcrete, bevel: config.bevel)
             }
         }
     }

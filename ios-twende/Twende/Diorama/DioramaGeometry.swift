@@ -393,6 +393,35 @@ nonisolated enum DioramaPolygon {
         return (a + d * t0, a + d * t1)
     }
 
+    /// Sutherland–Hodgman clip of a ring to an axis-aligned rect. Empty when nothing is left.
+    static func clipPolygon(_ ring: [DV2], to r: DioramaRect) -> [DV2] {
+        var out = ring
+        let edges: [(inside: (DV2) -> Bool, cut: (DV2, DV2) -> DV2)] = [
+            ({ $0.x >= r.minX }, { a, b in a + (b - a) * ((r.minX - a.x) / (b.x - a.x)) }),
+            ({ $0.x <= r.maxX }, { a, b in a + (b - a) * ((r.maxX - a.x) / (b.x - a.x)) }),
+            ({ $0.y >= r.minY }, { a, b in a + (b - a) * ((r.minY - a.y) / (b.y - a.y)) }),
+            ({ $0.y <= r.maxY }, { a, b in a + (b - a) * ((r.maxY - a.y) / (b.y - a.y)) }),
+        ]
+        for edge in edges {
+            guard out.count >= 3 else { return [] }
+            var next: [DV2] = []
+            let n = out.count
+            for i in 0..<n {
+                let cur = out[i], prev = out[(i + n - 1) % n]
+                let cin = edge.inside(cur), pin = edge.inside(prev)
+                if cin {
+                    if !pin { next.append(edge.cut(prev, cur)) }
+                    next.append(cur)
+                } else if pin {
+                    next.append(edge.cut(prev, cur))
+                }
+            }
+            out = next
+        }
+        guard out.count >= 3 else { return [] }
+        return clean(out, flags: [Bool](repeating: false, count: out.count)).points
+    }
+
     static func length(_ line: [DV2]) -> Double {
         var l = 0.0
         for i in 0..<max(line.count - 1, 0) { l += line[i].distance(to: line[i + 1]) }

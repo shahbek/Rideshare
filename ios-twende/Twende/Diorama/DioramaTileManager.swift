@@ -212,7 +212,7 @@ final class DioramaTileManager {
             hide(on: map)
             let host = DioramaRenderLayer(
                 origin: tile.centre, vertices: artifacts.vertices, indices: artifacts.indices, ranges: artifacts.ranges,
-                visible: state.visibleCategories, glowOn: state.timeOfDay.showsLights
+                lights: artifacts.lights, visible: state.visibleCategories, timeOfDay: state.timeOfDay
             )
             try map.addCustomLayer(withId: layerID, layerHost: host, layerPosition: nil)
             try map.setLayerProperty(for: layerID, property: "slot", value: "middle")
@@ -250,7 +250,7 @@ final class DioramaTileManager {
         guard appliedCategories != state.visibleCategories || appliedTimeOfDay != state.timeOfDay else { return }
         appliedCategories = state.visibleCategories
         appliedTimeOfDay = state.timeOfDay
-        renderLayer.setVisible(state.visibleCategories, glowOn: state.timeOfDay.showsLights)
+        renderLayer.setVisible(state.visibleCategories, timeOfDay: state.timeOfDay)
         map.triggerRepaint()
     }
 

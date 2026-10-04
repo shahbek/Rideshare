@@ -24,6 +24,9 @@ nonisolated struct DioramaMesh: Sendable {
     private(set) var uvs: [SIMD2<Float>] = []
     private(set) var indices: [UInt32] = []
     private(set) var chunks: [Chunk] = [Chunk(vertex: 0, index: 0)]
+    /// Added to the z of every vertex appended while set, so generators can build a house at z = 0 and
+    /// have it land on the terrain.
+    var baseZ: Double = 0
 
     var isEmpty: Bool { indices.isEmpty }
     var triangleCount: Int { indices.count / 3 }
@@ -38,10 +41,15 @@ nonisolated struct DioramaMesh: Sendable {
 
     @discardableResult
     mutating func vertex(_ p: DV3, _ n: DV3, _ uv: SIMD2<Float>) -> UInt32 {
-        positions.append(p)
+        positions.append(baseZ == 0 ? p : DV3(p.x, p.y, p.z + baseZ))
         normals.append(n)
         uvs.append(uv)
         return UInt32(positions.count - 1)
+    }
+
+    /// Appends indices verbatim (no auto-winding); used for shader-built sprites with no geometry normal.
+    mutating func rawTriangles(_ list: [UInt32]) {
+        indices.append(contentsOf: list)
     }
 
     mutating func tri(_ a: UInt32, _ b: UInt32, _ c: UInt32) {
@@ -221,7 +229,7 @@ nonisolated struct DioramaMesh: Sendable {
         for i in 0..<other.positions.count {
             let p = other.positions[i]
             let x = p.x * t.scale.x, y = p.y * t.scale.y
-            positions.append(DV3(x * c - y * s + t.translation.x, x * s + y * c + t.translation.y, p.z * t.scale.z + t.translation.z))
+            positions.append(DV3(x * c - y * s + t.translation.x, x * s + y * c + t.translation.y, p.z * t.scale.z + t.translation.z + baseZ))
             let n = other.normals[i]
             let nx = n.x / t.scale.x, ny = n.y / t.scale.y
             normals.append(DV3(nx * c - ny * s, nx * s + ny * c, n.z / t.scale.z).normalized)
@@ -288,6 +296,51 @@ extension DioramaPolygon {
             let c = corners[i], prev = corners[(i + n - 1) % n], next = corners[(i + 1) % n]
             out.append(c + (prev - c).normalized * b)
             out.append(c + (next - c).normalized * b)
+        }
+        return out
+    }
+
+    /// Rounds convex corners of a footprint with a short arc (the "Apple Maps toy" silhouette). Corners
+    /// next to clipped tile-edge edges are left alone. Edge flags follow the same convention as `chamfer`.
+    nonisolated static func rounded(_ ring: [DV2], flags: [Bool], radius r: Double, segments: Int = 4) -> (points: [DV2], flags: [Bool]) {
+        let n = ring.count
+        guard n >= 3, r > 0, flags.count == n else { return (ring, flags) }
+        var points: [DV2] = []
+        var outFlags: [Bool] = []
+        points.reserveCapacity(n * (segments + 1))
+        for i in 0..<n {
+            let c = ring[i], prev = ring[(i + n - 1) % n], next = ring[(i + 1) % n]
+            let inEdge = c - prev, outEdge = next - c
+            let convex = inEdge.cross(outEdge) > 0
+            let fp = flags[(i + n - 1) % n], fn = flags[i]
+            let reach = min(r, inEdge.length * 0.3, outEdge.length * 0.3)
+            if convex, !fp, !fn, reach > 0.05 {
+                let a = c - inEdge.normalized * reach
+                let b = c + outEdge.normalized * reach
+                let steps = max(segments, 1)
+                for k in 0...steps {
+                    let t = Double(k) / Double(steps)
+                    // Quadratic Bézier through the corner reads as a fillet at this scale.
+                    let p = a * ((1 - t) * (1 - t)) + c * (2 * (1 - t) * t) + b * (t * t)
+                    points.append(p)
+                    outFlags.append(k == steps ? fn : false)
+                }
+            } else {
+                points.append(c)
+                outFlags.append(fn)
+            }
+        }
+        return (points, outFlags)
+    }
+
+    /// Inserts points so no segment of the polyline is longer than `maxStep`; lets ribbons follow terrain.
+    nonisolated static func densify(_ line: [DV2], maxStep: Double) -> [DV2] {
+        guard line.count >= 2, maxStep > 0.1 else { return line }
+        var out: [DV2] = [line[0]]
+        for i in 1..<line.count {
+            let a = line[i - 1], b = line[i]
+            let steps = max(Int((a.distance(to: b) / maxStep).rounded(.up)), 1)
+            for s in 1...steps { out.append(a + (b - a) * (Double(s) / Double(steps))) }
         }
         return out
     }
