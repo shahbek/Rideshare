@@ -1,17 +1,14 @@
 import Foundation
 @_spi(Experimental) import MapboxMaps
 
-/// Debug-only Mapbox layers for the diorama. The basemap itself stays untouched Mapbox Standard: roads,
-/// water, parks and labels come from Standard so the rest of the city looks exactly as it always did,
-/// and the generated ground model adds the toy shoulders, plots and shoreline sand inside each tile.
+/// Debug-only Mapbox layers for the diorama (dashed tile outline). The basemap itself stays untouched
+/// Mapbox Standard; everything 3D is drawn by `DioramaRenderLayer`.
 @MainActor
 struct DioramaMapStyling {
     static let layerIDs = ["zuri-diorama-tile-bounds"]
     private static let debugSource = "zuri-diorama-debug"
 
     let config: DioramaConfig
-
-    func install(on map: MapboxMap) throws {}
 
     func remove(from map: MapboxMap) {
         for id in Self.layerIDs where map.layerExists(withId: id) {

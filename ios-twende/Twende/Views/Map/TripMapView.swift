@@ -171,7 +171,7 @@ extension TripMapView {
         private let cityLandmarks = DarCityLandmarks()
         private let billboards: [BillboardLandmark] = BillboardCatalogue.all.map { BillboardLandmark(ad: $0) }
         private let billboardTeasers: [BillboardTeaser] = BillboardCatalogue.all.map { BillboardTeaser(ad: $0) }
-        /// Procedural Masaki diorama; created only while `DioramaState.shared.isEnabled`.
+        /// Procedural Slipway diorama; created only while `DioramaState.shared.isEnabled`.
         private var diorama: DioramaTileManager? = nil
         private var dioramaRegenerate: Int = 0
         private var dioramaFly: Int = 0
@@ -455,7 +455,7 @@ extension TripMapView {
             guard let diorama else { return }
             if state.regenerateRequest != dioramaRegenerate {
                 dioramaRegenerate = state.regenerateRequest
-                diorama.regenerateCentreTile()
+                diorama.regenerate()
             }
             if state.cameraFlyRequest != dioramaFly {
                 dioramaFly = state.cameraFlyRequest

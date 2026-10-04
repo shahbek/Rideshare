@@ -15,7 +15,7 @@ struct DioramaDebugPanel: View {
                 HStack(spacing: 10) {
                     Image(systemName: "cube.transparent")
                         .font(.system(size: 15, weight: .semibold))
-                    Text("Masaki diorama")
+                    Text("Slipway diorama")
                         .font(TwendeFont.headline)
                     Spacer(minLength: 8)
                     Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
@@ -57,7 +57,7 @@ struct DioramaDebugPanel: View {
                             state.regenerateRequest += 1
                         }
                         .buttonStyle(.twendeSecondary)
-                        Button("Fly to Masaki") {
+                        Button("Fly to Slipway") {
                             Haptics.tap()
                             state.cameraFlyRequest += 1
                         }

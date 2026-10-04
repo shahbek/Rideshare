@@ -23,7 +23,7 @@ nonisolated enum DioramaSwatch: Int, CaseIterable, Sendable {
     // Emissive (night) colours
     case windowGlow, lampGlow, kioskGlow, shopGlow
 
-    /// Fixed Masaki palette. Never random RGB.
+    /// Fixed palette. Never random RGB.
     static let defaultPalette: [DioramaSwatch: UInt32] = [
         .whitewash: 0xF3EFE6, .cream: 0xF0E0BC, .ochre: 0xD69A4E, .sunflower: 0xF0BE45,
         .coral: 0xEE8668, .skyBlue: 0x86BFE0, .mint: 0x98D3B8, .terracottaWall: 0xC76C48,
@@ -51,7 +51,7 @@ nonisolated enum DioramaSwatch: Int, CaseIterable, Sendable {
 nonisolated enum DioramaCategory: String, CaseIterable, Codable, Sendable {
     case buildings, walls, ground, vegetation, props, windowGlow, propGlow
 
-    /// Emissive categories use their own glTF material and glow by the layer's emissive strength.
+    /// Emissive categories are drawn unlit and only at dusk/night.
     var isEmissive: Bool { self == .windowGlow || self == .propGlow }
 }
 
@@ -73,33 +73,26 @@ nonisolated enum DioramaTimeOfDay: String, CaseIterable, Identifiable, Sendable 
 /// One place to tune the whole look without touching generation code.
 nonisolated struct DioramaConfig: Sendable {
     /// Bump to invalidate every cached tile.
-    var generatorVersion: Int = 2
+    var generatorVersion: Int = 3
 
-    // MARK: Tiles
+    // MARK: Tile
     var tileZoom: Int = 16
-    var minimumZoom: Double = 16
-    /// North Masaki: residential streets with the Sea Cliff shoreline in the tile's north-east corner.
-    var seedLatitude: Double = -6.7440
-    var seedLongitude: Double = 39.2850
-    /// The diorama is deliberately tiny: one z16 tile (about 600 m across) around the seed.
-    var maxLoadedTiles: Int = 1
-    var bufferTiles: Int = 0
-    /// Tiles may only be generated within this many z16 tiles of the seed; outside it the map is plain Standard.
-    var areaRadiusTiles: Int = 0
-    /// The seed tile stays loaded while the camera centre is within this many tiles of it.
+    var minimumZoom: Double = 15.5
+    /// The Slipway, Msasani peninsula: one z16 tile (about 600 m across) holding the Slipway complex,
+    /// the DoubleTree, Slipway Villas and the bay. Data comes from the bundled `slipway_tile.json`.
+    var seedLatitude: Double = -6.7546
+    var seedLongitude: Double = 39.2734
+    /// The tile stays loaded while the camera centre is within this many tiles of it.
     var visibilityRadiusTiles: Int = 2
-    /// How many tiles may generate geometry at the same time.
-    var maxConcurrentGenerations: Int = 1
-    /// Upper bounds that keep one tile's query, conversion and mesh size predictable.
-    var maxQueriedFeatures: Int = 6_000
+    /// Upper bounds that keep the mesh size predictable.
     var maxBuildingsPerTile: Int = 450
     var maxRoadsPerTile: Int = 160
 
     // MARK: Camera
-    var cameraZoom: Double = 16.8
+    var cameraZoom: Double = 16.6
     var cameraPitch: Double = 58
-    /// Looks north-east so the shoreline sits in the upper part of the frame.
-    var cameraBearing: Double = 52
+    /// Looks north-west over the Slipway towards Msasani Bay.
+    var cameraBearing: Double = 318
 
     // MARK: Buildings
     var floorHeight: Double = 3.2
@@ -162,5 +155,5 @@ nonisolated struct DioramaConfig: Sendable {
     var roadLabelColor: String = "#4A2F1F"
     var roadLabelHalo: String = "#FFF4DE"
 
-    static let masaki = DioramaConfig()
+    static let slipway = DioramaConfig()
 }
