@@ -173,6 +173,7 @@ final class DioramaDataLoader {
                 guard props["underground"]??.string != "true" else { continue }
                 for ring in polygonRings(feature.geometry).compactMap(\.first) {
                     let local = ring.map { projection.local(longitude: $0.longitude, latitude: $0.latitude) }
+                    guard local.allSatisfy({ $0.x.isFinite && $0.y.isFinite }) else { continue }
                     var flags = clipFlags(local, tileSize: tileSize, tolerance: clipTolerance)
                     var (pts, fl) = DioramaPolygon.clean(local, flags: flags)
                     (pts, fl) = DioramaPolygon.counterClockwise(pts, flags: fl)
@@ -279,7 +280,7 @@ final class DioramaDataLoader {
 
     private nonisolated static func identifier(_ feature: Feature, fallback: JSONObject) -> UInt64 {
         switch feature.identifier {
-        case .number(let n): return UInt64(max(n, 0))
+        case .number(let n): return n.isFinite && n >= 0 && n < 1.8e19 ? UInt64(n) : DioramaRandom.hash("\(n)")
         case .string(let s): return DioramaRandom.hash(s)
         case nil:
             let coordinates = polygonRings(feature.geometry).first?.first?.first ?? lineStrings(feature.geometry).first?.first

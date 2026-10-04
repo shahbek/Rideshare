@@ -192,7 +192,7 @@ final class DioramaTileManager {
             return
         }
 
-        let needed = neededTiles(map: map, camera: camera).filter(isInsideArea)
+        let needed = neededTiles(centreTile: centreTile)
         for tile in tiles.keys where !needed.contains(tile) {
             unload(tile, from: map)
             tiles[tile] = nil
@@ -203,7 +203,7 @@ final class DioramaTileManager {
             tiles[tile] = .waitingForData(attempts: 0)
         }
         loadWaitingTiles(on: map)
-        if needed.isEmpty { state.status = "Outside the Masaki diorama area" } else { updateStatus() }
+        if needed.isEmpty { state.status = "Fly to Masaki to see the diorama tile" } else { updateStatus() }
     }
 
     private func unloadAll(from map: MapboxMap) {
@@ -212,21 +212,17 @@ final class DioramaTileManager {
         state.loadedTiles.removeAll()
     }
 
-    /// Visible z16 tiles sorted by distance from the centre, plus a one-tile buffer, capped.
-    private func neededTiles(map: MapboxMap, camera: CameraState) -> [DioramaTileID] {
-        let bounds = map.coordinateBounds(for: CameraOptions(cameraState: camera))
-        let centreTile = DioramaTileID(latitude: camera.center.latitude, longitude: camera.center.longitude, zoom: config.tileZoom)
-        let sw = DioramaTileID(latitude: bounds.southwest.latitude, longitude: bounds.southwest.longitude, zoom: config.tileZoom)
-        let ne = DioramaTileID(latitude: bounds.northeast.latitude, longitude: bounds.northeast.longitude, zoom: config.tileZoom)
-        // A pitched camera sees to the horizon; never let the visible rectangle exceed the buffer ring.
-        let reach = config.bufferTiles + 1
-        let minX = max(sw.x, centreTile.x - reach), maxX = min(ne.x, centreTile.x + reach)
-        let minY = max(ne.y, centreTile.y - reach), maxY = min(sw.y, centreTile.y + reach)
+    /// The diorama tiles (the seed plus `areaRadiusTiles` around it) that are close enough to the camera
+    /// centre to matter, nearest first, capped.
+    private func neededTiles(centreTile: DioramaTileID) -> [DioramaTileID] {
+        let reach = config.visibilityRadiusTiles
+        guard abs(centreTile.x - seedTile.x) <= reach, abs(centreTile.y - seedTile.y) <= reach else { return [] }
         var result: [DioramaTileID] = []
-        guard minX <= maxX, minY <= maxY else { return [centreTile] }
-        for x in (minX - config.bufferTiles)...(maxX + config.bufferTiles) {
-            for y in (minY - config.bufferTiles)...(maxY + config.bufferTiles) {
-                result.append(DioramaTileID(z: config.tileZoom, x: x, y: y))
+        let r = config.areaRadiusTiles
+        for dx in -r...r {
+            for dy in -r...r {
+                let tile = seedTile.offset(dx: dx, dy: dy)
+                if abs(tile.x - centreTile.x) <= reach, abs(tile.y - centreTile.y) <= reach { result.append(tile) }
             }
         }
         result.sort { lhs, rhs in
@@ -321,9 +317,10 @@ final class DioramaTileManager {
             }
             for part in artifacts.parts {
                 let id = modelID(tile, part.category)
+                // Drop the layer before the model it references; the reverse order upsets the renderer.
+                if map.layerExists(withId: layerID(tile, part.category)) { try map.removeLayer(withId: layerID(tile, part.category)) }
                 if map.hasStyleModel(modelId: id) { try map.removeStyleModel(modelId: id) }
                 try map.addStyleModel(modelId: id, modelUri: part.url.absoluteString)
-                if map.layerExists(withId: layerID(tile, part.category)) { try map.removeLayer(withId: layerID(tile, part.category)) }
                 var layer = ModelLayer(id: layerID(tile, part.category), source: sourceID(tile))
                 layer.slot = .middle
                 layer.minZoom = config.minimumZoom

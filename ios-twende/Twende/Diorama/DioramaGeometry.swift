@@ -79,13 +79,16 @@ nonisolated struct DioramaRect: Sendable {
     func expanded(by m: Double) -> DioramaRect { DioramaRect(minX: minX - m, minY: minY - m, maxX: maxX + m, maxY: maxY + m) }
     func intersects(_ o: DioramaRect) -> Bool { minX <= o.maxX && maxX >= o.minX && minY <= o.maxY && maxY >= o.minY }
 
+    var isFinite: Bool { minX.isFinite && minY.isFinite && maxX.isFinite && maxY.isFinite }
+
+    /// Bounding box of the points; an empty or non-finite input yields a zero rect at the origin.
     static func bounding(_ points: [DV2]) -> DioramaRect {
         var r = DioramaRect(minX: .infinity, minY: .infinity, maxX: -.infinity, maxY: -.infinity)
-        for p in points {
+        for p in points where p.x.isFinite && p.y.isFinite {
             r.minX = min(r.minX, p.x); r.minY = min(r.minY, p.y)
             r.maxX = max(r.maxX, p.x); r.maxY = max(r.maxY, p.y)
         }
-        return r
+        return r.isFinite ? r : DioramaRect(minX: 0, minY: 0, maxX: 0, maxY: 0)
     }
 }
 
@@ -421,6 +424,7 @@ nonisolated struct DioramaGrid: Sendable {
     private func key(_ ix: Int, _ iy: Int) -> Int64 { Int64(ix) &* 73_856_093 ^ Int64(iy) &* 19_349_663 }
 
     mutating func insert(_ index: Int, rect: DioramaRect) {
+        guard rect.isFinite, abs(rect.minX) < 1e7, abs(rect.maxX) < 1e7, abs(rect.minY) < 1e7, abs(rect.maxY) < 1e7 else { return }
         let x0 = Int(floor(rect.minX / cell)), x1 = Int(floor(rect.maxX / cell))
         let y0 = Int(floor(rect.minY / cell)), y1 = Int(floor(rect.maxY / cell))
         guard x1 - x0 < 200, y1 - y0 < 200 else { return }
@@ -431,6 +435,7 @@ nonisolated struct DioramaGrid: Sendable {
 
     func query(_ rect: DioramaRect) -> Set<Int> {
         var out = Set<Int>()
+        guard rect.isFinite, abs(rect.minX) < 1e7, abs(rect.maxX) < 1e7, abs(rect.minY) < 1e7, abs(rect.maxY) < 1e7 else { return out }
         let x0 = Int(floor(rect.minX / cell)), x1 = Int(floor(rect.maxX / cell))
         let y0 = Int(floor(rect.minY / cell)), y1 = Int(floor(rect.maxY / cell))
         guard x1 - x0 < 400, y1 - y0 < 400 else { return out }
@@ -475,7 +480,10 @@ nonisolated struct DioramaRandom: Sendable {
 
     mutating func unit() -> Double { Double(next() >> 11) / Double(UInt64(1) << 53) }
     mutating func range(_ r: ClosedRange<Double>) -> Double { r.lowerBound + (r.upperBound - r.lowerBound) * unit() }
-    mutating func int(_ r: ClosedRange<Int>) -> Int { r.lowerBound + Int(next() % UInt64(r.upperBound - r.lowerBound + 1)) }
+    mutating func int(_ r: ClosedRange<Int>) -> Int { r.lowerBound + Int(next() % UInt64(max(r.upperBound - r.lowerBound + 1, 1))) }
     mutating func chance(_ p: Double) -> Bool { unit() < p }
-    mutating func pick<T>(_ items: [T]) -> T { items[Int(next() % UInt64(max(items.count, 1)))] }
+    mutating func pick<T>(_ items: [T]) -> T {
+        precondition(!items.isEmpty, "pick from empty list")
+        return items[Int(next() % UInt64(items.count))]
+    }
 }

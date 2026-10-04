@@ -73,7 +73,7 @@ nonisolated enum DioramaTimeOfDay: String, CaseIterable, Identifiable, Sendable 
 /// One place to tune the whole look without touching generation code.
 nonisolated struct DioramaConfig: Sendable {
     /// Bump to invalidate every cached .glb.
-    var generatorVersion: Int = 1
+    var generatorVersion: Int = 2
 
     // MARK: Tiles
     var tileZoom: Int = 16
@@ -81,12 +81,15 @@ nonisolated struct DioramaConfig: Sendable {
     /// North Masaki: residential streets with the Sea Cliff shoreline in the tile's north-east corner.
     var seedLatitude: Double = -6.7440
     var seedLongitude: Double = 39.2850
-    var maxLoadedTiles: Int = 9
-    var bufferTiles: Int = 1
+    /// The diorama is deliberately tiny: one z16 tile (about 600 m across) around the seed.
+    var maxLoadedTiles: Int = 1
+    var bufferTiles: Int = 0
     /// Tiles may only be generated within this many z16 tiles of the seed; outside it the map is plain Standard.
-    var areaRadiusTiles: Int = 3
+    var areaRadiusTiles: Int = 0
+    /// The seed tile stays loaded while the camera centre is within this many tiles of it.
+    var visibilityRadiusTiles: Int = 2
     /// How many tiles may generate geometry at the same time.
-    var maxConcurrentGenerations: Int = 2
+    var maxConcurrentGenerations: Int = 1
 
     // MARK: Camera
     var cameraZoom: Double = 16.8
