@@ -72,7 +72,7 @@ nonisolated enum DioramaTimeOfDay: String, CaseIterable, Identifiable, Sendable 
 
 /// One place to tune the whole look without touching generation code.
 nonisolated struct DioramaConfig: Sendable {
-    /// Bump to invalidate every cached .glb.
+    /// Bump to invalidate every cached tile.
     var generatorVersion: Int = 2
 
     // MARK: Tiles

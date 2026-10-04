@@ -22,7 +22,28 @@ nonisolated enum DioramaAtlas {
         return SIMD2<Float>(Float(cx / Double(columns)), Float(cy / Double(rows)))
     }
 
-    /// Encodes the atlas as PNG for embedding in each .glb.
+    /// Inverse of `uv`: which swatch (and whether its darker AO copy) a vertex points at.
+    static func lookup(_ uv: SIMD2<Float>) -> (swatch: DioramaSwatch, dark: Bool)? {
+        let cx = Int((Double(uv.x) * Double(columns)).rounded(.down))
+        let cy = Int((Double(uv.y) * Double(rows)).rounded(.down))
+        let index = cy * columns + cx
+        guard let swatch = DioramaSwatch(rawValue: index / 2) else { return nil }
+        return (swatch, index % 2 == 1)
+    }
+
+    /// Linear RGB of a swatch cell as the renderer sees it.
+    static func color(_ swatch: DioramaSwatch, dark: Bool, config: DioramaConfig) -> SIMD4<Float> {
+        let rgb = config.palette[swatch] ?? 0xFF00FF
+        let factor = Float(dark ? config.aoDarkening : 1)
+        return SIMD4<Float>(
+            Float((rgb >> 16) & 0xFF) / 255 * factor,
+            Float((rgb >> 8) & 0xFF) / 255 * factor,
+            Float(rgb & 0xFF) / 255 * factor,
+            1
+        )
+    }
+
+    /// Encodes the atlas as PNG (debug export).
     static func png(config: DioramaConfig) -> Data? {
         let width = columns * cellPixels
         let height = rows * cellPixels

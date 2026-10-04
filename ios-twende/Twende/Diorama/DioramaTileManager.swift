@@ -35,7 +35,7 @@ final class DioramaState {
 }
 
 /// Lifecycle of generated tiles on one map: decides which z16 tiles are needed for the camera, loads
-/// their vector data, generates .glb models off-main, registers style models and model layers, and
+/// their vector data, generates triangle buffers off-main, shows them through a custom Metal layer, and
 /// unloads tiles that leave the buffer. Owns no UI.
 @MainActor
 final class DioramaTileManager {
@@ -68,6 +68,7 @@ final class DioramaTileManager {
     private var standardObjectsHidden: Bool = false
     private var queryInFlight: Bool = false
     private let seedTile: DioramaTileID
+    private var renderLayers: [DioramaTileID: DioramaRenderLayer] = [:]
 
     init(config: DioramaConfig = .masaki, state: DioramaState = .shared) {
         self.config = config
@@ -121,6 +122,7 @@ final class DioramaTileManager {
         appliedCategories = []
         appliedDebug = false
         tiles.removeAll()
+        renderLayers.removeAll()
         state.loadedTiles.removeAll()
         cancelables.removeAll()
     }
@@ -302,42 +304,22 @@ final class DioramaTileManager {
         }
     }
 
-    private func modelID(_ tile: DioramaTileID, _ category: DioramaCategory) -> String { "zuri-diorama-\(tile.key)-\(category.rawValue)" }
-    private func sourceID(_ tile: DioramaTileID) -> String { "zuri-diorama-src-\(tile.key)" }
-    private func layerID(_ tile: DioramaTileID, _ category: DioramaCategory) -> String { "zuri-diorama-\(tile.key)-\(category.rawValue)" }
+    private func layerID(_ tile: DioramaTileID) -> String { "zuri-diorama-\(tile.key)" }
 
-    /// Registers each .glb as a style model and shows it with a `ModelLayer` anchored at the tile centre.
+    /// Shows a tile through the same custom Metal layer path the destination buildings use. The host
+    /// keeps the triangles; Mapbox supplies camera and depth every frame.
     private func show(_ artifacts: DioramaTileArtifacts, on map: MapboxMap) {
         let tile = artifacts.tile
+        let id = layerID(tile)
         do {
-            if !map.sourceExists(withId: sourceID(tile)) {
-                var source = GeoJSONSource(id: sourceID(tile))
-                source.data = .feature(Feature(geometry: .point(Point(tile.centre))))
-                try map.addSource(source)
-            }
-            for part in artifacts.parts {
-                let id = modelID(tile, part.category)
-                // Drop the layer before the model it references; the reverse order upsets the renderer.
-                if map.layerExists(withId: layerID(tile, part.category)) { try map.removeLayer(withId: layerID(tile, part.category)) }
-                if map.hasStyleModel(modelId: id) { try map.removeStyleModel(modelId: id) }
-                try map.addStyleModel(modelId: id, modelUri: part.url.absoluteString)
-                var layer = ModelLayer(id: layerID(tile, part.category), source: sourceID(tile))
-                layer.slot = .middle
-                layer.minZoom = config.minimumZoom
-                layer.modelId = .constant(id)
-                layer.modelType = .constant(.common3d)
-                layer.modelScale = .constant([1, 1, 1])
-                layer.modelRotation = .constant([0, 0, 0])
-                layer.modelTranslation = .constant([0, 0, 0])
-                layer.modelRoughness = .constant(1)
-                layer.modelCastShadows = .constant(!part.category.isEmissive)
-                layer.modelReceiveShadows = .constant(!part.category.isEmissive)
-                layer.modelAmbientOcclusionIntensity = .constant(0.6)
-                layer.modelCutoffFadeRange = .constant(0)
-                layer.modelEmissiveStrength = .constant(part.category.isEmissive ? state.timeOfDay.emissiveStrength : 0)
-                layer.visibility = .constant(state.isVisible(part.category) ? .visible : .none)
-                try map.addLayer(layer)
-            }
+            if map.layerExists(withId: id) { try map.removeLayer(withId: id) }
+            let host = DioramaRenderLayer(
+                origin: tile.centre, vertices: artifacts.vertices, indices: artifacts.indices, ranges: artifacts.ranges,
+                visible: state.visibleCategories, glowOn: state.timeOfDay.showsLights
+            )
+            try map.addCustomLayer(withId: id, layerHost: host, layerPosition: nil)
+            try map.setLayerProperty(for: id, property: "slot", value: "middle")
+            renderLayers[tile] = host
             state.loadedTiles[tile] = artifacts
             updateStatus()
             map.triggerRepaint()
@@ -348,11 +330,8 @@ final class DioramaTileManager {
     }
 
     private func unload(_ tile: DioramaTileID, from map: MapboxMap) {
-        for category in DioramaCategory.allCases {
-            if map.layerExists(withId: layerID(tile, category)) { try? map.removeLayer(withId: layerID(tile, category)) }
-            if map.hasStyleModel(modelId: modelID(tile, category)) { try? map.removeStyleModel(modelId: modelID(tile, category)) }
-        }
-        if map.sourceExists(withId: sourceID(tile)) { try? map.removeSource(withId: sourceID(tile)) }
+        if map.layerExists(withId: layerID(tile)) { try? map.removeLayer(withId: layerID(tile)) }
+        renderLayers[tile] = nil
     }
 
     /// Drops the cache for the tile under the camera and rebuilds it.
@@ -381,24 +360,16 @@ final class DioramaTileManager {
         if standardObjectsHidden {
             try? map.setStyleImportConfigProperty(for: "basemap", config: "lightPreset", value: state.timeOfDay.lightPreset)
         }
-        for (tile, status) in tiles {
-            guard case .loaded(let artifacts, _) = status else { continue }
-            for part in artifacts.parts where part.category.isEmissive {
-                try? map.setLayerProperty(for: layerID(tile, part.category), property: "model-emissive-strength", value: state.timeOfDay.emissiveStrength)
-            }
-        }
         applyCategoryVisibility(force: true)
     }
 
     private func applyCategoryVisibility(force: Bool) {
         guard let map, installed, force || appliedCategories != state.visibleCategories else { return }
         appliedCategories = state.visibleCategories
-        for (tile, status) in tiles {
-            guard case .loaded(let artifacts, _) = status else { continue }
-            for part in artifacts.parts {
-                try? map.setLayerProperty(for: layerID(tile, part.category), property: "visibility", value: state.isVisible(part.category) ? "visible" : "none")
-            }
+        for host in renderLayers.values {
+            host.setVisible(state.visibleCategories, glowOn: state.timeOfDay.showsLights)
         }
+        map.triggerRepaint()
     }
 
     private func applyDebug() {

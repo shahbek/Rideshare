@@ -1,67 +1,48 @@
 import Foundation
+import simd
 
-/// Per-category results for one generated tile.
+/// Everything the renderer needs for one generated tile: one interleaved vertex buffer, one index
+/// buffer, and the index range each category occupies so categories can be toggled per frame.
 nonisolated struct DioramaTileArtifacts: Sendable {
     nonisolated struct Part: Sendable {
         let category: DioramaCategory
-        let url: URL
         let triangles: Int
-        let bytes: Int
     }
 
     let tile: DioramaTileID
+    let vertices: [BuildingRenderVertex]
+    let indices: [UInt32]
+    let ranges: [DioramaRenderLayer.Range]
     let parts: [Part]
     let generationSeconds: Double
 
-    var totalTriangles: Int { parts.reduce(0) { $0 + $1.triangles } }
-    var totalBytes: Int { parts.reduce(0) { $0 + $1.bytes } }
+    var totalTriangles: Int { indices.count / 3 }
+    var totalBytes: Int { vertices.count * MemoryLayout<BuildingRenderVertex>.stride + indices.count * MemoryLayout<UInt32>.stride }
 }
 
-/// Runs the whole pipeline for one tile off the main thread and writes one .glb per category.
-/// Files are cached by tile and generator version; bumping `DioramaConfig.generatorVersion` invalidates.
+/// Runs the whole pipeline for one tile off the main thread. Output stays in memory and goes straight
+/// into Metal buffers through `DioramaRenderLayer`; there is no file format or model loader in between.
 nonisolated enum DioramaTileGenerator {
-    static func cacheDirectory() -> URL {
-        let base = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-        return base.appendingPathComponent("ZuriDiorama", isDirectory: true)
-    }
+    private static let cacheLock = NSLock()
+    nonisolated(unsafe) private static var cache: [String: DioramaTileArtifacts] = [:]
 
-    static func url(for tile: DioramaTileID, category: DioramaCategory, version: Int, reduced: Bool) -> URL {
-        cacheDirectory().appendingPathComponent("v\(version)/\(tile.key)\(reduced ? "-lite" : "")-\(category.rawValue).glb")
+    private static func cacheKey(_ tile: DioramaTileID, config: DioramaConfig, reduced: Bool) -> String {
+        "v\(config.generatorVersion)/\(tile.key)\(reduced ? "-lite" : "")"
     }
 
     static func cached(_ tile: DioramaTileID, config: DioramaConfig, reduced: Bool) -> DioramaTileArtifacts? {
-        let manifest = manifestURL(tile, version: config.generatorVersion, reduced: reduced)
-        guard let data = try? Data(contentsOf: manifest),
-              let entries = try? JSONDecoder().decode([ManifestEntry].self, from: data) else { return nil }
-        var parts: [DioramaTileArtifacts.Part] = []
-        for entry in entries {
-            let url = Self.url(for: tile, category: entry.category, version: config.generatorVersion, reduced: reduced)
-            guard FileManager.default.fileExists(atPath: url.path) else { return nil }
-            parts.append(.init(category: entry.category, url: url, triangles: entry.triangles, bytes: entry.bytes))
-        }
-        return DioramaTileArtifacts(tile: tile, parts: parts, generationSeconds: 0)
+        cacheLock.lock()
+        defer { cacheLock.unlock() }
+        return cache[cacheKey(tile, config: config, reduced: reduced)]
     }
 
     static func clearCache(for tile: DioramaTileID, config: DioramaConfig) {
-        for reduced in [false, true] {
-            try? FileManager.default.removeItem(at: manifestURL(tile, version: config.generatorVersion, reduced: reduced))
-            for category in DioramaCategory.allCases {
-                try? FileManager.default.removeItem(at: url(for: tile, category: category, version: config.generatorVersion, reduced: reduced))
-            }
-        }
+        cacheLock.lock()
+        for reduced in [false, true] { cache[cacheKey(tile, config: config, reduced: reduced)] = nil }
+        cacheLock.unlock()
     }
 
-    private nonisolated struct ManifestEntry: Codable, Sendable {
-        let category: DioramaCategory
-        let triangles: Int
-        let bytes: Int
-    }
-
-    private static func manifestURL(_ tile: DioramaTileID, version: Int, reduced: Bool) -> URL {
-        cacheDirectory().appendingPathComponent("v\(version)/\(tile.key)\(reduced ? "-lite" : "").json")
-    }
-
-    /// Generates (or loads from cache) all models for a tile. Call from any thread.
+    /// Generates (or returns the in-memory copy of) one tile. Call from any thread.
     static func generate(_ data: DioramaTileData, config: DioramaConfig, library: DioramaPropLibrary, reduced: Bool) throws -> DioramaTileArtifacts {
         if let cached = cached(data.tile, config: config, reduced: reduced) { return cached }
         let started = Date()
@@ -91,24 +72,61 @@ nonisolated enum DioramaTileGenerator {
         placer.vegetation(into: &vegetation)
         placer.props(into: &props, glow: &propGlow)
 
-        guard let atlas = DioramaAtlas.png(config: config) else {
-            throw NSError(domain: "Diorama", code: 1, userInfo: [NSLocalizedDescriptionKey: "palette atlas failed"])
-        }
-
         let meshes: [(DioramaCategory, DioramaMesh)] = [
-            (.buildings, buildings), (.walls, walls), (.ground, ground), (.vegetation, vegetation),
+            (.ground, ground), (.buildings, buildings), (.walls, walls), (.vegetation, vegetation),
             (.props, props), (.windowGlow, windowGlow), (.propGlow, propGlow),
         ]
+
+        var vertices: [BuildingRenderVertex] = []
+        var indices: [UInt32] = []
+        var ranges: [DioramaRenderLayer.Range] = []
         var parts: [DioramaTileArtifacts.Part] = []
-        var manifest: [ManifestEntry] = []
+        vertices.reserveCapacity(meshes.reduce(0) { $0 + $1.1.positions.count })
+        indices.reserveCapacity(meshes.reduce(0) { $0 + $1.1.indices.count })
+
         for (category, mesh) in meshes where !mesh.isEmpty {
-            let target = url(for: data.tile, category: category, version: config.generatorVersion, reduced: reduced)
-            let stats = try DioramaGLBWriter.write(mesh, emissive: category.isEmissive, atlas: atlas, to: target)
-            parts.append(.init(category: category, url: target, triangles: stats.triangles, bytes: stats.bytes))
-            manifest.append(ManifestEntry(category: category, triangles: stats.triangles, bytes: stats.bytes))
+            let start = indices.count
+            let base = vertices.count
+            let count = mesh.positions.count
+            // Emissive categories use the shader's flat "sign" path so they read as lit at dusk.
+            let appearance = category.isEmissive ? SIMD4<Float>(0.85, 0, 0, 4) : SIMD4<Float>(0.85, 0, 0, 0)
+            for i in 0..<count {
+                let p = mesh.positions[i]
+                let n = mesh.normals[i]
+                guard p.x.isFinite, p.y.isFinite, p.z.isFinite else {
+                    vertices.append(BuildingRenderVertex(position: SIMD4(0, 0, 0, 1), normal: SIMD4(0, 0, 1, 0), color: SIMD4(1, 0, 1, 1), appearance: appearance))
+                    continue
+                }
+                let cell = DioramaAtlas.lookup(mesh.uvs[i])
+                let color = cell.map { DioramaAtlas.color($0.swatch, dark: $0.dark, config: config) } ?? SIMD4<Float>(1, 0, 1, 1)
+                var normal = SIMD4<Float>(Float(n.x), Float(n.y), Float(n.z), 0)
+                if !(normal.x.isFinite && normal.y.isFinite && normal.z.isFinite) { normal = SIMD4(0, 0, 1, 0) }
+                vertices.append(BuildingRenderVertex(
+                    position: SIMD4<Float>(Float(p.x), Float(p.y), Float(p.z), 1),
+                    normal: normal, color: color, appearance: appearance
+                ))
+            }
+            let limit = UInt32(count)
+            for raw in mesh.indices {
+                // Never hand the GPU an index outside the buffer.
+                indices.append(UInt32(base) + (raw < limit ? raw : 0))
+            }
+            let indexCount = indices.count - start
+            ranges.append(.init(category: category, start: start, count: indexCount))
+            parts.append(.init(category: category, triangles: indexCount / 3))
         }
-        let manifestData = try JSONEncoder().encode(manifest)
-        try manifestData.write(to: manifestURL(data.tile, version: config.generatorVersion, reduced: reduced), options: .atomic)
-        return DioramaTileArtifacts(tile: data.tile, parts: parts, generationSeconds: Date().timeIntervalSince(started))
+
+        guard !indices.isEmpty else {
+            throw NSError(domain: "Diorama", code: 1, userInfo: [NSLocalizedDescriptionKey: "tile produced no geometry"])
+        }
+
+        let artifacts = DioramaTileArtifacts(
+            tile: data.tile, vertices: vertices, indices: indices, ranges: ranges, parts: parts,
+            generationSeconds: Date().timeIntervalSince(started)
+        )
+        cacheLock.lock()
+        cache[cacheKey(data.tile, config: config, reduced: reduced)] = artifacts
+        cacheLock.unlock()
+        return artifacts
     }
 }
