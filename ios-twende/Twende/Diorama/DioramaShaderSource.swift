@@ -203,6 +203,27 @@ nonisolated enum DioramaShaderSource {
         float3 view = normalize(u.eye.xyz - in.worldPosition);
         float3 albedo = in.color.rgb;
 
+        // Procedural ground textures (appearance.y): grass blades and tufts, sand ripples, asphalt grain,
+        // paving slabs. Evaluated in world space so the pattern never swims as the camera moves.
+        float tex = in.appearance.y;
+        float2 wp = in.worldPosition.xy;
+        if (tex > 0.5 && tex < 1.5) {
+            float tuft = dioramaNoise(wp * 0.9) * 0.6 + dioramaNoise(wp * 3.1) * 0.4;
+            float blade = dioramaNoise(wp * 14.0 + float2(tuft * 3.0, 0.0));
+            float mottle = dioramaNoise(wp * 0.12);
+            albedo *= 0.86 + 0.22 * tuft + 0.10 * (blade - 0.5) + 0.08 * (mottle - 0.5);
+            albedo += float3(0.06, 0.08, 0.0) * smoothstep(0.62, 0.85, tuft);
+        } else if (tex > 1.5 && tex < 2.5) {
+            float ripple = sin((wp.x * 0.7 + wp.y * 0.25 + dioramaNoise(wp * 0.4) * 2.0) * 4.0) * 0.5 + 0.5;
+            albedo *= 0.94 + 0.07 * ripple + 0.05 * (dioramaNoise(wp * 6.0) - 0.5);
+        } else if (tex > 2.5 && tex < 3.5) {
+            albedo *= 0.94 + 0.10 * dioramaNoise(wp * 5.0) + 0.04 * (dioramaNoise(wp * 0.3) - 0.5);
+        } else if (tex > 3.5 && tex < 4.5) {
+            float2 slab = fract(wp * 0.55);
+            float joint = smoothstep(0.0, 0.05, slab.x) * smoothstep(0.0, 0.05, slab.y);
+            albedo *= 0.90 + 0.08 * joint + 0.05 * (dioramaNoise(wp * 2.5) - 0.5);
+        }
+
         float hemi = n.z * 0.5 + 0.5;
         float3 ambient = mix(u.groundColor.rgb, u.skyColor.rgb, hemi);
         float ndl = dot(n, u.sunDirection.xyz);

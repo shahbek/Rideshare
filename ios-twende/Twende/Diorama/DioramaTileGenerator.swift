@@ -50,7 +50,7 @@ nonisolated enum DioramaTileGenerator {
         let started = Date()
 
         let roadIndex = DioramaRoadIndex(roads: data.roads, pavementWidth: config.pavementWidth)
-        let terrain = DioramaTerrain.load(rect: data.rect)
+        let terrain = DioramaTerrain.load(rect: data.rect, config: config)
         var buildings = DioramaMesh()
         var windowGlow = DioramaMesh()
         var walls = DioramaMesh()
@@ -75,6 +75,9 @@ nonisolated enum DioramaTileGenerator {
 
         DioramaGroundGenerator(config: config, data: data, roads: roadIndex, terrain: terrain).generate(compounds: compounds, into: &ground, water: &water)
         DioramaRoadGenerator(config: config, data: data, roads: roadIndex, terrain: terrain).generate(into: &roadsMesh)
+
+        let amenities = DioramaAmenityGenerator(config: config, data: data, roads: roadIndex, library: library, buildings: built, terrain: terrain)
+        amenities.generate(ground: &ground, props: &props, glow: &propGlow, lights: &lights)
 
         let placer = DioramaPropPlacer(config: config, data: data, roads: roadIndex, library: library, buildings: built, compounds: compounds, reduceDetail: reduced, terrain: terrain)
         placer.vegetation(into: &vegetation)
@@ -107,7 +110,16 @@ nonisolated enum DioramaTileGenerator {
                 let n = mesh.normals[i]
                 let cell = DioramaAtlas.lookup(mesh.uvs[i])
                 let isHalo = category == .propGlow && cell?.swatch == .lampGlow && p.z > 0 && abs(n.z) > 1.5
-                let appearance = SIMD4<Float>(0.85, 0, 0, isHalo ? 5 : baseCode)
+                // appearance.y picks a procedural surface texture: 1 grass, 2 sand, 3 asphalt, 4 paving.
+                let texture: Float
+                switch cell?.swatch {
+                case .grass, .lawn, .pitchGreen: texture = 1
+                case .earth: texture = 2
+                case .asphalt: texture = 3
+                case .paving, .pavement, .concrete: texture = 4
+                default: texture = 0
+                }
+                let appearance = SIMD4<Float>(0.85, texture, 0, isHalo ? 5 : baseCode)
                 guard p.x.isFinite, p.y.isFinite, p.z.isFinite else {
                     vertices.append(BuildingRenderVertex(position: SIMD4(0, 0, 0, 1), normal: SIMD4(0, 0, 1, 0), color: SIMD4(1, 0, 1, 1), appearance: appearance))
                     continue

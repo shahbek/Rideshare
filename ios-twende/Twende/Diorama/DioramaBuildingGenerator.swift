@@ -86,9 +86,13 @@ nonisolated struct DioramaBuildingGenerator {
             }
         }
 
+        // A pitched roof is built on the footprint's bounding rectangle, so it only goes on houses whose
+        // walls nearly fill that rectangle; L-shapes and clipped footprints get a flat roof that follows
+        // the walls exactly.
         var flatRoof = kind != .villa
         if kind == .villa, rng.chance(1 - config.hipRoofShare) { flatRoof = true }
-        if !flatRoof, f.area / max(box.area, 1) < 0.62 { flatRoof = true }
+        if !flatRoof, f.area / max(box.area, 1) < config.hipRoofMinimumFill { flatRoof = true }
+        if !flatRoof, flags.contains(true) { flatRoof = true }
 
         if flatRoof {
             softRoof(ring, flags: flags, z: height, color: .roofConcrete, into: &mesh)
@@ -181,8 +185,10 @@ nonisolated struct DioramaBuildingGenerator {
         let eave = z + 0.22
         let ridgeA = DV3(r.centre - r.axis * ridgeHalf, eave + rise)
         let ridgeB = DV3(r.centre + r.axis * ridgeHalf, eave + rise)
+        // Fascia board and a soffit that closes the gap between the overhang and the walls.
         mesh.extrude(c, z0: z - 0.05, z1: eave, .trimWhite)
-        mesh.polygon(c, z: z - 0.05, color, dark: true, facingUp: false)
+        mesh.polygon(c, z: z - 0.05, .trimWhite, dark: true, facingUp: false)
+        mesh.polygon(box.corners, z: z + 0.01, color)
         mesh.quad(DV3(c[0], eave), DV3(c[1], eave), ridgeB, ridgeA, color)
         mesh.quad(DV3(c[2], eave), DV3(c[3], eave), ridgeA, ridgeB, color)
         mesh.triangle(DV3(c[1], eave), DV3(c[2], eave), ridgeB, color)

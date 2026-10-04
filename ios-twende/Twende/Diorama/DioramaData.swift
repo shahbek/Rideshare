@@ -10,8 +10,29 @@ nonisolated struct DioramaTileData: Sendable {
     var roads: [DioramaRoadFeature]
     var water: [DioramaAreaFeature]
     var landuse: [DioramaAreaFeature]
+    /// Individually mapped trees (OSM `natural=tree`).
+    var trees: [DV2] = []
+    /// Footways, steps, the pier walkway and the slipway ramp.
+    var paths: [DioramaPathFeature] = []
+    /// Point features worth a model: masts, playgrounds, artwork, the mosque.
+    var pois: [DioramaPointFeature] = []
 
     var isEmpty: Bool { buildings.isEmpty && roads.isEmpty && water.isEmpty }
+}
+
+nonisolated struct DioramaPathFeature: Sendable {
+    let id: UInt64
+    let line: [DV2]
+    /// `footway`, `steps`, `path`, `pier`, `slipway`.
+    let kind: String
+    let isLit: Bool
+}
+
+nonisolated struct DioramaPointFeature: Sendable {
+    let id: UInt64
+    let point: DV2
+    /// `tower`, `playground`, `artwork`, `mosque`.
+    let kind: String
 }
 
 nonisolated struct DioramaBuildingFeature: Sendable {
@@ -43,7 +64,10 @@ nonisolated struct DioramaAreaFeature: Sendable {
     let rings: [[DV2]]
     /// Clip flags for the outer ring edges.
     let clipped: [Bool]
+    /// `park`, `common`, `garden`, `pitch`, `parking`, `fuel`, `pool`, `terrace`, `water`.
     let kind: String
+    /// OSM `sport` tag for pitches (`padel`, `tennis`, ...).
+    var sport: String? = nil
 }
 
 /// The diorama's source data is a small OpenStreetMap extract of the Slipway tile bundled with the app
@@ -54,12 +78,17 @@ nonisolated enum DioramaBundledTile {
         nonisolated struct Tile: Decodable, Sendable { let z: Int; let x: Int; let y: Int }
         nonisolated struct Building: Decodable, Sendable { let id: UInt64; let type: String; let height: Double?; let ring: [[Double]] }
         nonisolated struct Road: Decodable, Sendable { let id: UInt64; let `class`: String; let paved: Bool; let line: [[Double]] }
-        nonisolated struct Area: Decodable, Sendable { let id: UInt64; let kind: String?; let rings: [[[Double]]]; let clipped: [Bool]? }
+        nonisolated struct Area: Decodable, Sendable { let id: UInt64; let kind: String?; let sport: String?; let rings: [[[Double]]]; let clipped: [Bool]? }
+        nonisolated struct Path: Decodable, Sendable { let id: UInt64; let kind: String; let lit: Bool?; let line: [[Double]] }
+        nonisolated struct Point: Decodable, Sendable { let id: UInt64; let kind: String; let point: [Double] }
         let tile: Tile
         let buildings: [Building]
         let roads: [Road]
         let water: [Area]
         let landuse: [Area]
+        let trees: [[Double]]?
+        let paths: [Path]?
+        let pois: [Point]?
     }
 
     static let resourceName = "slipway_tile"
@@ -136,18 +165,39 @@ nonisolated enum DioramaBundledTile {
                 let cleaned = DioramaPolygon.clean(hole.compactMap(local), flags: [Bool](repeating: false, count: hole.count)).points
                 if cleaned.count >= 3 { rings.append(cleaned) }
             }
-            return DioramaAreaFeature(id: a.id, rings: rings, clipped: fl, kind: kind)
+            return DioramaAreaFeature(id: a.id, rings: rings, clipped: fl, kind: kind, sport: a.sport)
         }
 
         let water = file.water.compactMap { area($0, kind: "water", bounds: outside) }
         let landuse = file.landuse.compactMap { area($0, kind: $0.kind ?? "park", bounds: rect) }
+
+        let inner = rect.expanded(by: -1)
+        let trees = (file.trees ?? []).compactMap(local).filter { inner.contains($0) }
+
+        var paths: [DioramaPathFeature] = []
+        for p in file.paths ?? [] {
+            let line = p.line.compactMap(local)
+            guard line.count >= 2 else { continue }
+            for (pieceIndex, piece) in DioramaPolygon.clip(line, to: rect).enumerated() where DioramaPolygon.length(piece) > 1 {
+                let key = DioramaRandom.mix(p.id &+ UInt64(pieceIndex) &* 613)
+                paths.append(DioramaPathFeature(id: key, line: piece, kind: p.kind, isLit: p.lit ?? false))
+            }
+        }
+
+        let pois: [DioramaPointFeature] = (file.pois ?? []).compactMap { poi in
+            guard let p = local(poi.point), inner.contains(p) else { return nil }
+            return DioramaPointFeature(id: poi.id, point: p, kind: poi.kind)
+        }
 
         return DioramaTileData(
             tile: tile, projection: projection, rect: rect,
             buildings: Array(buildings.values.sorted { $0.area != $1.area ? $0.area > $1.area : $0.id < $1.id }.prefix(config.maxBuildingsPerTile)).sorted { $0.id < $1.id },
             roads: Array(roads.values.sorted { $0.id < $1.id }.prefix(config.maxRoadsPerTile)),
             water: water.sorted { $0.id < $1.id },
-            landuse: landuse.sorted { $0.id < $1.id }
+            landuse: landuse.sorted { $0.id < $1.id },
+            trees: trees,
+            paths: paths.sorted { $0.id < $1.id },
+            pois: pois.sorted { $0.id < $1.id }
         )
     }
 }

@@ -19,6 +19,9 @@ nonisolated enum DioramaSwatch: Int, CaseIterable, Sendable {
     case stopRed, signPost
     // Landscaping
     case hedge, leafOlive, leafBright, cypress, flowerPink, flowerYellow, flowerRed, flowerWhite, soil
+    // Amenities: lawns, pitches, paving, courts, pools, piers, play equipment
+    case lawn, pitchGreen, paving, concrete, courtBlue, courtLine, poolBlue, poolCoping, pierWood, glassPale
+    case goalWhite, mastGrey, rubberRed, bronze, domeGreen
     // Vegetation
     case leafDark, leafMid, leafLight, flamboyant, trunk, palmTrunk, bougainvilleaMagenta, bougainvilleaOrange, coconut
     // Vehicles, boats and stalls
@@ -39,11 +42,14 @@ nonisolated enum DioramaSwatch: Int, CaseIterable, Sendable {
         .frame: 0xE9E4DA, .shutterGreen: 0x3E7A5A, .shutterBlue: 0x3C6E9E, .doorWood: 0x6B4126,
         .carvedWood: 0x4E2E1A, .metalCharcoal: 0x2E2F33, .gateGreen: 0x2F5E46, .gateBlue: 0x2D5785,
         .tankBlack: 0x232427, .tankBlue: 0x2B5FA8, .dishWhite: 0xECECEC, .solarNavy: 0x1F2E4E,
-        .grass: 0x76A94C, .courtyard: 0xE7D9C6, .deck: 0xB98E62, .earth: 0xDCCBAE, .seabed: 0xB7A77F, .sea: 0x2E8FA3,
+        .grass: 0x74A848, .courtyard: 0xE7D9C6, .deck: 0xB98E62, .earth: 0xE3D3B2, .seabed: 0xB7A77F, .sea: 0x2E8FA3,
         .asphalt: 0x5C4A58, .roadEarth: 0xC19466, .pavement: 0xEBDCD2, .kerb: 0xF6EFE8, .marking: 0xFAF4E8, .crossing: 0xFFFBF2, .parkEdge: 0xD9CBB4,
         .stopRed: 0xC8352E, .signPost: 0x8A8F96,
         .hedge: 0x4F8A3C, .leafOlive: 0x6B8A3E, .leafBright: 0x8FC25A, .cypress: 0x35623A,
         .flowerPink: 0xE86FA8, .flowerYellow: 0xF4CC45, .flowerRed: 0xE0453A, .flowerWhite: 0xFBF6EC, .soil: 0x7A5A42,
+        .lawn: 0x86B85A, .pitchGreen: 0x5FA24A, .paving: 0xD9CFC0, .concrete: 0xC9C2B6, .courtBlue: 0x2F6FB5, .courtLine: 0xF7F7F2,
+        .poolBlue: 0x4FC3D9, .poolCoping: 0xF2EEE6, .pierWood: 0xA67B4F, .glassPale: 0xBFD9E6,
+        .goalWhite: 0xFAFAFA, .mastGrey: 0x9DA3AA, .rubberRed: 0xC8584A, .bronze: 0x7A5A33, .domeGreen: 0x2F8F5B,
         .leafDark: 0x2F5E2E, .leafMid: 0x4C8A3A, .leafLight: 0x7DAF4A, .flamboyant: 0xE2502A,
         .trunk: 0x6D4C35, .palmTrunk: 0x8C7458, .bougainvilleaMagenta: 0xC8337E,
         .bougainvilleaOrange: 0xF07C3A, .coconut: 0x7A5A2C,
@@ -99,7 +105,10 @@ nonisolated struct DioramaLight: Sendable {
 /// One place to tune the whole look without touching generation code.
 nonisolated struct DioramaConfig: Sendable {
     /// Bump to invalidate every cached tile.
-    var generatorVersion: Int = 5
+    var generatorVersion: Int = 6
+    /// When false the diorama sits on a flat plate at the basemap's ground level (Mapbox Standard has no
+    /// terrain at this zoom, so a lumpy plate would float off the streets around it).
+    var usesElevation: Bool = false
 
     // MARK: Tile
     var tileZoom: Int = 16
@@ -133,7 +142,10 @@ nonisolated struct DioramaConfig: Sendable {
     var aoDarkening: Double = 0.7
     var roofOverhang: Double = 0.7
     var roofPitchDegrees: Double = 24
-    var hipRoofShare: Double = 0.45
+    var hipRoofShare: Double = 0.5
+    /// A pitched roof only fits a footprint that nearly fills its bounding rectangle; anything more
+    /// irregular (L- and U-shapes) gets a flat roof so the roof always matches the walls below it.
+    var hipRoofMinimumFill: Double = 0.86
     var terracottaRoofShare: Double = 0.3
     var windowSpacing: Double = 3.1
     var maxWindowsPerBuilding: Int = 40
@@ -145,8 +157,10 @@ nonisolated struct DioramaConfig: Sendable {
     var solarChance: Double = 0.25
 
     // MARK: Compound walls
-    var wallOffset: ClosedRange<Double> = 5...10
-    var wallHeight: Double = 2.2
+    var wallOffset: ClosedRange<Double> = 3.5...6.5
+    var wallHeight: Double = 1.7
+    /// Share of compounds bounded by a clipped hedge instead of a plaster wall.
+    var hedgeFenceShare: Double = 0.4
     var wallThickness: Double = 0.25
     var capThickness: Double = 0.12
     var gateWidth: Double = 3.2
@@ -154,9 +168,10 @@ nonisolated struct DioramaConfig: Sendable {
     var bougainvilleaChancePerMetre: Double = 0.07
 
     // MARK: Vegetation
-    var treesPer1000m2: Double = 7
-    var parkTreesPer1000m2: Double = 10
-    var coastPalmSpacing: Double = 13
+    var treesPer1000m2: Double = 4
+    var parkTreesPer1000m2: Double = 8
+    var coastPalmSpacing: Double = 14
+    var streetTreeSpacing: Double = 17
 
     // MARK: Roads
     var pavementWidth: Double = 1.7

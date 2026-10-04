@@ -29,7 +29,9 @@ nonisolated struct DioramaTerrain: Sendable {
         DioramaTerrain(rect: rect, columns: 2, rows: 2, values: [0, 0, 0, 0])
     }
 
-    static func load(rect: DioramaRect) -> DioramaTerrain {
+    /// Flat plate at the basemap's ground level unless `config.usesElevation` asks for the SRTM grid.
+    static func load(rect: DioramaRect, config: DioramaConfig) -> DioramaTerrain {
+        guard config.usesElevation else { return flat(rect) }
         guard let url = Bundle.main.url(forResource: resourceName, withExtension: "json"),
               let data = try? Data(contentsOf: url),
               let file = try? JSONDecoder().decode(File.self, from: data),
