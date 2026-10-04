@@ -277,7 +277,7 @@ nonisolated struct DioramaPropPlacer {
             let count = max(Int(area / 1000 * config.treesPer1000m2), 1)
             let bounds = DioramaRect.bounding(compound.ring)
             for _ in 0..<count {
-                let p = DV2(crng.range(bounds.minX...bounds.maxX), crng.range(bounds.minY...bounds.maxY))
+                let p = DV2(crng.range(between: bounds.minX, and: bounds.maxX), crng.range(between: bounds.minY, and: bounds.maxY))
                 guard DioramaPolygon.contains(compound.ring, p), DioramaPolygon.distanceToRing(compound.ring, p) > 1.5 else { continue }
                 guard !compound.building.box.expanded(by: 2.2).contains(p), tryPlace(p, spacing: 4.5) else { continue }
                 let roll = crng.unit()
@@ -297,7 +297,7 @@ nonisolated struct DioramaPropPlacer {
                 let length = a.distance(to: b)
                 guard crng.chance(min(length * config.bougainvilleaChancePerMetre, 0.6)) else { continue }
                 let dir = (b - a).normalized
-                let p = a + dir * crng.range(0.8...max(length - 0.8, 0.9))
+                let p = a + dir * crng.range(between: 0.8, and: max(length - 0.8, 0.9))
                 mesh.append(crng.pick(library.bougainvillea), DioramaTransform(rotation: dir.angle, scale: DV3(crng.range(0.8...1.3), 1, 1), translation: DV3(p, 0)))
             }
         }
@@ -309,7 +309,7 @@ nonisolated struct DioramaPropPlacer {
             let count = min(Int(area / 1000 * config.parkTreesPer1000m2), 60)
             let bounds = DioramaRect.bounding(outer)
             for _ in 0..<count {
-                let p = DV2(rng.range(bounds.minX...bounds.maxX), rng.range(bounds.minY...bounds.maxY))
+                let p = DV2(rng.range(between: bounds.minX, and: bounds.maxX), rng.range(between: bounds.minY, and: bounds.maxY))
                 guard DioramaPolygon.contains(polygon: park.rings, p), tryPlace(p, spacing: 6) else { continue }
                 let s = rng.range(0.8...1.2)
                 mesh.append(rng.chance(0.15) ? library.flamboyant : rng.pick(library.mango), DioramaTransform(rotation: rng.range(0...6.28), scale: DV3(s, s, s), translation: DV3(p, 0)))
@@ -397,7 +397,7 @@ nonisolated struct DioramaPropPlacer {
         var attempts = 0
         while dhows < config.dhowsPerTile, attempts < 60 {
             attempts += 1
-            let p = DV2(rng.range(data.rect.minX...data.rect.maxX), rng.range(data.rect.minY...data.rect.maxY))
+            let p = DV2(rng.range(between: data.rect.minX, and: data.rect.maxX), rng.range(between: data.rect.minY, and: data.rect.maxY))
             guard isWater(p), data.water.allSatisfy({ DioramaPolygon.distanceToRing($0.rings[0], p) > 25 }) else { continue }
             mesh.append(library.dhow, DioramaTransform(rotation: rng.range(0...6.28), translation: DV3(p, 0)))
             dhows += 1

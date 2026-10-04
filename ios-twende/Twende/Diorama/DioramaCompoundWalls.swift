@@ -98,7 +98,7 @@ nonisolated struct DioramaCompoundWallGenerator {
                 let out = dir.right
                 if i == gateEdge {
                     let length = a.distance(to: b)
-                    let half = min(config.gateWidth, length - 0.8) / 2
+                    let half = max(min(config.gateWidth, length - 0.8), 0.2) / 2
                     let mid = (a + b) * 0.5
                     let gl = mid - dir * half, gr = mid + dir * half
                     segment(a, gl, out: out, h: h, t: t, wallColor, capColor, into: &mesh)

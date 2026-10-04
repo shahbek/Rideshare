@@ -427,7 +427,7 @@ nonisolated struct DioramaBuildingGenerator {
         guard inner.halfLength > 0.8, inner.halfWidth > 0.8 else { return }
         let tanks = kind == .apartments ? rng.int(2...4) : rng.int(1...2)
         for k in 0..<tanks {
-            let spot = inner.centre + inner.axis * rng.range(-inner.halfLength...inner.halfLength) + inner.across * rng.range(-inner.halfWidth...inner.halfWidth)
+            let spot = inner.centre + inner.axis * rng.range(between: -inner.halfLength, and: inner.halfLength) + inner.across * rng.range(between: -inner.halfWidth, and: inner.halfWidth)
             guard DioramaPolygon.contains(ring, spot), DioramaPolygon.distanceToRing(ring, spot) > 1.0 else { continue }
             let color: DioramaSwatch = rng.chance(0.6) ? .tankBlack : .tankBlue
             let scale = kind == .apartments ? 1.25 : 1.0

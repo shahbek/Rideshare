@@ -158,6 +158,7 @@ nonisolated enum DioramaPolygon {
     static func clean(_ points: [DV2], flags: [Bool]) -> (points: [DV2], flags: [Bool]) {
         var pts = points
         var fl = flags
+        if fl.count != pts.count { fl = [Bool](repeating: false, count: pts.count) }
         if pts.count > 1, pts[0].distance(to: pts[pts.count - 1]) < 0.01 {
             pts.removeLast()
             fl.removeLast()
@@ -255,7 +256,8 @@ nonisolated enum DioramaPolygon {
         guard n >= 4 else { return n == 3 }
         for i in 0..<n {
             let a = ring[i], b = ring[(i + 1) % n]
-            for j in (i + 2)..<n {
+            // `stride` tolerates i + 2 > n; a `..<` range there would trap.
+            for j in stride(from: i + 2, to: n, by: 1) {
                 if i == 0 && j == n - 1 { continue }
                 if segmentsIntersect(a, b, ring[j], ring[(j + 1) % n]) { return false }
             }
@@ -480,6 +482,8 @@ nonisolated struct DioramaRandom: Sendable {
 
     mutating func unit() -> Double { Double(next() >> 11) / Double(UInt64(1) << 53) }
     mutating func range(_ r: ClosedRange<Double>) -> Double { r.lowerBound + (r.upperBound - r.lowerBound) * unit() }
+    /// Safe for callers whose bounds may be inverted (a `...` literal with lower > upper would trap).
+    mutating func range(between a: Double, and b: Double) -> Double { min(a, b) + abs(b - a) * unit() }
     mutating func int(_ r: ClosedRange<Int>) -> Int { r.lowerBound + Int(next() % UInt64(max(r.upperBound - r.lowerBound + 1, 1))) }
     mutating func chance(_ p: Double) -> Bool { unit() < p }
     mutating func pick<T>(_ items: [T]) -> T {
