@@ -83,6 +83,10 @@ nonisolated struct DioramaConfig: Sendable {
     var seedLongitude: Double = 39.2850
     var maxLoadedTiles: Int = 9
     var bufferTiles: Int = 1
+    /// Tiles may only be generated within this many z16 tiles of the seed; outside it the map is plain Standard.
+    var areaRadiusTiles: Int = 3
+    /// How many tiles may generate geometry at the same time.
+    var maxConcurrentGenerations: Int = 2
 
     // MARK: Camera
     var cameraZoom: Double = 16.8

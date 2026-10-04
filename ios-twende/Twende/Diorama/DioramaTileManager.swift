@@ -64,10 +64,15 @@ final class DioramaTileManager {
     private var appliedDebug: Bool = false
     private var thermalReduced: Bool = ProcessInfo.processInfo.thermalState.rawValue >= ProcessInfo.ThermalState.serious.rawValue
     private var thermalObserver: NSObjectProtocol? = nil
+    /// Whether Standard's own 3D buildings are currently hidden (only while the camera is over the diorama area).
+    private var standardObjectsHidden: Bool = false
+    private var queryInFlight: Bool = false
+    private let seedTile: DioramaTileID
 
     init(config: DioramaConfig = .masaki, state: DioramaState = .shared) {
         self.config = config
         self.state = state
+        seedTile = DioramaTileID(latitude: config.seedLatitude, longitude: config.seedLongitude, zoom: config.tileZoom)
         loader = DioramaDataLoader(config: config)
         styling = DioramaMapStyling(config: config)
         library = DioramaPropLibrary(config: config)
@@ -91,10 +96,8 @@ final class DioramaTileManager {
         do {
             try loader.install(on: map)
             try styling.install(on: map)
-            try map.setStyleImportConfigProperty(for: "basemap", config: "show3dObjects", value: false)
-            try map.setStyleImportConfigProperty(for: "basemap", config: "showRoadLabels", value: false)
-            try map.setStyleImportConfigProperty(for: "basemap", config: "show3dLandmarks", value: false)
             installed = true
+            standardObjectsHidden = false
             applyTimeOfDay(force: true)
             map.onSourceDataLoaded.observe { [weak self] event in
                 guard let self, event.sourceId == DioramaDataLoader.sourceID, event.type == .tile else { return }
@@ -112,6 +115,8 @@ final class DioramaTileManager {
     func styleDidReload() {
         installed = false
         sourceLoaded = false
+        queryInFlight = false
+        standardObjectsHidden = false
         appliedTimeOfDay = nil
         appliedCategories = []
         appliedDebug = false
@@ -131,9 +136,7 @@ final class DioramaTileManager {
         if installed {
             styling.remove(from: map)
             loader.remove(from: map)
-            try? map.setStyleImportConfigProperty(for: "basemap", config: "show3dObjects", value: true)
-            try? map.setStyleImportConfigProperty(for: "basemap", config: "showRoadLabels", value: true)
-            try? map.setStyleImportConfigProperty(for: "basemap", config: "show3dLandmarks", value: true)
+            setStandardObjectsHidden(false, on: map)
             try? map.setStyleImportConfigProperty(for: "basemap", config: "lightPreset", value: AppSettings.shared.mapStyle.lightPreset)
         }
         installed = false
@@ -144,8 +147,21 @@ final class DioramaTileManager {
 
     /// Camera options for the opening shot over the seed tile.
     func introCamera() -> CameraOptions {
-        let tile = DioramaTileID(latitude: config.seedLatitude, longitude: config.seedLongitude, zoom: config.tileZoom)
-        return CameraOptions(center: tile.centre, zoom: config.cameraZoom, bearing: config.cameraBearing, pitch: config.cameraPitch)
+        CameraOptions(center: seedTile.centre, zoom: config.cameraZoom, bearing: config.cameraBearing, pitch: config.cameraPitch)
+    }
+
+    /// Only tiles near the seed belong to the diorama; everywhere else the map stays plain Standard.
+    private func isInsideArea(_ tile: DioramaTileID) -> Bool {
+        abs(tile.x - seedTile.x) <= config.areaRadiusTiles && abs(tile.y - seedTile.y) <= config.areaRadiusTiles
+    }
+
+    /// Standard's own buildings are hidden only while the toy town is on screen, so the rest of Dar keeps
+    /// its normal 3D look.
+    private func setStandardObjectsHidden(_ hidden: Bool, on map: MapboxMap) {
+        guard hidden != standardObjectsHidden else { return }
+        standardObjectsHidden = hidden
+        try? map.setStyleImportConfigProperty(for: "basemap", config: "show3dObjects", value: !hidden)
+        try? map.setStyleImportConfigProperty(for: "basemap", config: "show3dLandmarks", value: !hidden)
     }
 
     // MARK: Updates
@@ -166,15 +182,17 @@ final class DioramaTileManager {
         applyDebug()
 
         let camera = map.cameraState
+        let centreTile = DioramaTileID(latitude: camera.center.latitude, longitude: camera.center.longitude, zoom: config.tileZoom)
+        let overArea = isInsideArea(centreTile) && camera.zoom >= config.minimumZoom - 1
+        setStandardObjectsHidden(overArea, on: map)
+
         guard camera.zoom >= config.minimumZoom else {
-            for tile in tiles.keys { unload(tile, from: map) }
-            tiles.removeAll()
-            state.loadedTiles.removeAll()
+            unloadAll(from: map)
             state.status = "Zoom in to \(Int(config.minimumZoom)) to build the diorama"
             return
         }
 
-        let needed = neededTiles(map: map, camera: camera)
+        let needed = neededTiles(map: map, camera: camera).filter(isInsideArea)
         for tile in tiles.keys where !needed.contains(tile) {
             unload(tile, from: map)
             tiles[tile] = nil
@@ -183,12 +201,15 @@ final class DioramaTileManager {
         for tile in needed where tiles[tile] == nil {
             guard tiles.count < config.maxLoadedTiles else { break }
             tiles[tile] = .waitingForData(attempts: 0)
-            load(tile)
         }
-        for (tile, status) in tiles {
-            if case .waitingForData = status { load(tile) }
-        }
-        updateStatus()
+        loadWaitingTiles(on: map)
+        if needed.isEmpty { state.status = "Outside the Masaki diorama area" } else { updateStatus() }
+    }
+
+    private func unloadAll(from map: MapboxMap) {
+        for tile in tiles.keys { unload(tile, from: map) }
+        tiles.removeAll()
+        state.loadedTiles.removeAll()
     }
 
     /// Visible z16 tiles sorted by distance from the centre, plus a one-tile buffer, capped.
@@ -218,45 +239,69 @@ final class DioramaTileManager {
 
     // MARK: Loading
 
-    private func load(_ tile: DioramaTileID) {
-        guard let map, case .waitingForData(let attempts) = tiles[tile] else { return }
+    /// Shows cached tiles immediately, then runs one source query for every tile still waiting and
+    /// generates a bounded number of them at a time.
+    private func loadWaitingTiles(on map: MapboxMap) {
         let reduced = thermalReduced
-        if let cached = DioramaTileGenerator.cached(tile, config: config, reduced: reduced) {
-            tiles[tile] = .loaded(cached, reduced: reduced)
-            show(cached, on: map)
-            return
-        }
-        guard sourceLoaded else { return }
-        tiles[tile] = .generating
-        loader.load(tile, on: map) { [weak self] data in
-            guard let self, let map = self.map, case .generating = self.tiles[tile] else { return }
-            guard let data, !data.isEmpty else {
-                // Tiles still streaming in come back empty; retry a few times before giving up.
-                if attempts < 6 {
-                    self.tiles[tile] = .waitingForData(attempts: attempts + 1)
-                    self.scheduleUpdate(delay: 0.8)
-                } else {
-                    self.tiles[tile] = .empty
-                }
-                return
+        var waiting: [(DioramaTileID, Int)] = []
+        for (tile, status) in tiles {
+            guard case .waitingForData(let attempts) = status else { continue }
+            if let cached = DioramaTileGenerator.cached(tile, config: config, reduced: reduced) {
+                tiles[tile] = .loaded(cached, reduced: reduced)
+                show(cached, on: map)
+            } else {
+                waiting.append((tile, attempts))
             }
-            let config = self.config
-            let library = self.library
-            Task.detached(priority: .userInitiated) {
-                let artifacts: DioramaTileArtifacts?
-                do {
-                    artifacts = try DioramaTileGenerator.generate(data, config: config, library: library, reduced: reduced)
-                } catch {
-                    print("[Diorama] generate \(tile) failed: \(error)")
-                    artifacts = nil
+        }
+        guard sourceLoaded, !queryInFlight, !waiting.isEmpty else { return }
+        let generating = tiles.values.filter { if case .generating = $0 { return true } else { return false } }.count
+        let slots = max(config.maxConcurrentGenerations - generating, 0)
+        guard slots > 0 else { return }
+        let batch = Array(waiting.prefix(slots))
+        for (tile, _) in batch { tiles[tile] = .generating }
+        queryInFlight = true
+
+        loader.load(batch.map(\.0), on: map) { [weak self] result in
+            guard let self else { return }
+            self.queryInFlight = false
+            guard let map = self.map else { return }
+            for (tile, attempts) in batch {
+                guard case .generating = self.tiles[tile] else { continue }
+                guard let data = result?[tile], !data.isEmpty else {
+                    // Tiles still streaming in come back empty; retry a few times before giving up.
+                    if attempts < 6 {
+                        self.tiles[tile] = .waitingForData(attempts: attempts + 1)
+                        self.scheduleUpdate(delay: 0.8)
+                    } else {
+                        self.tiles[tile] = .empty
+                    }
+                    continue
                 }
-                await MainActor.run {
-                    guard case .generating = self.tiles[tile] else { return }
-                    guard let artifacts else { self.tiles[tile] = .failed; return }
-                    self.tiles[tile] = .loaded(artifacts, reduced: reduced)
-                    print("[Diorama] tile \(tile): \(artifacts.totalTriangles) tris, \(artifacts.totalBytes / 1024) KB in \(String(format: "%.2f", artifacts.generationSeconds))s")
-                    self.show(artifacts, on: map)
-                }
+                self.generate(data, reduced: reduced, on: map)
+            }
+            self.updateStatus()
+        }
+    }
+
+    private func generate(_ data: DioramaTileData, reduced: Bool, on map: MapboxMap) {
+        let tile = data.tile
+        let config = self.config
+        let library = self.library
+        Task.detached(priority: .userInitiated) {
+            let artifacts: DioramaTileArtifacts?
+            do {
+                artifacts = try DioramaTileGenerator.generate(data, config: config, library: library, reduced: reduced)
+            } catch {
+                print("[Diorama] generate \(tile) failed: \(error)")
+                artifacts = nil
+            }
+            await MainActor.run {
+                guard case .generating = self.tiles[tile] else { return }
+                guard let artifacts else { self.tiles[tile] = .failed; self.updateStatus(); return }
+                self.tiles[tile] = .loaded(artifacts, reduced: reduced)
+                print("[Diorama] tile \(tile): \(artifacts.totalTriangles) tris, \(artifacts.totalBytes / 1024) KB in \(String(format: "%.2f", artifacts.generationSeconds))s")
+                self.show(artifacts, on: map)
+                self.scheduleUpdate(delay: 0.1)
             }
         }
     }
@@ -327,9 +372,7 @@ final class DioramaTileManager {
 
     private func reloadAll() {
         guard let map else { return }
-        for tile in tiles.keys { unload(tile, from: map) }
-        tiles.removeAll()
-        state.loadedTiles.removeAll()
+        unloadAll(from: map)
         scheduleUpdate(delay: 0.05)
     }
 
@@ -338,7 +381,9 @@ final class DioramaTileManager {
     private func applyTimeOfDay(force: Bool) {
         guard let map, installed, force || appliedTimeOfDay != state.timeOfDay else { return }
         appliedTimeOfDay = state.timeOfDay
-        try? map.setStyleImportConfigProperty(for: "basemap", config: "lightPreset", value: state.timeOfDay.lightPreset)
+        if standardObjectsHidden {
+            try? map.setStyleImportConfigProperty(for: "basemap", config: "lightPreset", value: state.timeOfDay.lightPreset)
+        }
         for (tile, status) in tiles {
             guard case .loaded(let artifacts, _) = status else { continue }
             for part in artifacts.parts where part.category.isEmissive {

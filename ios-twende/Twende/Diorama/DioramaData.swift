@@ -119,18 +119,29 @@ final class DioramaDataLoader {
         try? map.setLayerProperty(for: Self.buildingLayerID, property: "fill-outline-color", value: visible ? "#FF2D95" : "rgba(0,0,0,0)")
     }
 
-    /// Reads every loaded feature of the four source layers and keeps what belongs to `tile`.
-    func load(_ tile: DioramaTileID, on map: MapboxMap, completion: @escaping @MainActor (DioramaTileData?) -> Void) {
+    /// Immutable snapshot of one queried feature so conversion can leave the main thread.
+    private nonisolated struct Snapshot: @unchecked Sendable {
+        let sourceLayer: String
+        let feature: Feature
+    }
+
+    /// Reads every loaded feature of the four source layers once and splits it into the given tiles.
+    /// The query result is copied on the main thread; all projection and cleaning runs off-main.
+    func load(_ tiles: [DioramaTileID], on map: MapboxMap, completion: @escaping @MainActor ([DioramaTileID: DioramaTileData]?) -> Void) {
         let options = SourceQueryOptions(sourceLayerIds: Self.sourceLayers, filter: ["all"])
         let config = config
+        query?.cancel()
         query = map.querySourceFeatures(for: Self.sourceID, options: options) { result in
-            Task { @MainActor in
-                switch result {
-                case .failure(let error):
-                    print("[Diorama] querySourceFeatures failed: \(error)")
-                    completion(nil)
-                case .success(let features):
-                    completion(Self.convert(features, tile: tile, config: config))
+            switch result {
+            case .failure(let error):
+                print("[Diorama] querySourceFeatures failed: \(error)")
+                Task { @MainActor in completion(nil) }
+            case .success(let features):
+                let snapshots = features.map { Snapshot(sourceLayer: $0.queriedFeature.sourceLayer ?? "", feature: $0.queriedFeature.feature) }
+                Task.detached(priority: .userInitiated) {
+                    var out: [DioramaTileID: DioramaTileData] = [:]
+                    for tile in tiles { out[tile] = Self.convert(snapshots, tile: tile, config: config) }
+                    await MainActor.run { completion(out) }
                 }
             }
         }
@@ -138,7 +149,7 @@ final class DioramaDataLoader {
 
     // MARK: Conversion
 
-    private static func convert(_ features: [QueriedSourceFeature], tile: DioramaTileID, config: DioramaConfig) -> DioramaTileData {
+    private nonisolated static func convert(_ features: [Snapshot], tile: DioramaTileID, config: DioramaConfig) -> DioramaTileData {
         let projection = DioramaProjection(origin: tile.centre)
         let rect = projection.rect(of: tile)
         // Vector tiles carry a small buffer beyond their edge; clipped geometry lands near those lines.
@@ -152,8 +163,8 @@ final class DioramaDataLoader {
         var landuse: [UInt64: DioramaAreaFeature] = [:]
 
         for queried in features {
-            let feature = queried.queriedFeature.feature
-            let layer = queried.queriedFeature.sourceLayer ?? ""
+            let feature = queried.feature
+            let layer = queried.sourceLayer
             let props = feature.properties ?? [:]
             let id = identifier(feature, fallback: props)
 
@@ -229,7 +240,7 @@ final class DioramaDataLoader {
         )
     }
 
-    private static func areaFeature(_ polygon: [[CLLocationCoordinate2D]], id: UInt64, kind: String, projection: DioramaProjection, rect: DioramaRect, tileSize: Double, tolerance: Double) -> DioramaAreaFeature? {
+    private nonisolated static func areaFeature(_ polygon: [[CLLocationCoordinate2D]], id: UInt64, kind: String, projection: DioramaProjection, rect: DioramaRect, tileSize: Double, tolerance: Double) -> DioramaAreaFeature? {
         guard let outerRaw = polygon.first else { return nil }
         let outerLocal = outerRaw.map { projection.local(longitude: $0.longitude, latitude: $0.latitude) }
         let flags = clipFlags(outerLocal, tileSize: tileSize, tolerance: tolerance)
@@ -247,7 +258,7 @@ final class DioramaDataLoader {
     }
 
     /// Edges that run exactly along a tile (or tile buffer) line are vector-tile clips, not real edges.
-    private static func clipFlags(_ ring: [DV2], tileSize: Double, tolerance: Double) -> [Bool] {
+    private nonisolated static func clipFlags(_ ring: [DV2], tileSize: Double, tolerance: Double) -> [Bool] {
         let n = ring.count
         var flags = [Bool](repeating: false, count: n)
         guard n >= 2 else { return flags }
@@ -266,7 +277,7 @@ final class DioramaDataLoader {
         return flags
     }
 
-    private static func identifier(_ feature: Feature, fallback: JSONObject) -> UInt64 {
+    private nonisolated static func identifier(_ feature: Feature, fallback: JSONObject) -> UInt64 {
         switch feature.identifier {
         case .number(let n): return UInt64(max(n, 0))
         case .string(let s): return DioramaRandom.hash(s)
@@ -276,7 +287,7 @@ final class DioramaDataLoader {
         }
     }
 
-    private static func polygonRings(_ geometry: Geometry?) -> [[[CLLocationCoordinate2D]]] {
+    private nonisolated static func polygonRings(_ geometry: Geometry?) -> [[[CLLocationCoordinate2D]]] {
         switch geometry {
         case .polygon(let polygon): return [polygon.coordinates]
         case .multiPolygon(let multi): return multi.coordinates
@@ -284,7 +295,7 @@ final class DioramaDataLoader {
         }
     }
 
-    private static func lineStrings(_ geometry: Geometry?) -> [[CLLocationCoordinate2D]] {
+    private nonisolated static func lineStrings(_ geometry: Geometry?) -> [[CLLocationCoordinate2D]] {
         switch geometry {
         case .lineString(let line): return [line.coordinates]
         case .multiLineString(let multi): return multi.coordinates
