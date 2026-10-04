@@ -43,6 +43,12 @@ nonisolated enum DioramaGLBWriter {
             let vertexCount = vertexEnd - chunk.vertex
             let indexCount = indexEnd - chunk.index
             guard vertexCount > 0, indexCount > 0 else { continue }
+            // 16-bit indices: a chunk that outgrew the limit would be silently truncated into garbage
+            // indices and crash the renderer; drop it instead.
+            guard vertexCount <= Int(UInt16.max) else {
+                print("[Diorama] skipping oversized chunk with \(vertexCount) vertices")
+                continue
+            }
 
             var posData = Data(capacity: vertexCount * 12)
             var nrmData = Data(capacity: vertexCount * 12)
@@ -51,17 +57,29 @@ nonisolated enum DioramaGLBWriter {
             var maxP = SIMD3<Float>(repeating: -.greatestFiniteMagnitude)
             for i in chunk.vertex..<vertexEnd {
                 let p = positions[i]
-                let g = SIMD3<Float>(Float(p.x), Float(p.z), Float(-p.y))
+                // A degenerate shape can produce NaN; NaN in the accessor bounds makes JSONSerialization
+                // raise an Objective-C exception, which Swift cannot catch. Collapse such vertices to the origin.
+                var g = SIMD3<Float>(Float(p.x), Float(p.z), Float(-p.y))
+                if !(g.x.isFinite && g.y.isFinite && g.z.isFinite) { g = .zero }
                 minP = simd_min(minP, g)
                 maxP = simd_max(maxP, g)
                 append(&posData, g)
                 let n = normals[i]
-                append(&nrmData, SIMD3<Float>(Float(n.x), Float(n.z), Float(-n.y)))
-                append(&uvData, uvs[i])
+                var gn = SIMD3<Float>(Float(n.x), Float(n.z), Float(-n.y))
+                if !(gn.x.isFinite && gn.y.isFinite && gn.z.isFinite) { gn = SIMD3<Float>(0, 1, 0) }
+                append(&nrmData, gn)
+                var uv = uvs[i]
+                if !(uv.x.isFinite && uv.y.isFinite) { uv = .zero }
+                append(&uvData, uv)
             }
             var idxData = Data(capacity: indexCount * 2)
+            let base = UInt32(chunk.vertex)
+            let limit = UInt32(vertexCount)
             for i in chunk.index..<indexEnd {
-                var v = UInt16(truncatingIfNeeded: indices[i] - UInt32(chunk.vertex))
+                let raw = indices[i]
+                // Out-of-range indices (should never happen) are clamped rather than handed to the GPU.
+                let local = raw >= base && raw - base < limit ? raw - base : 0
+                var v = UInt16(local)
                 withUnsafeBytes(of: &v) { idxData.append(contentsOf: $0) }
             }
 
@@ -118,6 +136,12 @@ nonisolated enum DioramaGLBWriter {
             "accessors": accessors,
         ]
 
+        guard !primitives.isEmpty else {
+            throw NSError(domain: "Diorama", code: 2, userInfo: [NSLocalizedDescriptionKey: "mesh has no drawable chunk"])
+        }
+        guard JSONSerialization.isValidJSONObject(json) else {
+            throw NSError(domain: "Diorama", code: 3, userInfo: [NSLocalizedDescriptionKey: "glTF JSON contains a non-finite value"])
+        }
         var jsonData = try JSONSerialization.data(withJSONObject: json, options: [.sortedKeys])
         while jsonData.count % 4 != 0 { jsonData.append(0x20) }
 

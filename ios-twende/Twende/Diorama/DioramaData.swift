@@ -71,13 +71,22 @@ final class DioramaDataLoader {
         guard !map.sourceExists(withId: Self.sourceID) else { return }
         var source = VectorSource(id: Self.sourceID)
         source.url = "mapbox://mapbox.mapbox-streets-v8"
-        source.minzoom = 13
-        source.maxzoom = 16
+        // Only the diorama's own z16 tiles may ever download: without bounds this source would fetch
+        // (and the query would copy) every building in the viewport across four zoom levels, which
+        // stalls the main thread for seconds over central Dar.
+        source.minzoom = Double(config.tileZoom)
+        source.maxzoom = Double(config.tileZoom)
+        let seed = DioramaTileID(latitude: config.seedLatitude, longitude: config.seedLongitude, zoom: config.tileZoom)
+        let r = config.areaRadiusTiles
+        let west = seed.offset(dx: -r, dy: 0).west, east = seed.offset(dx: r, dy: 0).east
+        let north = seed.offset(dx: 0, dy: -r).north, south = seed.offset(dx: 0, dy: r).south
+        // Shrink a hair so tiles merely touching the edge are not pulled in.
+        let dx = (east - west) * 0.001, dy = (north - south) * 0.001
+        source.bounds = [west + dx, south + dy, east - dx, north - dy]
         try map.addSource(source)
 
         var building = FillLayer(id: Self.buildingLayerID, source: Self.sourceID)
         building.sourceLayer = "building"
-        building.minZoom = 13
         building.slot = .middle
         building.fillOpacity = .constant(0)
         building.fillColor = .constant(StyleColor(rawValue: "#FF2D95"))
@@ -85,7 +94,6 @@ final class DioramaDataLoader {
 
         var road = LineLayer(id: Self.roadLayerID, source: Self.sourceID)
         road.sourceLayer = "road"
-        road.minZoom = 13
         road.slot = .middle
         road.lineOpacity = .constant(0)
         try map.addLayer(road)
@@ -137,10 +145,14 @@ final class DioramaDataLoader {
                 print("[Diorama] querySourceFeatures failed: \(error)")
                 Task { @MainActor in completion(nil) }
             case .success(let features):
-                let snapshots = features.map { Snapshot(sourceLayer: $0.queriedFeature.sourceLayer ?? "", feature: $0.queriedFeature.feature) }
+                // Hard ceiling so a pathological query can never pin the main thread.
+                let snapshots = features.prefix(config.maxQueriedFeatures).map { Snapshot(sourceLayer: $0.queriedFeature.sourceLayer ?? "", feature: $0.queriedFeature.feature) }
+                if features.count > config.maxQueriedFeatures {
+                    print("[Diorama] query returned \(features.count) features; using first \(config.maxQueriedFeatures)")
+                }
                 Task.detached(priority: .userInitiated) {
                     var out: [DioramaTileID: DioramaTileData] = [:]
-                    for tile in tiles { out[tile] = Self.convert(snapshots, tile: tile, config: config) }
+                    for tile in tiles { out[tile] = Self.convert(Array(snapshots), tile: tile, config: config) }
                     await MainActor.run { completion(out) }
                 }
             }
@@ -234,8 +246,9 @@ final class DioramaDataLoader {
 
         return DioramaTileData(
             tile: tile, projection: projection, rect: rect,
-            buildings: Array(buildings.values).sorted { $0.id < $1.id },
-            roads: Array(roads.values).sorted { $0.id < $1.id },
+            // Biggest footprints first so a cap keeps the landmarks; the per-tile cap bounds mesh size.
+            buildings: Array(buildings.values.sorted { $0.area != $1.area ? $0.area > $1.area : $0.id < $1.id }.prefix(config.maxBuildingsPerTile)).sorted { $0.id < $1.id },
+            roads: Array(roads.values.sorted { $0.id < $1.id }.prefix(config.maxRoadsPerTile)),
             water: Array(water.values).sorted { $0.id < $1.id },
             landuse: Array(landuse.values).sorted { $0.id < $1.id }
         )

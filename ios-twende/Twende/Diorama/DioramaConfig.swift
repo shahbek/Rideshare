@@ -90,6 +90,10 @@ nonisolated struct DioramaConfig: Sendable {
     var visibilityRadiusTiles: Int = 2
     /// How many tiles may generate geometry at the same time.
     var maxConcurrentGenerations: Int = 1
+    /// Upper bounds that keep one tile's query, conversion and mesh size predictable.
+    var maxQueriedFeatures: Int = 6_000
+    var maxBuildingsPerTile: Int = 450
+    var maxRoadsPerTile: Int = 160
 
     // MARK: Camera
     var cameraZoom: Double = 16.8
