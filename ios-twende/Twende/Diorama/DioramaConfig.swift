@@ -5,6 +5,7 @@ import Foundation
 nonisolated enum DioramaSwatch: Int, CaseIterable, Sendable {
     // Plaster walls
     case whitewash, cream, ochre, sunflower, coral, skyBlue, mint, terracottaWall
+    case brick, sage, dustyRose, slateWall, paleYellow
     // Roofs
     case roofTeal, roofRust, roofSlate, roofGreen, roofTerracotta, roofConcrete
     // Trim, caps and openings
@@ -15,6 +16,9 @@ nonisolated enum DioramaSwatch: Int, CaseIterable, Sendable {
     // Ground, roads and water
     case grass, courtyard, deck, earth, seabed, sea
     case asphalt, roadEarth, pavement, kerb, marking, crossing, parkEdge
+    case stopRed, signPost
+    // Landscaping
+    case hedge, leafOlive, leafBright, cypress, flowerPink, flowerYellow, flowerRed, flowerWhite, soil
     // Vegetation
     case leafDark, leafMid, leafLight, flamboyant, trunk, palmTrunk, bougainvilleaMagenta, bougainvilleaOrange, coconut
     // Vehicles, boats and stalls
@@ -28,6 +32,7 @@ nonisolated enum DioramaSwatch: Int, CaseIterable, Sendable {
     static let defaultPalette: [DioramaSwatch: UInt32] = [
         .whitewash: 0xF4EFE7, .cream: 0xF1E2C4, .ochre: 0xD8A46A, .sunflower: 0xF0C46A,
         .coral: 0xE8A08C, .skyBlue: 0x9FC4DD, .mint: 0xA9D4BC, .terracottaWall: 0xB9674C,
+        .brick: 0xB4624A, .sage: 0xB9C7A6, .dustyRose: 0xE2B4A6, .slateWall: 0x8E9BB3, .paleYellow: 0xF2DDA4,
         .roofTeal: 0x3A7F8C, .roofRust: 0xA9472E, .roofSlate: 0x4A5E8E, .roofGreen: 0x3F7D4A,
         .roofTerracotta: 0xC0603C, .roofConcrete: 0x55638F,
         .trimWhite: 0xFAF7F0, .capTerracotta: 0xB5573A, .capCharcoal: 0x3B3A3D, .glass: 0x2C3440,
@@ -36,6 +41,9 @@ nonisolated enum DioramaSwatch: Int, CaseIterable, Sendable {
         .tankBlack: 0x232427, .tankBlue: 0x2B5FA8, .dishWhite: 0xECECEC, .solarNavy: 0x1F2E4E,
         .grass: 0x76A94C, .courtyard: 0xE7D9C6, .deck: 0xB98E62, .earth: 0xDCCBAE, .seabed: 0xB7A77F, .sea: 0x2E8FA3,
         .asphalt: 0x5C4A58, .roadEarth: 0xC19466, .pavement: 0xEBDCD2, .kerb: 0xF6EFE8, .marking: 0xFAF4E8, .crossing: 0xFFFBF2, .parkEdge: 0xD9CBB4,
+        .stopRed: 0xC8352E, .signPost: 0x8A8F96,
+        .hedge: 0x4F8A3C, .leafOlive: 0x6B8A3E, .leafBright: 0x8FC25A, .cypress: 0x35623A,
+        .flowerPink: 0xE86FA8, .flowerYellow: 0xF4CC45, .flowerRed: 0xE0453A, .flowerWhite: 0xFBF6EC, .soil: 0x7A5A42,
         .leafDark: 0x2F5E2E, .leafMid: 0x4C8A3A, .leafLight: 0x7DAF4A, .flamboyant: 0xE2502A,
         .trunk: 0x6D4C35, .palmTrunk: 0x8C7458, .bougainvilleaMagenta: 0xC8337E,
         .bougainvilleaOrange: 0xF07C3A, .coconut: 0x7A5A2C,
@@ -91,7 +99,7 @@ nonisolated struct DioramaLight: Sendable {
 /// One place to tune the whole look without touching generation code.
 nonisolated struct DioramaConfig: Sendable {
     /// Bump to invalidate every cached tile.
-    var generatorVersion: Int = 4
+    var generatorVersion: Int = 5
 
     // MARK: Tile
     var tileZoom: Int = 16
@@ -129,7 +137,7 @@ nonisolated struct DioramaConfig: Sendable {
     var terracottaRoofShare: Double = 0.3
     var windowSpacing: Double = 3.1
     var maxWindowsPerBuilding: Int = 40
-    var litWindowRatio: Double = 0.7
+    var litWindowRatio: Double = 0.68
     var verandaChance: Double = 0.6
     var swahiliTouchChance: Double = 0.3
     var standTankChance: Double = 0.55
@@ -159,17 +167,27 @@ nonisolated struct DioramaConfig: Sendable {
     // MARK: Props and lights
     var vehiclesPerKm: Double = 16
     var lampSpacing: Double = 30
-    var lampLightRadius: Double = 17
-    var maxLights: Int = 96
+    var lampLightRadius: Double = 16
+    /// Lights are binned into a 2D grid on the CPU so the shader only visits the few that reach a pixel.
+    var maxLights: Int = 420
+    var lightGridCells: Int = 24
+    var lightsPerCell: Int = 16
+    /// Facade lights: one warm source per facade with lit windows.
+    var facadeLightIntensity: Float = 0.42
+
+    // MARK: Landscaping
+    var hedgeChancePerStretch: Double = 0.45
+    var bushesPer1000m2: Double = 9
     var kioskChance: Double = 0.45
     var dhowsPerTile: Int = 4
 
     // MARK: Palette
     var palette: [DioramaSwatch: UInt32] = DioramaSwatch.defaultPalette
-    var wallColors: [DioramaSwatch] = [.whitewash, .cream, .ochre, .sunflower, .coral, .skyBlue, .mint, .terracottaWall]
-    var apartmentWallColors: [DioramaSwatch] = [.whitewash, .whitewash, .cream]
-    var apartmentAccents: [DioramaSwatch] = [.terracottaWall, .skyBlue, .mint, .sunflower, .coral]
-    var metalRoofColors: [DioramaSwatch] = [.roofTeal, .roofRust, .roofSlate, .roofGreen]
+    var wallColors: [DioramaSwatch] = [.whitewash, .cream, .paleYellow, .dustyRose, .sage, .skyBlue, .mint, .cream]
+    var apartmentWallColors: [DioramaSwatch] = [.brick, .cream, .whitewash, .paleYellow, .slateWall, .brick]
+    var commercialWallColors: [DioramaSwatch] = [.brick, .whitewash, .cream, .ochre]
+    var apartmentAccents: [DioramaSwatch] = [.trimWhite, .trimWhite, .skyBlue, .sage]
+    var metalRoofColors: [DioramaSwatch] = [.roofSlate, .roofTeal, .roofConcrete, .roofGreen]
     var signColors: [DioramaSwatch] = [.signRed, .signYellow, .signGreen, .signBlue, .signOrange]
     var canopyColors: [DioramaSwatch] = [.canopyRed, .canopyYellow, .canopyBlue, .canopyGreen]
 

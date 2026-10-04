@@ -15,6 +15,7 @@ nonisolated struct DioramaTileArtifacts: Sendable {
     let ranges: [DioramaRenderLayer.Range]
     let parts: [Part]
     let lights: [DioramaLight]
+    let lightGrid: DioramaLightGrid
     let generationSeconds: Double
 
     var totalTriangles: Int { indices.count / 3 }
@@ -78,8 +79,9 @@ nonisolated enum DioramaTileGenerator {
         let placer = DioramaPropPlacer(config: config, data: data, roads: roadIndex, library: library, buildings: built, compounds: compounds, reduceDetail: reduced, terrain: terrain)
         placer.vegetation(into: &vegetation)
         placer.props(into: &props, glow: &propGlow, lights: &lights)
-        // Street lamps take priority in the GPU light budget; porch lights fill what is left.
+        // Street lamps take priority in the GPU light budget; facade and porch lights fill what is left.
         for light in porchLights where lights.count < config.maxLights { lights.append(light) }
+        let lightGrid = DioramaLightGrid.build(lights, rect: data.rect, cells: config.lightGridCells, perCell: config.lightsPerCell)
 
         // Order matters: opaque categories first, translucent halos (propGlow) last.
         let meshes: [(DioramaCategory, DioramaMesh)] = [
@@ -133,7 +135,7 @@ nonisolated enum DioramaTileGenerator {
         }
 
         let artifacts = DioramaTileArtifacts(
-            tile: data.tile, vertices: vertices, indices: indices, ranges: ranges, parts: parts, lights: lights,
+            tile: data.tile, vertices: vertices, indices: indices, ranges: ranges, parts: parts, lights: lights, lightGrid: lightGrid,
             generationSeconds: Date().timeIntervalSince(started)
         )
         cacheLock.lock()

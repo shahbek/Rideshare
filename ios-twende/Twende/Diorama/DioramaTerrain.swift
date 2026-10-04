@@ -7,7 +7,7 @@ nonisolated struct DioramaTerrain: Sendable {
     /// Height added to all land so the diorama's floor always sits above the basemap's ground plane.
     static let lift: Double = 0.3
     /// Absolute height of the water surface and the seabed under it.
-    static let waterSurface: Double = 0.4
+    static let waterSurface: Double = 0.22
     static let seabed: Double = -1.0
 
     let rect: DioramaRect

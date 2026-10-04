@@ -212,7 +212,7 @@ final class DioramaTileManager {
             hide(on: map)
             let host = DioramaRenderLayer(
                 origin: tile.centre, vertices: artifacts.vertices, indices: artifacts.indices, ranges: artifacts.ranges,
-                lights: artifacts.lights, visible: state.visibleCategories, timeOfDay: state.timeOfDay
+                lightGrid: artifacts.lightGrid, waterHeight: DioramaTerrain.waterSurface, visible: state.visibleCategories, timeOfDay: state.timeOfDay
             )
             try map.addCustomLayer(withId: layerID, layerHost: host, layerPosition: nil)
             try map.setLayerProperty(for: layerID, property: "slot", value: "middle")

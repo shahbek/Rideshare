@@ -120,6 +120,34 @@ nonisolated struct DioramaMesh: Sendable {
         if let top { polygon(ring, z: z1, top) }
     }
 
+    /// Horizontal band standing proud of a ring (floor lines, cornices, plinths). Follows the ring exactly.
+    mutating func band(_ ring: [DV2], flags: [Bool]? = nil, offset d: Double, z0: Double, z1: Double, _ s: DioramaSwatch) {
+        let n = ring.count
+        guard n >= 3, let outer = DioramaPolygon.offset(ring, by: d), outer.count == n else { return }
+        for i in 0..<n where !(flags?[i] ?? false) {
+            let j = (i + 1) % n
+            wall(outer[i], outer[j], z0: z0, z1: z1, s)
+            quad(DV3(ring[i], z1), DV3(ring[j], z1), DV3(outer[j], z1), DV3(outer[i], z1), s, normal: .up)
+            quad(DV3(ring[i], z0), DV3(ring[j], z0), DV3(outer[j], z0), DV3(outer[i], z0), s, dark: true, normal: DV3(0, 0, -1))
+        }
+    }
+
+    /// Vertical regular polygon (a sign face) centred at `c`, facing `out`.
+    mutating func verticalDisc(centre c: DV3, radius: Double, sides: Int, facing out: DV2, _ s: DioramaSwatch, rotate: Double = 0) {
+        let count = max(sides, 3)
+        let across = out.left
+        reserve(count + 1)
+        let uv = DioramaAtlas.uv(s, dark: false)
+        let n = DV3(out, 0)
+        let centre = vertex(c, n, uv)
+        let base = positions.count
+        for k in 0..<count {
+            let a = Double(k) / Double(count) * 2 * Double.pi + rotate
+            vertex(c + DV3(across * (cos(a) * radius), sin(a) * radius), n, uv)
+        }
+        for k in 0..<count { tri(centre, UInt32(base + k), UInt32(base + (k + 1) % count)) }
+    }
+
     /// Upright box with optional softly bevelled vertical corners and top edge.
     mutating func box(
         centre: DV2, z0: Double, axis: DV2 = DV2(1, 0), halfLength: Double, halfWidth: Double, height: Double,
