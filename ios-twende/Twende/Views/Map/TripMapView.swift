@@ -105,6 +105,7 @@ struct TripMapView: UIViewRepresentable {
         coordinator.updateNearby(nearbyDrivers)
         coordinator.applyMapStyleIfNeeded()
         coordinator.updateSelection()
+        coordinator.updateDiorama()
     }
 
     func makeCoordinator() -> Coordinator {
@@ -118,6 +119,7 @@ struct TripMapView: UIViewRepresentable {
         coordinator.removeBuildingHighlight()
         coordinator.removeVehicles()
         coordinator.removeLandmarks()
+        coordinator.removeDiorama()
     }
 
     var pickupBannerLabel: String? {
@@ -169,6 +171,10 @@ extension TripMapView {
         private let cityLandmarks = DarCityLandmarks()
         private let billboards: [BillboardLandmark] = BillboardCatalogue.all.map { BillboardLandmark(ad: $0) }
         private let billboardTeasers: [BillboardTeaser] = BillboardCatalogue.all.map { BillboardTeaser(ad: $0) }
+        /// Procedural Masaki diorama; created only while `DioramaState.shared.isEnabled`.
+        private var diorama: DioramaTileManager? = nil
+        private var dioramaRegenerate: Int = 0
+        private var dioramaFly: Int = 0
         func removeLandmarks() {
             for teaser in billboardTeasers { teaser.remove() }
             if let map = mapView?.mapboxMap {
@@ -272,6 +278,8 @@ extension TripMapView {
                 self.updateSonar(self.parent.isSearching ? self.parent.pickup : nil)
                 self.buildingHighlight.styleDidReload()
                 self.refreshBuildingHighlight(immediately: true)
+                self.diorama?.styleDidReload()
+                if let map = self.mapView?.mapboxMap { self.diorama?.install(on: map) }
             }.store(in: &cancelables)
             mapView.mapboxMap.onCameraChanged.observe { [weak self] _ in
                 guard let self, let map = self.mapView?.mapboxMap else { return }
@@ -290,6 +298,7 @@ extension TripMapView {
                 if let mapView = self.mapView, self.parent.onBillboardTap != nil {
                     for teaser in self.billboardTeasers { teaser.update(on: mapView) }
                 }
+                self.diorama?.scheduleUpdate(delay: 0.3)
                 self.scheduleCameraSettlement()
             }.store(in: &cancelables)
             mapView.gestures.onMapTap.observe { [weak self] context in
@@ -326,6 +335,11 @@ extension TripMapView {
             let style = AppSettings.shared.mapStyle
             guard styleReady, appliedStyle != style else { return }
             configureStandardStyle()
+            // The diorama owns lightPreset/show3dObjects while enabled; re-assert after a style change.
+            if let map = mapView?.mapboxMap, let diorama {
+                diorama.styleDidReload()
+                diorama.install(on: map)
+            }
             guard let mapView else { return }
             mapView.backgroundColor = UIColor(TwendeColor.mapCanvas)
             for (kind, hosted) in pins {
@@ -419,6 +433,40 @@ extension TripMapView {
             styleReady = false
             guard let mapView else { return }
             buildingHighlight.clear(on: mapView.mapboxMap)
+        }
+
+        // MARK: Diorama
+
+        /// Starts or stops the diorama with the shared state, and services debug-panel requests.
+        func updateDiorama() {
+            let state = DioramaState.shared
+            guard let mapView else { return }
+            if state.isEnabled, diorama == nil {
+                let manager = DioramaTileManager()
+                diorama = manager
+                if styleReady { manager.install(on: mapView.mapboxMap) }
+                mapView.camera.fly(to: manager.introCamera(), duration: 1.6)
+                dioramaFly = state.cameraFlyRequest
+                dioramaRegenerate = state.regenerateRequest
+            } else if !state.isEnabled, let manager = diorama {
+                manager.remove()
+                diorama = nil
+            }
+            guard let diorama else { return }
+            if state.regenerateRequest != dioramaRegenerate {
+                dioramaRegenerate = state.regenerateRequest
+                diorama.regenerateCentreTile()
+            }
+            if state.cameraFlyRequest != dioramaFly {
+                dioramaFly = state.cameraFlyRequest
+                mapView.camera.fly(to: diorama.introCamera(), duration: 1.2)
+            }
+            diorama.scheduleUpdate(delay: 0.05)
+        }
+
+        func removeDiorama() {
+            diorama?.remove()
+            diorama = nil
         }
 
         // MARK: Camera

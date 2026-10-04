@@ -70,6 +70,14 @@ struct SettingsView: View {
 
             RowDivider(leading: 0)
 
+            Toggle(isOn: Bindable(DioramaState.shared).isEnabled) {
+                IconRow(icon: .house, title: "Masaki 3D diorama", subtitle: "Experimental toy-town view on the Home map") { EmptyView() }
+            }
+            .tint(TwendeColor.primary)
+            .accessibilityIdentifier("settings.diorama")
+
+            RowDivider(leading: 0)
+
             MenuRow(
                 icon: .phone,
                 title: L(.siriGuide),
