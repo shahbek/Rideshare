@@ -17,6 +17,7 @@ nonisolated struct DioramaTileArtifacts: Sendable {
     let parts: [Part]
     let lights: [DioramaLight]
     let lightGrid: DioramaLightGrid
+    let waterHeight: Double
     let generationSeconds: Double
 
     var totalTriangles: Int { indices.count / 3 }
@@ -51,7 +52,7 @@ nonisolated enum DioramaTileGenerator {
         let started = Date()
 
         let roadIndex = DioramaRoadIndex(roads: data.roads, pavementWidth: config.pavementWidth)
-        let terrain = sampledTerrain ?? DioramaTerrain.load(rect: data.rect, config: config)
+        let terrain = (sampledTerrain ?? DioramaTerrain.load(rect: data.rect, config: config)).resolvingSurfaces(in: data)
         let streetLayout = DioramaStreetLayout(data: data, config: config)
         var buildings = DioramaMesh()
         var windowGlow = DioramaMesh()
@@ -187,7 +188,7 @@ nonisolated enum DioramaTileGenerator {
 
         let artifacts = DioramaTileArtifacts(
             tile: data.tile, vertices: vertices, indices: indices, ranges: ranges, parts: parts, lights: lights, lightGrid: lightGrid,
-            generationSeconds: Date().timeIntervalSince(started)
+            waterHeight: terrain.waterLevel, generationSeconds: Date().timeIntervalSince(started)
         )
         if sampledTerrain == nil {
             cacheLock.lock()

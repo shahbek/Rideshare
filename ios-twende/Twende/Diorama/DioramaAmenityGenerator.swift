@@ -14,9 +14,7 @@ nonisolated struct DioramaAmenityGenerator {
     let terrain: DioramaTerrain
 
     /// Footway surface above the ground plate.
-    static let pathLift: Double = 0.08
-    /// Absolute deck height of the pier over the bay.
-    static let pierDeck: Double = 1.05
+    static let pathLift: Double = DioramaSurfaceLevel.footway.rawValue
 
     private func z(_ p: DV2) -> Double { terrain.height(p) }
 
@@ -33,9 +31,9 @@ nonisolated struct DioramaAmenityGenerator {
             guard ring.count >= 3, DioramaPolygon.area(ring) > (area.kind == "pool" ? 3 : 15) else { continue }
             var rng = DioramaRandom(seed: area.id, salt: 51)
             switch area.kind {
-            case "pitch": court(ring, sport: area.sport, rng: &rng, ground: &ground, props: &props)
-            case "parking": carPark(ring, rng: &rng, ground: &ground, props: &props)
-            case "fuel": fuelStation(ring, rng: &rng, ground: &ground, props: &props, glow: &glow, lights: &lights)
+            case "pitch": court(ring, areaID: area.id, sport: area.sport, rng: &rng, ground: &ground, props: &props)
+            case "parking": carPark(ring, areaID: area.id, rng: &rng, ground: &ground, props: &props)
+            case "fuel": fuelStation(ring, areaID: area.id, rng: &rng, ground: &ground, props: &props, glow: &glow, lights: &lights)
             case "pool": pool(ring, areaID: area.id, isPrivate: area.sport == "private", rng: &rng, ground: &ground, props: &props)
             case "terrace": terrace(ring, areaID: area.id, rng: &rng, ground: &ground, props: &props, glow: &glow, lights: &lights)
             default: break
@@ -66,23 +64,42 @@ nonisolated struct DioramaAmenityGenerator {
         }
     }
 
+    /// A structural slab owns only its unoccupied plan. It cannot cover a road, another amenity
+    /// or a building merely because its plateau is higher than those surfaces.
+    @discardableResult
+    private func ownedSlab(_ ring: [DV2], areaID: UInt64, top: Double, side: DioramaSwatch,
+                           finish: DioramaSwatch, ground: inout DioramaMesh) -> [[DV2]] {
+        let masks = DioramaGroundCutouts(data: data, pavementWidth: config.pavementWidth,
+            additionalMasks: data.water.compactMap { $0.rings.first }, excludedAreaIDs: [areaID])
+        let pieces = masks.subtract(from: ring)
+        for piece in pieces { ground.polygon(piece, z: top, finish) }
+        for edge in DioramaStreetSurface(pieces).boundary() {
+            let bottom = min(terrain.height(edge.a), terrain.height(edge.b)) - 0.3
+            ground.wall(edge.a, edge.b, z0: bottom, z1: top, side)
+        }
+        return pieces
+    }
+
     // MARK: Courts
 
     /// Padel court (blue, glass back walls, net) or a general pitch (green, white lines, goals).
-    private func court(_ ring: [DV2], sport: String?, rng: inout DioramaRandom, ground: inout DioramaMesh, props: inout DioramaMesh) {
+    private func court(_ ring: [DV2], areaID: UInt64, sport: String?, rng: inout DioramaRandom, ground: inout DioramaMesh, props: inout DioramaMesh) {
         let box = DioramaPolygon.minimumAreaRectangle(ring)
-        let base = z(box.centre)
+        let base = terrain.foundationHeight(box.expanded(by: 1).corners)
         let isPadel = sport == "padel"
         let surface: DioramaSwatch = isPadel ? .courtBlue : .pitchGreen
         // Slab with a pale kerb, then the playing surface a touch higher.
-        ground.extrude(ring, z0: base - 0.3, z1: base + 0.16, .kerb, top: .kerb)
+        let pieces = ownedSlab(ring, areaID: areaID, top: base + 0.16, side: .kerb, finish: .kerb, ground: &ground)
         let inner = box.expanded(by: -0.35)
-        ground.polygon(inner.corners, z: base + 0.18, surface)
-        let top = base + 0.2
+        let playing = DioramaStreetSurface(pieces).intersection(inner.corners)
+        for piece in playing { ground.polygon(piece, z: base + 0.18, surface) }
+        func onCourt(_ p: DV2) -> Bool { playing.contains { DioramaPolygon.contains($0, p) } }
+        let top = base + 0.18 + DioramaSurfaceLevel.structuralPaintClearance
         let a = inner.axis, c = inner.across
         let L = inner.halfLength, W = inner.halfWidth
         func line(_ p: DV2, _ q: DV2, width: Double = 0.07) {
             let n = (q - p).normalized.right * width
+            guard [p - n, q - n, q + n, p + n].allSatisfy(onCourt) else { return }
             ground.quad(DV3(p - n, top), DV3(q - n, top), DV3(q + n, top), DV3(p + n, top), .courtLine, normal: .up)
         }
         // Boundary lines, centre line.
@@ -183,11 +200,12 @@ nonisolated struct DioramaAmenityGenerator {
 
     // MARK: Car park
 
-    private func carPark(_ ring: [DV2], rng: inout DioramaRandom, ground: inout DioramaMesh, props: inout DioramaMesh) {
-        let base = z(DioramaPolygon.centroid(ring))
-        ground.extrude(ring, z0: base - 0.3, z1: base + 0.1, .kerb, top: .asphalt)
+    private func carPark(_ ring: [DV2], areaID: UInt64, rng: inout DioramaRandom, ground: inout DioramaMesh, props: inout DioramaMesh) {
+        let base = terrain.foundationHeight(ring)
+        let pieces = ownedSlab(ring, areaID: areaID, top: base + 0.1, side: .kerb, finish: .asphalt, ground: &ground)
+        func onParking(_ p: DV2) -> Bool { pieces.contains { DioramaPolygon.contains($0, p) } }
         let box = DioramaPolygon.minimumAreaRectangle(ring)
-        let top = base + 0.115
+        let top = base + 0.1 + DioramaSurfaceLevel.structuralPaintClearance
         // Bays 2.6 m wide along both long sides, nose-in from a central aisle.
         let bayDepth = min(box.halfWidth - 0.5, 5.0)
         guard bayDepth > 2.5 else { return }
@@ -198,9 +216,11 @@ nonisolated struct DioramaAmenityGenerator {
                 let p0 = box.centre + a * u + c * (s * box.halfWidth), p1 = box.centre + a * u + c * (s * (box.halfWidth - bayDepth))
                 guard DioramaPolygon.contains(ring, p0 + c * (-s * 0.3)), DioramaPolygon.contains(ring, p1) else { continue }
                 let n = c * 0.06
-                ground.quad(DV3(p0 - n, top), DV3(p1 - n, top), DV3(p1 + n, top), DV3(p0 + n, top), .marking, normal: .up)
+                if [p0 - n, p1 - n, p1 + n, p0 + n].allSatisfy(onParking) {
+                    ground.quad(DV3(p0 - n, top), DV3(p1 - n, top), DV3(p1 + n, top), DV3(p0 + n, top), .marking, normal: .up)
+                }
                 let bayCentre = box.centre + a * (u + 1.3) + c * (s * (box.halfWidth - bayDepth / 2))
-                if u + 2.6 <= box.halfLength - 1.5, DioramaPolygon.contains(ring, bayCentre), rng.chance(0.55) {
+                if u + 2.6 <= box.halfLength - 1.5, DioramaOrientedRect(centre: bayCentre, axis: c, halfLength: 2.2, halfWidth: 1.0).corners.allSatisfy(onParking), rng.chance(0.55) {
                     let heading = (c * -s).angle + rng.range(-0.04...0.04)
                     props.append(rng.pick(library.cars), DioramaTransform(rotation: heading, translation: DV3(bayCentre, top)))
                 }
@@ -217,9 +237,9 @@ nonisolated struct DioramaAmenityGenerator {
 
     // MARK: Fuel station
 
-    private func fuelStation(_ ring: [DV2], rng: inout DioramaRandom, ground: inout DioramaMesh, props: inout DioramaMesh, glow: inout DioramaMesh, lights: inout [DioramaLight]) {
-        let base = z(DioramaPolygon.centroid(ring))
-        ground.extrude(ring, z0: base - 0.3, z1: base + 0.1, .kerb, top: .concrete)
+    private func fuelStation(_ ring: [DV2], areaID: UInt64, rng: inout DioramaRandom, ground: inout DioramaMesh, props: inout DioramaMesh, glow: inout DioramaMesh, lights: inout [DioramaLight]) {
+        let base = terrain.foundationHeight(ring)
+        ownedSlab(ring, areaID: areaID, top: base + 0.1, side: .kerb, finish: .concrete, ground: &ground)
         let box = DioramaPolygon.minimumAreaRectangle(ring)
         let top = base + 0.1
         // Canopy over the pump island, clear of any building on the plot.
@@ -274,9 +294,9 @@ nonisolated struct DioramaAmenityGenerator {
     /// shimmer). Hotel pools get rows of loungers and parasols; the small private garden pools surveyed
     /// from satellite imagery get a narrow deck and a lounger or two.
     private func pool(_ ring: [DV2], areaID: UInt64, isPrivate: Bool, rng: inout DioramaRandom, ground: inout DioramaMesh, props: inout DioramaMesh) {
-        let base = z(DioramaPolygon.centroid(ring))
         let deckWidth = isPrivate ? 1.1 : 2.2
         let deck = DioramaPolygon.offset(ring, by: deckWidth) ?? ring
+        let base = terrain.foundationHeight(deck)
         let deckTop = base + 0.12
         let excluded = Set(data.landuse.filter { $0.kind == "terrace" || $0.id == areaID }.map(\.id))
         let cutouts = DioramaGroundCutouts(data: data, pavementWidth: config.pavementWidth,
@@ -340,7 +360,7 @@ nonisolated struct DioramaAmenityGenerator {
     }
 
     private func terrace(_ ring: [DV2], areaID: UInt64, rng: inout DioramaRandom, ground: inout DioramaMesh, props: inout DioramaMesh, glow: inout DioramaMesh, lights: inout [DioramaLight]) {
-        let base = z(DioramaPolygon.centroid(ring))
+        let base = terrain.foundationHeight(ring)
         let top = base + 0.35
         let cutouts = DioramaGroundCutouts(data: data, pavementWidth: config.pavementWidth, excludedAreaIDs: [areaID])
         let pieces = cutouts.subtract(from: ring)
@@ -402,7 +422,7 @@ nonisolated struct DioramaAmenityGenerator {
         let cutouts = DioramaGroundCutouts(data: data, pavementWidth: config.pavementWidth, additionalMasks: masks)
         let pieces = DioramaStreetSurface(patches).pieces().flatMap { cutouts.subtract(from: $0) }
         for piece in pieces {
-            ground.polygon(piece, z: z(DioramaPolygon.centroid(piece)) + Self.pathLift, .paving)
+            terrain.drape(piece, lift: Self.pathLift, swatch: .paving, into: &ground)
         }
         for edge in DioramaStreetSurface(pieces).boundary() {
             let base = z((edge.a + edge.b) * 0.5)
@@ -428,7 +448,7 @@ nonisolated struct DioramaAmenityGenerator {
     /// Wooden pier on piles over the bay with a railing.
     private func pier(_ line: [DV2], props: inout DioramaMesh) {
         guard line.count >= 2 else { return }
-        let deck = Self.pierDeck
+        let deck = terrain.pierHeight(line)
         let half = 1.8
         let dense = DioramaPolygon.densify(line, maxStep: 3)
         for i in 0..<(dense.count - 1) {
@@ -444,7 +464,7 @@ nonisolated struct DioramaAmenityGenerator {
                 props.box(centre: (e0 + e1) * 0.5, z0: deck + 0.95, axis: (e1 - e0).normalized, halfLength: e0.distance(to: e1) / 2, halfWidth: 0.03, height: 0.06, .trimWhite)
                 // Pile down to the seabed.
                 let pile = e0 - n.normalized * (s * 0.3)
-                props.cylinder(centre: pile, z0: DioramaTerrain.seabed, z1: deck - 0.3, r0: 0.16, r1: 0.14, sides: 6, .trunk, cap: false)
+                props.cylinder(centre: pile, z0: terrain.seabedLevel, z1: deck - 0.3, r0: 0.16, r1: 0.14, sides: 6, .trunk, cap: false)
             }
         }
         // A pair of dhows moored at the head of the pier.
@@ -453,7 +473,7 @@ nonisolated struct DioramaAmenityGenerator {
         for s in [-1.0, 1.0] {
             let p = head + dir.right * (s * 4.5) - dir * 3
             if isWater(p) {
-                props.append(library.dhow, DioramaTransform(rotation: dir.angle + s * 0.2, scale: DV3(0.8, 0.8, 0.8), translation: DV3(p, DioramaTerrain.waterSurface)))
+                props.append(library.dhow, DioramaTransform(rotation: dir.angle + s * 0.2, scale: DV3(0.8, 0.8, 0.8), translation: DV3(p, terrain.waterLevel)))
             }
         }
     }
@@ -467,7 +487,7 @@ nonisolated struct DioramaAmenityGenerator {
         let seaEnd = isWater(a) && !isWater(b) ? a : b
         let dir = (seaEnd - landEnd).normalized
         let n = dir.right * 4.0
-        let zLand = z(landEnd) + 0.1, zSea = DioramaTerrain.seabed + 0.4
+        let zLand = z(landEnd) + 0.1, zSea = terrain.seabedLevel + 0.4
         ground.quad(DV3(landEnd - n, zLand), DV3(seaEnd - n, zSea), DV3(seaEnd + n, zSea), DV3(landEnd + n, zLand), .concrete)
         for s in [-1.0, 1.0] {
             let e0 = landEnd + n * s, e1 = seaEnd + n * s
@@ -524,7 +544,6 @@ nonisolated struct DioramaAmenityGenerator {
     }
 
     private func playground(at p: DV2, rng: inout DioramaRandom, ground: inout DioramaMesh, props: inout DioramaMesh) {
-        let base = z(p)
         let candidates = [0.0, Double.pi / 4, Double.pi / 2, Double.pi * 3 / 4]
         let pad = candidates.map { angle in
             DioramaOrientedRect(centre: p, axis: DV2(cos(angle), sin(angle)), halfLength: 5.3, halfWidth: 4.1)
@@ -542,7 +561,8 @@ nonisolated struct DioramaAmenityGenerator {
             #endif
             return
         }
-        ground.extrude(pad.corners, z0: base - 0.1, z1: base + 0.1, .coralStone, top: .earth)
+        let base = terrain.foundationHeight(pad.corners)
+        ground.extrude(pad.corners, z0: terrain.footingHeight(pad.corners), z1: base + 0.1, .coralStone, top: .earth)
         props.append(library.playground, DioramaTransform(rotation: pad.axis.angle, translation: DV3(p, base + 0.1)))
     }
 
@@ -564,7 +584,7 @@ nonisolated struct DioramaAmenityGenerator {
         if let host, host.feature.centroid.distance(to: p) < 30 {
             let corner = host.box.corners[0]
             spot = corner + (host.box.centre - corner).normalized * 1.6
-            baseZ = z(host.feature.centroid) + host.height + (host.flatRoof ? config.roofBevel : 0)
+            baseZ = terrain.foundationHeight(host.feature.ring) + host.height + (host.flatRoof ? config.roofBevel : 0)
             // Green dome in the middle of the roof.
             props.cylinder(centre: host.box.centre, z0: baseZ, z1: baseZ + 1.0, r0: 2.6, r1: 2.6, sides: 12, .whitewash)
             props.sphere(centre: DV3(host.box.centre, baseZ + 1.0), radii: DV3(2.6, 2.6, 2.3), .domeGreen)

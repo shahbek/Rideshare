@@ -27,7 +27,7 @@ nonisolated struct DioramaHotelGenerator {
         let box = DioramaPolygon.minimumAreaRectangle(f.ring)
         // Authored landmark plan shared by slabs, walls, roofs and ground masks.
         let ring = f.ring
-        mesh.extrude(ring, z0: -1.5, z1: 0, .concrete)
+        mesh.extrude(ring, z0: terrain.footingHeight(ring) - base, z1: 0, .concrete)
         let balconyRing = isDelta ? scallopedOutline(f.ring) : ring
         for floor in 0...floors {
             let z = Double(floor) * pitch
@@ -158,39 +158,28 @@ nonisolated struct DioramaHotelGenerator {
         return DioramaBuilt(feature: f, kind: .apartments, floors: floors, height: height, box: box, flatRoof: true, wallColor: color, entrance: entrance, entranceOut: entranceOut)
     }
 
-    /// Continuous cove/ogee profile swept around the full rounded plan, with smooth normals.
+    /// Solid attached fascia, coved bed moulding, projecting corona and flat weathering cap.
+    /// Only the underside is curved: the fish-painted frieze is a broad vertical masonry face.
     private func fishCornice(_ ring: [DV2], height: Double, mesh: inout DioramaMesh) {
-        let segments = 20
-        let start = mesh.positions.count
-        let uv = DioramaAtlas.uv(.muralBlue, dark: false)
-        let normals = ring.indices.map { i -> DV2 in
-            let before = (ring[i] - ring[(i + ring.count - 1) % ring.count]).normalized.right
-            let after = (ring[(i + 1) % ring.count] - ring[i]).normalized.right
-            return (before + after).normalized
-        }
-        for i in ring.indices {
-            for j in 0...segments {
-                let t = Double(j) / Double(segments)
-                let reach = 0.15 + 0.55 * sin(t * .pi)
-                let slope = 0.55 * .pi * cos(t * .pi) / 1.9
-                let n = DV3(normals[i], -slope).normalized
-                mesh.vertex(DV3(ring[i] + normals[i] * reach, height - 0.6 + 1.9 * t), n, uv)
+        let profile: [(reach: Double, z: Double)] = [
+            (0, -0.42), (0.04, -0.34), (0.09, -0.26), (0.15, -0.20),
+            (0.22, -0.17), (0.24, -0.12), (0.24, 0.82),
+            (0.30, 0.86), (0.41, 0.93), (0.54, 1.02),
+            (0.62, 1.04), (0.62, 1.21), (0, 1.21)
+        ]
+        let offsets = profile.map { DioramaCoastline.offset(ring, by: $0.reach) }
+        for k in 0..<(profile.count - 1) {
+            for i in ring.indices {
+                let j = (i + 1) % ring.count
+                mesh.quad(DV3(offsets[k][i], height + profile[k].z),
+                          DV3(offsets[k][j], height + profile[k].z),
+                          DV3(offsets[k + 1][j], height + profile[k + 1].z),
+                          DV3(offsets[k + 1][i], height + profile[k + 1].z), .muralBlue)
             }
         }
-        for i in ring.indices {
-            let next = (i + 1) % ring.count
-            for j in 0..<segments {
-                let a = UInt32(start + i * (segments + 1) + j)
-                let b = UInt32(start + next * (segments + 1) + j)
-                mesh.tri(a, b, b + 1); mesh.tri(a, b + 1, a + 1)
-            }
-        }
-        let outer = DioramaCoastline.offset(ring, by: 0.15)
         for i in ring.indices {
             let j = (i + 1) % ring.count
-            mesh.quad(DV3(outer[i], height + 1.3), DV3(outer[j], height + 1.3),
-                      DV3(ring[j], height + 1.3), DV3(ring[i], height + 1.3), .muralBlue, normal: .up)
-            mesh.wall(ring[j], ring[i], z0: height + 0.19, z1: height + 1.3, .slipwayBlue)
+            mesh.wall(ring[j], ring[i], z0: height - 0.42, z1: height + 1.21, .slipwayBlue)
         }
     }
 

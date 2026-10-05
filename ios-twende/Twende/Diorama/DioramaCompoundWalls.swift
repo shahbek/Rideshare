@@ -56,7 +56,6 @@ nonisolated struct DioramaCompoundWallGenerator {
         for index in order {
             let built = buildings[index]
             guard built.feature.clipped.allSatisfy({ !$0 }) else { continue }
-            mesh.baseZ = terrain.height(built.feature.centroid)
             defer { mesh.baseZ = 0 }
             var rng = DioramaRandom(seed: built.feature.id, salt: 7)
             var offset = rng.range(config.wallOffset)
@@ -167,6 +166,7 @@ nonisolated struct DioramaCompoundWallGenerator {
                 let a = points[i], b = points[(i + 1) % n]
                 let dir = (b - a).normalized
                 let out = dir.right
+                mesh.baseZ = terrain.foundationHeight([a - out * 0.5, b - out * 0.5, b + out * 0.5, a + out * 0.5])
                 pieces.append((a, b))
                 if i == gateEdge {
                     let length = a.distance(to: b)

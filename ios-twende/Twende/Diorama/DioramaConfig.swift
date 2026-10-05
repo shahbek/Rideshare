@@ -117,7 +117,7 @@ nonisolated struct DioramaBuildingOverride: Sendable {
 /// One place to tune the whole look without touching generation code.
 nonisolated struct DioramaConfig: Sendable {
     /// Bump to invalidate every cached tile.
-    var generatorVersion: Int = 16
+    var generatorVersion: Int = 17
     /// Drape the plate/ground overlays over the shared DEM datum used by roads and foundations.
     var usesElevation: Bool = true
 

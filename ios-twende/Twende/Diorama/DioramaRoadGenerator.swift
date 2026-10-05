@@ -10,7 +10,7 @@ nonisolated struct DioramaRoadGenerator {
     let layout: DioramaStreetLayout
     let compounds: [DioramaCompound]
 
-    static let surfaceLift: Double = 0.12
+    static let surfaceLift: Double = DioramaSurfaceLevel.road.rawValue
 
     private struct Ramp {
         let point: DV2
@@ -150,9 +150,7 @@ nonisolated struct DioramaRoadGenerator {
 
     private func surface(_ polygon: [DV2], lift: Double, _ swatch: DioramaSwatch, into mesh: inout DioramaMesh) {
         let ring = DioramaPolygon.counterClockwise(DioramaPolygon.clipPolygon(polygon, to: data.rect))
-        for (a, b, c) in DioramaPolygon.triangulate(ring) {
-            mesh.triangle(DV3(ring[a], terrain.height(ring[a]) + lift), DV3(ring[b], terrain.height(ring[b]) + lift), DV3(ring[c], terrain.height(ring[c]) + lift), swatch, normal: .up)
-        }
+        terrain.drape(ring, lift: lift, swatch: swatch, into: &mesh)
     }
 
     private func markings(_ road: DioramaRoadFeature, into mesh: inout DioramaMesh) {
@@ -204,6 +202,6 @@ nonisolated struct DioramaRoadGenerator {
     private func strip(_ a: DV2, _ b: DV2, halfWidth: Double, _ swatch: DioramaSwatch, into mesh: inout DioramaMesh) {
         let n = (b - a).normalized.right * halfWidth
         guard [a - n, a + n, b - n, b + n].allSatisfy({ layout.carriageway.contains($0) && data.rect.contains($0) }) else { return }
-        surface([a - n, b - n, b + n, a + n], lift: Self.surfaceLift + 0.012, swatch, into: &mesh)
+        surface([a - n, b - n, b + n, a + n], lift: DioramaSurfaceLevel.roadPaint.rawValue, swatch, into: &mesh)
     }
 }

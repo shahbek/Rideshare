@@ -789,7 +789,7 @@ nonisolated struct DioramaPropPlacer {
                 let p = s.point + s.direction.right * side * 1.1
                 guard data.rect.expanded(by: -1).contains(p), !roads.isOnCarriageway(p, margin: 0.3) else { continue }
                 guard !buildings.contains(where: { $0.box.expanded(by: 0.3).contains(p) }) else { continue }
-                let z = path.kind == "pier" ? DioramaAmenityGenerator.pierDeck : ground(p) + DioramaAmenityGenerator.pathLift
+                let z = path.kind == "pier" ? terrain.pierHeight(path.line) : ground(p) + DioramaAmenityGenerator.pathLift
                 mesh.append(library.bollard, DioramaTransform(translation: DV3(p, z)))
                 glow.append(library.bollardGlow, DioramaTransform(translation: DV3(p, z)))
                 lights.append(DioramaLight(position: DV3(p, z + DioramaPropLibrary.bollardHeight), color: SIMD3<Float>(1.0, 0.84, 0.6), radius: 5, intensity: 0.55))
@@ -829,10 +829,10 @@ nonisolated struct DioramaPropPlacer {
             vesselSpots.append(p)
             let model = dhows % 3 == 0 ? library.yacht : (dhows % 3 == 1 ? library.canoe : library.dhow)
             let heading = rng.range(0...6.28), direction = DV2(cos(heading), sin(heading))
-            mesh.append(model, DioramaTransform(rotation: heading, translation: DV3(p, DioramaTerrain.waterSurface)))
+            mesh.append(model, DioramaTransform(rotation: heading, translation: DV3(p, terrain.waterLevel)))
             let buoy = p + direction * 8
-            mesh.sphere(centre: DV3(buoy, DioramaTerrain.waterSurface + 0.12), radii: DV3(0.25, 0.25, 0.2), .sailCream)
-            mesh.tube(from: DV3(p + direction * (dhows % 3 == 0 ? 5.5 : 2.8), DioramaTerrain.waterSurface + 0.5), to: DV3(buoy, DioramaTerrain.waterSurface + 0.16), r0: 0.02, r1: 0.02, sides: 4, .sailCream)
+            mesh.sphere(centre: DV3(buoy, terrain.waterLevel + 0.12), radii: DV3(0.25, 0.25, 0.2), .sailCream)
+            mesh.tube(from: DV3(p + direction * (dhows % 3 == 0 ? 5.5 : 2.8), terrain.waterLevel + 0.5), to: DV3(buoy, terrain.waterLevel + 0.16), r0: 0.02, r1: 0.02, sides: 4, .sailCream)
             dhows += 1
         }
     }

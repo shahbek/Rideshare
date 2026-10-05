@@ -75,7 +75,7 @@ nonisolated struct DioramaBuildingGenerator {
         let trim: DioramaSwatch = .trimWhite
 
         // Plinth down into the slope so no house floats where the terrain falls away, then a pale base band.
-        mesh.extrude(ring, z0: -2.5, z1: 0.02, .courtyard, skip: flags)
+        mesh.extrude(ring, z0: terrain.footingHeight(ring) - ground, z1: 0.02, .courtyard, skip: flags)
         mesh.band(ring, flags: flags, offset: 0.12, z0: 0, z1: 0.5, trim)
         // Facade masonry below is split at door/window openings, rather than solid walls behind panes.
 

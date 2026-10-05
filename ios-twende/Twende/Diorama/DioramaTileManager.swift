@@ -199,6 +199,7 @@ final class DioramaTileManager {
         }
 
         if case .loaded = status, refreshTerrain(on: map) {
+            hide(on: map)
             status = .idle
         }
         switch status {
@@ -232,7 +233,7 @@ final class DioramaTileManager {
                 let p = DV2(rect.minX + rect.width * Double(column) / Double(size - 1),
                             rect.minY + rect.height * Double(row) / Double(size - 1))
                 let c = projection.coordinate(p)
-                let old = previous.height(p) - DioramaTerrain.lift
+                let old = previous.rawHeight(p)
                 let index = row * size + column
                 if terrainSampledCells.contains(index) {
                     values.append(old)
@@ -315,7 +316,7 @@ final class DioramaTileManager {
             let animates = !UIAccessibility.isReduceMotionEnabled
             let host = DioramaRenderLayer(
                 origin: tile.centre, vertices: artifacts.vertices, indices: artifacts.indices, ranges: artifacts.ranges,
-                lightGrid: artifacts.lightGrid, waterHeight: DioramaTerrain.waterSurface, visible: state.visibleCategories, timeOfDay: state.timeOfDay,
+                lightGrid: artifacts.lightGrid, waterHeight: artifacts.waterHeight, visible: state.visibleCategories, timeOfDay: state.timeOfDay,
                 animates: animates
             )
             try map.addCustomLayer(withId: layerID, layerHost: host, layerPosition: nil)

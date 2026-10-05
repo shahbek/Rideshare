@@ -1,19 +1,25 @@
 import Foundation
 
-/// Shared absolute, exaggerated metre datum for geometry, foundations, lights and shadows.
-/// Loaded Mapbox DEM samples replace the bundled SRTM fallback without shifting the sea plane.
+/// One triangulated height field for land, draped finishes, markings and structural foundations.
 nonisolated struct DioramaTerrain: Sendable {
-    /// Height added to all land so the diorama's floor always sits above the basemap's ground plane.
     static let lift: Double = 0.6
-    /// Absolute height of the water surface and the seabed under it.
     static let waterSurface: Double = 0.22
     static let seabed: Double = -1.0
+    /// All draped surfaces use the same cell origin, diagonal and interpolation, not separate meshes.
+    static let surfaceStep: Double = 4
 
     let rect: DioramaRect
     let columns: Int
     let rows: Int
-    /// Row-major, rows south to north, columns west to east.
+    /// Absolute exaggerated DEM values, row-major from south to north.
     let values: [Double]
+    /// Visual clearance shared by the whole tile, including sea, boats, lights and reflections.
+    /// This is a rendering adjustment, not a surveyed sea-level measurement.
+    var clearance: Double = 0
+
+    var waterLevel: Double { Self.waterSurface + clearance }
+    var pierLevel: Double { waterLevel + 0.83 }
+    var seabedLevel: Double { waterLevel - 1.22 }
 
     nonisolated struct File: Decodable, Sendable {
         let columns: Int
@@ -23,12 +29,11 @@ nonisolated struct DioramaTerrain: Sendable {
 
     static let resourceName = "slipway_terrain"
 
-    /// Flat terrain, used when the bundled grid is missing.
     static func flat(_ rect: DioramaRect) -> DioramaTerrain {
         DioramaTerrain(rect: rect, columns: 2, rows: 2, values: [0, 0, 0, 0])
     }
 
-    /// Offline absolute SRTM estimate, replaced with available Mapbox DEM samples by the manager.
+    /// Offline estimate until the already loaded Mapbox DEM is available.
     static func load(rect: DioramaRect, config: DioramaConfig) -> DioramaTerrain {
         guard config.usesElevation else { return flat(rect) }
         guard let url = Bundle.main.url(forResource: resourceName, withExtension: "json"),
@@ -42,26 +47,106 @@ nonisolated struct DioramaTerrain: Sendable {
         return DioramaTerrain(rect: rect, columns: file.columns, rows: file.rows, values: file.elevations.map { $0 * 1.6 })
     }
 
-    /// Level foundation above the highest sampled ground along the footprint, not just its centroid.
-    func foundationHeight(_ ring: [DV2]) -> Double {
-        guard let first = ring.first else { return Self.lift }
-        let perimeter = DioramaPolygon.densify(ring + [first], maxStep: 2)
-        return max(perimeter.map { height($0) }.max() ?? Self.lift,
-                   height(DioramaPolygon.centroid(ring))) + 0.04
+    /// Keep a level ocean above coastal DEM artefacts. Move the ENTIRE scene by the same amount,
+    /// rather than raising water into boats/buildings or deforming the ocean into a hillside.
+    func resolvingSurfaces(in data: DioramaTileData) -> DioramaTerrain {
+        var result = self
+        var highest = 0.0
+        let water = data.water.compactMap { $0.rings.first }
+        for ring in water where ring.count >= 3 {
+            for p in DioramaPolygon.densify(ring + [ring[0]], maxStep: Self.surfaceStep) {
+                highest = max(highest, rawHeight(p))
+            }
+        }
+        for row in 0..<rows {
+            for column in 0..<columns {
+                let p = DV2(rect.minX + rect.width * Double(column) / Double(columns - 1),
+                            rect.minY + rect.height * Double(row) / Double(rows - 1))
+                if water.contains(where: { DioramaPolygon.contains($0, p) }) {
+                    highest = max(highest, values[row * columns + column])
+                }
+            }
+        }
+        result.clearance = highest + Self.lift
+        return result
     }
 
-    /// Ground height (including `lift`) at a local point. Clamped at the tile edges.
+    /// Level structure above the entire footprint, including interior hills and perimeter samples.
+    func foundationHeight(_ ring: [DV2]) -> Double {
+        guard let first = ring.first else { return Self.lift + clearance }
+        let bounds = DioramaRect.bounding(ring)
+        var highest = height(DioramaPolygon.centroid(ring))
+        for p in DioramaPolygon.densify(ring + [first], maxStep: 1) { highest = max(highest, height(p)) }
+        for y in stride(from: floor(bounds.minY / Self.surfaceStep) * Self.surfaceStep, through: bounds.maxY, by: Self.surfaceStep) {
+            for x in stride(from: floor(bounds.minX / Self.surfaceStep) * Self.surfaceStep, through: bounds.maxX, by: Self.surfaceStep) {
+                let p = DV2(x, y)
+                if DioramaPolygon.contains(ring, p) { highest = max(highest, height(p)) }
+            }
+        }
+        return highest + 0.04
+    }
+
+    /// Continuous support reaches below the lowest boundary rather than floating on the high side.
+    func footingHeight(_ ring: [DV2]) -> Double {
+        guard let first = ring.first else { return Self.lift + clearance - 0.3 }
+        return (DioramaPolygon.densify(ring + [first], maxStep: 1).map { height($0) }.min() ?? height(first)) - 0.3
+    }
+
+    func pierHeight(_ line: [DV2]) -> Double {
+        max(pierLevel, line.first.map { height($0) + 0.1 } ?? pierLevel)
+    }
+
+    /// Shared piecewise-planar surface. Every clipped polygon and painted stripe lies on this mesh.
     func height(_ p: DV2) -> Double {
-        guard rect.width > 0, rect.height > 0 else { return Self.lift }
+        let step = Self.surfaceStep
+        let x = floor(p.x / step) * step, y = floor(p.y / step) * step
+        let tx = (p.x - x) / step, ty = (p.y - y) / step
+        let h00 = rawHeight(DV2(x, y)), h11 = rawHeight(DV2(x + step, y + step))
+        let h: Double
+        if ty <= tx {
+            let h10 = rawHeight(DV2(x + step, y))
+            h = h00 * (1 - tx) + h10 * (tx - ty) + h11 * ty
+        } else {
+            let h01 = rawHeight(DV2(x, y + step))
+            h = h00 * (1 - ty) + h11 * tx + h01 * (ty - tx)
+        }
+        return h + Self.lift + clearance
+    }
+
+    /// Raw DEM interpolation, with no visual offsets. Used when filling missing live DEM samples.
+    func rawHeight(_ p: DV2) -> Double {
+        guard rect.width > 0, rect.height > 0 else { return 0 }
         let fx = min(max((p.x - rect.minX) / rect.width, 0), 1) * Double(columns - 1)
         let fy = min(max((p.y - rect.minY) / rect.height, 0), 1) * Double(rows - 1)
         let x0 = min(Int(fx), columns - 2), y0 = min(Int(fy), rows - 2)
         let tx = fx - Double(x0), ty = fy - Double(y0)
-        // Linear sampling retains the DEM slope instead of flattening it at every cell boundary.
-        let sx = tx, sy = ty
         let h00 = values[y0 * columns + x0], h10 = values[y0 * columns + x0 + 1]
         let h01 = values[(y0 + 1) * columns + x0], h11 = values[(y0 + 1) * columns + x0 + 1]
-        let h = (h00 * (1 - sx) + h10 * sx) * (1 - sy) + (h01 * (1 - sx) + h11 * sx) * sy
-        return h + Self.lift
+        return (h00 * (1 - tx) + h10 * tx) * (1 - ty) + (h01 * (1 - tx) + h11 * tx) * ty
+    }
+
+    /// Clip to each shared terrain triangle before triangulating. Independent polygon diagonals
+    /// must never bridge a hill and let the ground pierce a finish or cover road markings.
+    func drape(_ ring: [DV2], lift: Double, swatch: DioramaSwatch, into mesh: inout DioramaMesh) {
+        guard ring.count >= 3 else { return }
+        let bounds = DioramaRect.bounding(ring), step = Self.surfaceStep
+        let uv = DioramaAtlas.uv(swatch, dark: false)
+        for y in stride(from: floor(bounds.minY / step) * step, to: bounds.maxY, by: step) {
+            for x in stride(from: floor(bounds.minX / step) * step, to: bounds.maxX, by: step) {
+                let cell = DioramaRect(minX: x, minY: y, maxX: x + step, maxY: y + step)
+                let clipped = DioramaPolygon.clipPolygon(ring, to: cell)
+                guard clipped.count >= 3 else { continue }
+                // The southwest-to-northeast diagonal matches height(_:).
+                for inside in [true, false] {
+                    let piece = DioramaGroundCutouts.halfPlane(clipped, a: DV2(x, y), b: DV2(x + step, y + step), inside: inside)
+                    guard piece.count >= 3, DioramaPolygon.area(piece) > 0.00001 else { continue }
+                    let base = mesh.positions.count
+                    for p in piece { mesh.vertex(DV3(p, height(p) + lift), .up, uv) }
+                    for t in DioramaPolygon.triangulate(piece) {
+                        mesh.tri(UInt32(base + t.0), UInt32(base + t.1), UInt32(base + t.2))
+                    }
+                }
+            }
+        }
     }
 }

@@ -22,9 +22,14 @@ nonisolated struct DioramaHotelGrounds {
             if DioramaPolygon.contains(ring, p) || DioramaPolygon.distanceToRing(ring, p) < margin { return true }
         }
         return data.buildings.contains { building in
-            let landmark = DioramaHotelGenerator.ids.contains(building.id) || DioramaSlipwayPavilion.buildingIDs.contains(building.id)
+            let landmark = Self.hasSlipwayApron(building.id)
             return landmark && DioramaPolygon.distanceToRing(building.ring, p) < 6 + margin
         }
+    }
+
+    private static func hasSlipwayApron(_ id: UInt64) -> Bool {
+        (DioramaHotelGenerator.ids.contains(id) && id != DioramaHotelGenerator.delta)
+            || DioramaSlipwayPavilion.buildingIDs.contains(id)
     }
 
     /// Shared stair corridor reserved by paving, furniture and vegetation.
@@ -38,10 +43,9 @@ nonisolated struct DioramaHotelGrounds {
         return DioramaPolygon.counterClockwise([a, b, b + out * 5.1, a + out * 5.1])
     }
 
-    /// Dining apron along Hotel Slipway's west arcade: a 7 m paved strip, photo-led, replacing the
-    /// default lawn so tables and chairs stand on paving.
+    /// The separate blue beachfront hotel owns this west-facing dining apron, not the fish hotel.
     static func diningOutline(data: DioramaTileData) -> [DV2] {
-        guard let hotel = data.buildings.first(where: { $0.id == DioramaHotelGenerator.gallery }) else { return [] }
+        guard let hotel = data.buildings.first(where: { $0.id == DioramaHotelGenerator.waterfront }) else { return [] }
         let ring = hotel.ring, desired = DV2(-1, -0.22).normalized
         guard let i = ring.indices.max(by: { i, j in
             func score(_ k: Int) -> Double {
@@ -65,7 +69,6 @@ nonisolated struct DioramaHotelGrounds {
         dining(ground: &ground, props: &props, vegetation: &vegetation)
         staircase(ground: &ground, props: &props, vegetation: &vegetation)
         surroundings(ground: &ground, props: &props, vegetation: &vegetation)
-        cascadingPlants(vegetation: &vegetation, props: &props)
         seawall(ground: &ground)
     }
 
@@ -92,7 +95,7 @@ nonisolated struct DioramaHotelGrounds {
         for row in [2.6, 5.0] {
             for t in stride(from: -box.halfLength + 2, through: box.halfLength - 2, by: 2.8) {
                 let probe = box.centre + box.axis * t
-                let hotelSide = data.buildings.first(where: { $0.id == DioramaHotelGenerator.gallery }).map { DioramaPolygon.centroid($0.ring) } ?? probe
+                let hotelSide = data.buildings.first(where: { $0.id == DioramaHotelGenerator.waterfront }).map { DioramaPolygon.centroid($0.ring) } ?? probe
                 let away = (box.across.dot(probe - hotelSide) > 0 ? box.across : box.across * -1)
                 let p = probe - away * box.halfWidth + away * row
                 guard onPaving(p, 1.1), placed.allSatisfy({ $0.distance(to: p) > 2.3 }) else { continue }
@@ -148,7 +151,7 @@ nonisolated struct DioramaHotelGrounds {
 
     /// Local aprons, not a hull across the waterfront. Disjoint union preserves existing amenities.
     private func surroundings(ground: inout DioramaMesh, props: inout DioramaMesh, vegetation: inout DioramaMesh) {
-        let landmarks = data.buildings.filter { DioramaHotelGenerator.ids.contains($0.id) || DioramaSlipwayPavilion.buildingIDs.contains($0.id) }
+        let landmarks = data.buildings.filter { Self.hasSlipwayApron($0.id) }
         var aprons: [[DV2]] = []
         for building in landmarks {
             let ring = building.ring
@@ -184,28 +187,6 @@ nonisolated struct DioramaHotelGrounds {
         }
     }
 
-    private func cascadingPlants(vegetation: inout DioramaMesh, props: inout DioramaMesh) {
-        for building in data.buildings where DioramaHotelGenerator.ids.contains(building.id) || DioramaSlipwayPavilion.buildingIDs.contains(building.id) {
-            let foundation = terrain.foundationHeight(building.ring)
-            let floors = building.id == DioramaHotelGenerator.gallery ? 5 : 3
-            let height = building.height ?? Double(floors) * 3.2
-            for i in building.ring.indices {
-                let a = building.ring[i], b = building.ring[(i + 1) % building.ring.count], dir = (b - a).normalized, out = dir.right
-                for t in stride(from: 2.5, to: a.distance(to: b) - 2, by: 5.5) {
-                    for level in [0.35, 0.68] {
-                        let p = a + dir * t + out * 0.15
-                        let z = foundation + height * level
-                        props.box(centre: p - out * 0.18, z0: z, axis: dir, halfLength: 0.55, halfWidth: 0.22, height: 0.24, .terracottaWall, bevel: 0.06)
-                        vegetation.append(library.bougainvillea[Int(t) % library.bougainvillea.count],
-                                          DioramaTransform(rotation: dir.angle, scale: DV3(0.65, 0.55, 0.65), translation: DV3(p, z - 1.0)))
-                        vegetation.append(library.bushes[Int(t) % library.bushes.count],
-                                          DioramaTransform(scale: DV3(0.55, 0.4, 1.1), translation: DV3(p + out * 0.25, z - 0.8)))
-                    }
-                }
-            }
-        }
-    }
-
     private func parasol(at p: DV2, z: Double, props: inout DioramaMesh) {
         props.cylinder(centre: p, z0: z + 0.87, z1: z + 2.4, r0: 0.03, r1: 0.03, sides: 6, .trimWhite)
         props.cylinder(centre: p, z0: z + 2.2, z1: z + 2.55, r0: 1.35, r1: 0.06, sides: 24, .cream)
@@ -227,37 +208,8 @@ nonisolated struct DioramaHotelGrounds {
                 ground.box(centre: p + box.axis * d, z0: z + 0.027, axis: box.axis, halfLength: 0.022, halfWidth: 0.14, height: 0.006, .metalCharcoal)
             }
         }
-        // Keep a clear through-route; furniture occupies the two margins, never the drain/walking axis.
-        var occupied: [DV2] = []
-        for s in [-1.0, 1.0] {
-            for t in stride(from: -box.halfLength + 3, to: box.halfLength - 2, by: 6.5) {
-                let p = box.centre + box.axis * t + box.across * (s * max(3, box.halfWidth - 3))
-                guard DioramaPolygon.contains(ring, p), DioramaPolygon.distanceToRing(ring, p) > 1.4, clear(p, radius: 1.5) else { continue }
-                guard data.trees.allSatisfy({ $0.distance(to: p) > 2 }) else { continue }
-                cafe(at: p, z: terrain.height(p) + 0.11, props: &props)
-                occupied.append(p)
-            }
-        }
-        // Dining bays run along the courtyard-facing edges, not just inside the old garden polygon.
-        for building in data.buildings where [DioramaHotelGenerator.gallery, DioramaHotelGenerator.waterfront, UInt64(180_607_949)].contains(building.id) {
-            for i in building.ring.indices {
-                let a = building.ring[i], b = building.ring[(i + 1) % building.ring.count]
-                let dir = (b - a).normalized, out = dir.right
-                for t in stride(from: 3.5, to: a.distance(to: b) - 3, by: 6) {
-                    let p = a + dir * t + out * 3.2
-                    guard DioramaPolygon.contains(pavingRing, p), clear(p, radius: 1.6),
-                          !DioramaPolygon.contains(ring, p),
-                          occupied.allSatisfy({ $0.distance(to: p) > 4 }),
-                          data.trees.allSatisfy({ $0.distance(to: p) > 2 }) else { continue }
-                    cafe(at: p, z: terrain.height(p) + 0.11, props: &props)
-                    occupied.append(p)
-                    let planter = p + dir * 2.2
-                    if clear(planter, radius: 0.8) {
-                        flowerPlanter(at: planter, z: terrain.height(planter) + 0.11, props: &props, vegetation: &vegetation)
-                    }
-                }
-            }
-        }
+        // Café tables now belong only to the separate beachfront dining apron.
+        let occupied: [DV2] = []
         let trees = data.trees.filter { DioramaPolygon.contains(pavingRing, $0) && clear($0, radius: 0.8) }
         var palmPositions = trees
         // Supplement sparse mapped trees with deterministic courtyard-margin planting.
@@ -314,26 +266,8 @@ nonisolated struct DioramaHotelGrounds {
     }
 
     private func pave(_ pieces: [[DV2]], swatch: DioramaSwatch = .tileClay, ground: inout DioramaMesh) {
-        // One disjoint terracotta surface. Pixel-filtered mortar lives in the material, not an
-        // almost-coplanar second mesh that shimmers or exposes triangulation seams.
-        for piece in pieces where piece.count >= 3 && DioramaPolygon.area(piece) > 0.0001 {
-            let bounds = DioramaRect.bounding(piece)
-            let uv = DioramaAtlas.uv(swatch, dark: false)
-            var y = bounds.minY
-            while y < bounds.maxY {
-                var x = bounds.minX
-                while x < bounds.maxX {
-                    let cell = DioramaRect(minX: x, minY: y, maxX: min(x + 4, bounds.maxX), maxY: min(y + 4, bounds.maxY))
-                    let clipped = DioramaPolygon.clipPolygon(piece, to: cell)
-                    let base = ground.positions.count
-                    for p in clipped { ground.vertex(DV3(p, terrain.height(p) + 0.11), .up, uv) }
-                    for t in DioramaPolygon.triangulate(clipped) {
-                        ground.tri(UInt32(base + t.0), UInt32(base + t.1), UInt32(base + t.2))
-                    }
-                    x += 4
-                }
-                y += 4
-            }
+        for piece in pieces {
+            terrain.drape(piece, lift: DioramaSurfaceLevel.paving.rawValue, swatch: swatch, into: &ground)
         }
     }
 
@@ -376,14 +310,15 @@ nonisolated struct DioramaHotelGrounds {
         }
         for i in 0..<3 {
             let dir = DV2(cos(Double(i) * .pi * 2 / 3), sin(Double(i) * .pi * 2 / 3)), c = p + dir * 0.95
-            props.box(centre: c, z0: z + 0.43, axis: dir, halfLength: 0.22, halfWidth: 0.23, height: 0.055, .doorWood)
+            let chairBase = terrain.foundationHeight(DioramaOrientedRect(centre: c, axis: dir, halfLength: 0.23, halfWidth: 0.23).corners) + 0.11
+            props.box(centre: c, z0: chairBase + 0.43, axis: dir, halfLength: 0.22, halfWidth: 0.23, height: 0.055, .doorWood)
             for s in [-1.0, 1.0] {
                 for t in [-1.0, 1.0] {
                     let leg = c + dir * (s * 0.18) + dir.left * (t * 0.18)
-                    props.tube(from: DV3(leg, z), to: DV3(leg, z + (s > 0 ? 0.9 : 0.43)), r0: 0.018, r1: 0.018, sides: 4, .metalCharcoal)
+                    props.tube(from: DV3(leg, terrain.height(leg) + 0.11), to: DV3(leg, chairBase + (s > 0 ? 0.9 : 0.43)), r0: 0.018, r1: 0.018, sides: 4, .metalCharcoal)
                 }
             }
-            props.box(centre: c + dir * 0.18, z0: z + 0.8, axis: dir.left, halfLength: 0.23, halfWidth: 0.025, height: 0.1, .metalCharcoal)
+            props.box(centre: c + dir * 0.18, z0: chairBase + 0.8, axis: dir.left, halfLength: 0.23, halfWidth: 0.025, height: 0.1, .metalCharcoal)
         }
     }
 
@@ -417,12 +352,12 @@ nonisolated struct DioramaHotelGrounds {
                 let after = (ring[(i + 1) % ring.count] - ring[i]).normalized.right
                 let normal = DV3((before + after).normalized, 0)
                 let top = terrain.height(ring[i]) + 0.2
-                ground.vertex(DV3(ring[i], -0.5), normal * -1, faceUV)
+                ground.vertex(DV3(ring[i], terrain.seabedLevel), normal * -1, faceUV)
                 ground.vertex(DV3(ring[i], top), normal * -1, faceUV)
                 ground.vertex(DV3(ring[i], top), .up, capUV)
                 ground.vertex(DV3(inner[i], top), .up, capUV)
                 ground.vertex(DV3(inner[i], top), normal, faceUV)
-                ground.vertex(DV3(inner[i], -0.5), normal, faceUV)
+                ground.vertex(DV3(inner[i], terrain.seabedLevel), normal, faceUV)
             }
             for i in ring.indices where !water.clipped[i] {
                 let j = (i + 1) % ring.count, mid = (ring[i] + ring[j]) * 0.5

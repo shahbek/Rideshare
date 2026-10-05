@@ -13,11 +13,8 @@ nonisolated struct DioramaGroundGenerator {
 
     let cutouts: DioramaGroundCutouts
 
-    /// Plate resolution (metres between grid vertices). Fine enough for a soft shoreline slope.
-    private let plateStep: Double = 8
-
     /// Lift of park lawns above the plate.
-    static let parkLift: Double = 0.025
+    static let parkLift: Double = DioramaSurfaceLevel.lawn.rawValue
 
     func generate(compounds: [DioramaCompound], into mesh: inout DioramaMesh, water waterMesh: inout DioramaMesh) {
         plate(into: &mesh)
@@ -37,19 +34,14 @@ nonisolated struct DioramaGroundGenerator {
         let waterRings = (data.water + data.landuse.filter { $0.kind == "pool" }).compactMap { $0.rings.first }
             + [DioramaHotelGrounds.stairOutline(data: data)]
         let land = DioramaGroundCutouts(polygons: waterRings)
-        mesh.polygon(corners, z: DioramaTerrain.seabed, .seabed)
-        let step = config.usesElevation ? plateStep : max(r.width, r.height)
-        for y in stride(from: r.minY, to: r.maxY, by: step) {
-            for x in stride(from: r.minX, to: r.maxX, by: step) {
-                let cell = [DV2(x, y), DV2(min(x + step, r.maxX), y),
-                            DV2(min(x + step, r.maxX), min(y + step, r.maxY)), DV2(x, min(y + step, r.maxY))]
+        mesh.polygon(corners, z: terrain.seabedLevel, .seabed)
+        let step = DioramaTerrain.surfaceStep
+        for y in stride(from: floor(r.minY / step) * step, to: r.maxY, by: step) {
+            for x in stride(from: floor(r.minX / step) * step, to: r.maxX, by: step) {
+                let cell = DioramaPolygon.clipPolygon([DV2(x, y), DV2(x + step, y),
+                    DV2(x + step, y + step), DV2(x, y + step)], to: r)
                 for piece in land.subtract(from: cell) {
-                    let base = mesh.positions.count
-                    let uv = DioramaAtlas.uv(.grass, dark: false)
-                    for p in piece { mesh.vertex(DV3(p, terrain.height(p)), .up, uv) }
-                    for t in DioramaPolygon.triangulate(piece) {
-                        mesh.tri(UInt32(base + t.0), UInt32(base + t.1), UInt32(base + t.2))
-                    }
+                    terrain.drape(piece, lift: 0, swatch: .grass, into: &mesh)
                 }
             }
         }
@@ -141,7 +133,7 @@ nonisolated struct DioramaGroundGenerator {
                     if piece.count >= 3 {
                         mesh.reserve(piece.count)
                         let base = mesh.positions.count
-                        for p in piece { mesh.vertex(DV3(p, DioramaTerrain.waterSurface), .up, uv, attribute: shoreDistance(p)) }
+                        for p in piece { mesh.vertex(DV3(p, terrain.waterLevel), .up, uv, attribute: shoreDistance(p)) }
                         for (a, b, c) in DioramaPolygon.triangulate(piece) {
                             mesh.tri(UInt32(base + a), UInt32(base + b), UInt32(base + c))
                         }
@@ -161,36 +153,9 @@ nonisolated struct DioramaGroundGenerator {
 
     /// Flat-coloured polygon whose vertices follow the terrain, subdivided so large plots bend with it.
     private func draped(_ ring: [DV2], lift: Double, _ s: DioramaSwatch, into mesh: inout DioramaMesh) {
-        let ccw = DioramaPolygon.counterClockwise(ring)
-        guard ccw.count >= 3 else { return }
-        let bounds = DioramaRect.bounding(ccw)
-        if max(bounds.width, bounds.height) < plateStep * 1.5 || !config.usesElevation {
-            polygonOnTerrain(ccw, lift: lift, s, into: &mesh)
-            return
-        }
-        var y = bounds.minY
-        while y < bounds.maxY {
-            var x = bounds.minX
-            while x < bounds.maxX {
-                let cell = DioramaRect(minX: x, minY: y, maxX: min(x + plateStep, bounds.maxX), maxY: min(y + plateStep, bounds.maxY))
-                let piece = DioramaPolygon.clipPolygon(ccw, to: cell)
-                if piece.count >= 3 { polygonOnTerrain(piece, lift: lift, s, into: &mesh) }
-                x += plateStep
-            }
-            y += plateStep
+        for piece in cutouts.subtract(from: ring) {
+            terrain.drape(piece, lift: lift, swatch: s, into: &mesh)
         }
     }
 
-    private func polygonOnTerrain(_ ring: [DV2], lift: Double, _ s: DioramaSwatch, into mesh: inout DioramaMesh) {
-        guard ring.count >= 3 else { return }
-        let uv = DioramaAtlas.uv(s, dark: false)
-        for piece in cutouts.subtract(from: ring) {
-            mesh.reserve(piece.count)
-            let base = mesh.positions.count
-            for p in piece { mesh.vertex(DV3(p, terrain.height(p) + lift), .up, uv) }
-            for (a, b, c) in DioramaPolygon.triangulate(piece) {
-                mesh.tri(UInt32(base + a), UInt32(base + b), UInt32(base + c))
-            }
-        }
-    }
 }
