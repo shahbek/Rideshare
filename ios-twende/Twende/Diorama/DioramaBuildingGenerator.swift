@@ -373,7 +373,6 @@ nonisolated struct DioramaBuildingGenerator {
         let depth = 1.4
         let top = z, lip = z - 0.5
         mesh.quad(DV3(l + out * 0.1, top), DV3(r + out * 0.1, top), DV3(r + out * depth, lip), DV3(l + out * depth, lip), color)
-        mesh.quad(DV3(l + out * 0.1, top), DV3(r + out * 0.1, top), DV3(r + out * depth, lip), DV3(l + out * depth, lip), color, dark: true, normal: DV3(0, 0, -1))
         mesh.quad(DV3(l + out * depth, lip), DV3(r + out * depth, lip), DV3(r + out * depth, lip - 0.22), DV3(l + out * depth, lip - 0.22), .trimWhite, normal: DV3(out, 0))
     }
 

@@ -402,7 +402,6 @@ nonisolated struct DioramaPropLibrary: Sendable {
             m.tube(from: DV3(0.95, y, 0), to: DV3(0.95, y, 2.1), r0: 0.06, r1: 0.06, sides: 4, .trunk, cap: false)
         }
         m.quad(DV3(-1.1, -1.5, 2.45), DV3(-1.1, 1.5, 2.45), DV3(1.25, 1.5, 2.05), DV3(1.25, -1.5, 2.05), canopy)
-        m.quad(DV3(-1.1, -1.5, 2.45), DV3(-1.1, 1.5, 2.45), DV3(1.25, 1.5, 2.05), DV3(1.25, -1.5, 2.05), canopy, dark: true, normal: DV3(0, 0, -1))
         m.quad(DV3(1.25, -1.5, 2.05), DV3(1.25, 1.5, 2.05), DV3(1.25, 1.5, 1.8), DV3(1.25, -1.5, 1.8), .trimWhite, normal: DV3(1, 0, 0))
         let goods: [DioramaSwatch] = [.signRed, .signGreen, .sunflower, .signBlue, .coral]
         for (k, g) in goods.enumerated() {
@@ -432,8 +431,7 @@ nonisolated struct DioramaPropLibrary: Sendable {
     private static func makeParasol(_ color: DioramaSwatch) -> DioramaMesh {
         var m = DioramaMesh()
         m.cylinder(centre: .zero, z0: 0, z1: 2.3, r0: 0.04, r1: 0.04, sides: 4, .trimWhite, cap: false)
-        m.tube(from: DV3(0, 0, 2.0), to: DV3(0, 0, 2.55), r0: 1.35, r1: 0.05, sides: 8, color)
-        m.tube(from: DV3(0, 0, 2.0), to: DV3(0, 0, 2.52), r0: 1.3, r1: 0.05, sides: 8, color, cap: false, dark: true)
+        m.tube(from: DV3(0, 0, 2.0), to: DV3(0, 0, 2.55), r0: 1.35, r1: 0.05, sides: 8, color, cap: false)
         m.cylinder(centre: .zero, z0: 0.68, z1: 0.74, r0: 0.5, r1: 0.5, sides: 8, .trimWhite)
         for a in [0.0, Double.pi] {
             let p = DV2(cos(a), sin(a)) * 0.85
@@ -448,7 +446,6 @@ nonisolated struct DioramaPropLibrary: Sendable {
         var m = DioramaMesh()
         m.box(centre: DV2(0, 0), z0: 0.3, halfLength: 0.9, halfWidth: 0.35, height: 0.1, .trimWhite, bevel: 0.03)
         m.quad(DV3(-0.9, -0.33, 0.4), DV3(-0.9, 0.33, 0.4), DV3(-0.45, 0.33, 0.95), DV3(-0.45, -0.33, 0.95), .skyBlue)
-        m.quad(DV3(-0.45, -0.33, 0.95), DV3(-0.45, 0.33, 0.95), DV3(-0.9, 0.33, 0.4), DV3(-0.9, -0.33, 0.4), .skyBlue, dark: true)
         for x in [-0.7, 0.7] {
             for y in [-0.3, 0.3] { m.box(centre: DV2(x, y), z0: 0, halfLength: 0.03, halfWidth: 0.03, height: 0.3, .trimWhite) }
         }

@@ -316,7 +316,16 @@ nonisolated enum DioramaPolygon {
             for k in 0..<m {
                 let i0 = indices[(k + m - 1) % m], i1 = indices[k], i2 = indices[(k + 1) % m]
                 let a = ring[i0], b = ring[i1], c = ring[i2]
-                guard (b - a).cross(c - b) > 1e-9 else { continue }
+                let turn = (b - a).cross(c - b)
+                // Clipping an ear can make its neighbours collinear. Clean again here, otherwise
+                // a valid roof/deck can lose its entire surface when only a flat remainder is left.
+                if a.distance(to: b) < 0.00001 ||
+                    (abs(turn) < 0.0000001 && (b - a).dot(c - b) >= 0) {
+                    indices.remove(at: k)
+                    clipped = true
+                    break
+                }
+                guard turn > 1e-9 else { continue }
                 var containsOther = false
                 for idx in indices where idx != i0 && idx != i1 && idx != i2 {
                     let p = ring[idx]
@@ -334,7 +343,8 @@ nonisolated enum DioramaPolygon {
             if !clipped { break }
         }
         if indices.count == 3 {
-            result.append((indices[0], indices[1], indices[2]))
+            let a = ring[indices[0]], b = ring[indices[1]], c = ring[indices[2]]
+            if abs((b - a).cross(c - a)) > 1e-9 { result.append((indices[0], indices[1], indices[2])) }
         } else if indices.count > 3 {
             // Reject the whole invalid surface rather than drawing a plausible-looking partial lid.
             return []

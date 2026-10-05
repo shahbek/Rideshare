@@ -7,7 +7,11 @@ nonisolated struct DioramaGroundCutouts: Sendable {
 
     init(data: DioramaTileData, pavementWidth: Double, streetPolygons: [[DV2]]? = nil, additionalMasks: [[DV2]] = [], excludedAreaIDs: Set<UInt64> = []) {
         var polygons: [[DV2]] = data.buildings.map(\.ring) + additionalMasks
-        polygons += data.landuse.filter { ["pool", "pitch", "parking", "fuel", "terrace"].contains($0.kind) && !excludedAreaIDs.contains($0.id) }.compactMap { $0.rings.first }
+        polygons += data.landuse.filter { ["pool", "pitch", "parking", "fuel", "terrace"].contains($0.kind) && !excludedAreaIDs.contains($0.id) }.compactMap { area in
+            guard let ring = area.rings.first else { return nil }
+            // Reserve the whole coping/deck, not only the water opening.
+            return area.kind == "pool" ? (DioramaPolygon.offset(ring, by: area.sport == "private" ? 1.1 : 2.2) ?? ring) : ring
+        }
         var convex: [[DV2]] = []
         for polygon in polygons {
             let ring = DioramaPolygon.counterClockwise(polygon)

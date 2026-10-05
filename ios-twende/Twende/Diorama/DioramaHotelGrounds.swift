@@ -10,38 +10,11 @@ nonisolated struct DioramaHotelGrounds {
     let roads: DioramaRoadIndex
     let streetPolygons: [[DV2]]
 
-    /// Inferred site envelope, not a new surveyed OSM boundary. Buildings determine its outer limits.
+    /// Keep the court local to its mapped outline. A convex hull of the entire complex filled
+    /// unrelated forecourts and the waterfront, and also suppressed their independent amenities.
     static func courtyardOutline(data: DioramaTileData) -> [DV2] {
-        let siteIDs: Set<UInt64> = [DioramaHotelGenerator.waterfront, DioramaHotelGenerator.gallery,
-                                  DioramaHotelGenerator.yellowBlock, DioramaHotelGenerator.arcade,
-                                  142_262_992, 180_607_949, 688_369_154]
-        var points = data.buildings.filter { siteIDs.contains($0.id) }.flatMap(\.ring)
-        points += data.landuse.filter { $0.id == courtyardID }.flatMap { $0.rings.first ?? [] }
-        // Include the seafront lunch terrace and the hotel approach, then clip occupied ground.
-        for water in data.water {
-            guard let coast = water.rings.first else { continue }
-            for i in coast.indices where !water.clipped[i] {
-                let p = coast[i]
-                let location = data.projection.local(longitude: 39.272, latitude: -6.7525)
-                if abs(p.y - location.y) < 57 && abs(p.x - location.x) < 48 { points.append(p) }
-            }
-        }
-        let sorted = points.sorted { $0.x == $1.x ? $0.y < $1.y : $0.x < $1.x }
-        guard sorted.count >= 3 else { return [] }
-        func chain(_ points: [DV2]) -> [DV2] {
-            var result: [DV2] = []
-            for p in points {
-                while result.count >= 2 {
-                    let a = result[result.count - 2], b = result[result.count - 1]
-                    if (b - a).cross(p - b) > 0.000001 { break }
-                    result.removeLast()
-                }
-                result.append(p)
-            }
-            return result
-        }
-        let hull = Array(chain(sorted).dropLast()) + Array(chain(Array(sorted.reversed())).dropLast())
-        return DioramaPolygon.offset(hull, by: 5) ?? hull
+        guard let ring = data.landuse.first(where: { $0.id == courtyardID })?.rings.first else { return [] }
+        return DioramaPolygon.offset(ring, by: 1.2) ?? ring
     }
 
     static func ownsCourtyard(_ p: DV2, data: DioramaTileData, margin: Double = 0) -> Bool {
@@ -64,8 +37,7 @@ nonisolated struct DioramaHotelGrounds {
                            vegetation: inout DioramaMesh, glow: inout DioramaMesh, lights: inout [DioramaLight]) {
         let box = DioramaPolygon.minimumAreaRectangle(ring), z = terrain.height(box.centre) + 0.11
         let cutouts = DioramaGroundCutouts(data: data, pavementWidth: 1.7, streetPolygons: streetPolygons,
-                                           additionalMasks: data.water.compactMap { $0.rings.first },
-                                           excludedAreaIDs: Self.managedTerraces(data: data))
+                                           additionalMasks: data.water.compactMap { $0.rings.first })
         let pieces = cutouts.subtract(from: pavingRing)
         pave(pieces, z: z, ground: &ground)
         for t in stride(from: -box.halfLength + 1, to: box.halfLength - 1, by: 0.65) {
@@ -164,10 +136,6 @@ nonisolated struct DioramaHotelGrounds {
         }
     }
 
-    static func managedTerraces(data: DioramaTileData) -> Set<UInt64> {
-        Set(data.landuse.filter { $0.kind == "terrace" && ($0.rings.first.map { ownsCourtyard(DioramaPolygon.centroid($0), data: data) } ?? false) }.map(\.id))
-    }
-
     private func flowerPlanter(at p: DV2, z: Double, props: inout DioramaMesh, vegetation: inout DioramaMesh) {
         props.cylinder(centre: p, z0: z, z1: z + 0.62, r0: 0.38, r1: 0.52, sides: 12, .terracottaWall)
         props.cylinder(centre: p, z0: z + 0.62, z1: z + 0.69, r0: 0.56, r1: 0.56, sides: 12, .tileClay)
@@ -177,7 +145,7 @@ nonisolated struct DioramaHotelGrounds {
     private func clear(_ p: DV2, radius: Double) -> Bool {
         guard !roads.isOnRoad(p, margin: radius),
               !data.buildings.contains(where: { DioramaPolygon.contains($0.ring, p) || DioramaPolygon.distanceToRing($0.ring, p) < radius }) else { return false }
-        let occupied = data.water + data.landuse.filter { ["pool", "pitch", "parking", "fuel"].contains($0.kind) || ($0.kind == "terrace" && !Self.managedTerraces(data: data).contains($0.id)) }
+        let occupied = data.water + data.landuse.filter { ["pool", "pitch", "parking", "fuel", "terrace"].contains($0.kind) }
         return !occupied.contains { area in
             DioramaPolygon.contains(polygon: area.rings, p) ||
             (area.rings.first.map { DioramaPolygon.distanceToRing($0, p) < radius } ?? false)

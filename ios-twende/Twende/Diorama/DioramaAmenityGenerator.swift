@@ -25,20 +25,19 @@ nonisolated struct DioramaAmenityGenerator {
     }
 
     func generate(ground: inout DioramaMesh, props: inout DioramaMesh, glow: inout DioramaMesh, lights: inout [DioramaLight]) {
-        let managedTerraces = DioramaHotelGrounds.managedTerraces(data: data)
-        let elevatedPoolID = DioramaSlipwayPavilion.pool(in: data)?.id
+        // Every mapped terrace and pool owns its surface and furniture. Courtyard paving clips
+        // around them; it must never disable an entire amenity based on its centroid.
         for area in data.landuse {
-            guard !managedTerraces.contains(area.id), area.id != elevatedPoolID else { continue }
             guard let outer = area.rings.first else { continue }
             let ring = DioramaPolygon.clipPolygon(outer, to: data.rect.expanded(by: -0.3))
-            guard ring.count >= 3, DioramaPolygon.area(ring) > 15 else { continue }
+            guard ring.count >= 3, DioramaPolygon.area(ring) > (area.kind == "pool" ? 3 : 15) else { continue }
             var rng = DioramaRandom(seed: area.id, salt: 51)
             switch area.kind {
             case "pitch": court(ring, sport: area.sport, rng: &rng, ground: &ground, props: &props)
             case "parking": carPark(ring, rng: &rng, ground: &ground, props: &props)
             case "fuel": fuelStation(ring, rng: &rng, ground: &ground, props: &props, glow: &glow, lights: &lights)
-            case "pool": pool(ring, isPrivate: area.sport == "private", rng: &rng, ground: &ground, props: &props)
-            case "terrace": terrace(ring, rng: &rng, ground: &ground, props: &props, glow: &glow, lights: &lights)
+            case "pool": pool(ring, areaID: area.id, isPrivate: area.sport == "private", rng: &rng, ground: &ground, props: &props)
+            case "terrace": terrace(ring, areaID: area.id, rng: &rng, ground: &ground, props: &props, glow: &glow, lights: &lights)
             default: break
             }
         }
@@ -99,7 +98,6 @@ nonisolated struct DioramaAmenityGenerator {
             }
             let n0 = inner.centre - c * (W - 0.2), n1 = inner.centre + c * (W - 0.2)
             props.quad(DV3(n0, top + 0.05), DV3(n1, top + 0.05), DV3(n1, top + 0.9), DV3(n0, top + 0.9), .metalCharcoal, normal: DV3(a, 0))
-            props.quad(DV3(n0, top + 0.05), DV3(n1, top + 0.05), DV3(n1, top + 0.9), DV3(n0, top + 0.9), .metalCharcoal, normal: DV3(-a, 0))
             props.box(centre: inner.centre, z0: top + 0.88, axis: c, halfLength: W - 0.2, halfWidth: 0.02, height: 0.06, .trimWhite)
             // Glass back walls (3 m) and mesh side fences (4 m posts).
             let glassH = 3.0
@@ -107,7 +105,6 @@ nonisolated struct DioramaAmenityGenerator {
                 let e0 = inner.centre + a * (s * L) - c * W, e1 = inner.centre + a * (s * L) + c * W
                 let out = (s > 0 ? a : -a)
                 props.quad(DV3(e0, top), DV3(e1, top), DV3(e1, top + glassH), DV3(e0, top + glassH), .glassPale, normal: DV3(out, 0))
-                props.quad(DV3(e0, top), DV3(e1, top), DV3(e1, top + glassH), DV3(e0, top + glassH), .glassPale, dark: true, normal: DV3(-out, 0))
                 props.box(centre: (e0 + e1) * 0.5, z0: top + glassH - 0.05, axis: c, halfLength: W, halfWidth: 0.05, height: 0.1, .metalCharcoal)
                 // Glass returns 2 m along each side.
                 for t in [-1.0, 1.0] {
@@ -271,20 +268,20 @@ nonisolated struct DioramaAmenityGenerator {
     /// Swimming pool: pale coping deck, a tiled basin and turquoise water (the shader adds the caustic
     /// shimmer). Hotel pools get rows of loungers and parasols; the small private garden pools surveyed
     /// from satellite imagery get a narrow deck and a lounger or two.
-    private func pool(_ ring: [DV2], isPrivate: Bool, rng: inout DioramaRandom, ground: inout DioramaMesh, props: inout DioramaMesh) {
+    private func pool(_ ring: [DV2], areaID: UInt64, isPrivate: Bool, rng: inout DioramaRandom, ground: inout DioramaMesh, props: inout DioramaMesh) {
         let base = z(DioramaPolygon.centroid(ring))
         let deckWidth = isPrivate ? 1.1 : 2.2
         let deck = DioramaPolygon.offset(ring, by: deckWidth) ?? ring
         let deckTop = base + 0.12
-        ground.extrude(deck, z0: base - 0.2, z1: deckTop, .poolCoping)
-        // Annular deck, never a solid lid across the water.
-        if deck.count == ring.count {
-            for i in ring.indices {
-                let j = (i + 1) % ring.count
-                ground.quad(DV3(ring[i], deckTop), DV3(ring[j], deckTop),
-                            DV3(deck[j], deckTop), DV3(deck[i], deckTop), .poolCoping, normal: .up)
-            }
+        let excluded = Set(data.landuse.filter { $0.kind == "terrace" || $0.id == areaID }.map(\.id))
+        let cutouts = DioramaGroundCutouts(data: data, pavementWidth: config.pavementWidth,
+                                           additionalMasks: [ring], excludedAreaIDs: excluded)
+        let deckPieces = cutouts.subtract(from: deck)
+        // Boolean annulus, clipped to neighbours and roads; no assumed offset-vertex correspondence.
+        for piece in deckPieces {
+            ground.polygon(piece, z: deckTop, .poolCoping)
         }
+        func onDeck(_ p: DV2) -> Bool { deckPieces.contains { DioramaPolygon.contains($0, p) } }
         // Basin walls in pale tile, the floor a step lower, then the water sheet just under the coping.
         ground.extrude(ring, z0: base - 0.5, z1: deckTop + 0.01, .skyBlue, top: nil)
         ground.polygon(ring, z: base - 0.5, .skyBlue)
@@ -311,7 +308,7 @@ nonisolated struct DioramaAmenityGenerator {
             for s in [-1.0, 1.0] where placed < 2 {
                 let p = box.centre + box.across * (s * (box.halfWidth + 0.7)) + box.axis * rng.range(-0.6...0.6)
                 let clear = DioramaPolygon.distanceToRing(ring, p) > 0.45 && !DioramaPolygon.contains(ring, p)
-                guard clear, !buildings.contains(where: { $0.box.expanded(by: 0.3).contains(p) }), !roads.isOnCarriageway(p, margin: 0.5) else { continue }
+                guard clear, onDeck(p), !buildings.contains(where: { $0.box.expanded(by: 0.3).contains(p) }), !roads.isOnCarriageway(p, margin: 0.5) else { continue }
                 props.append(library.lounger, DioramaTransform(rotation: (box.across * -s).angle, scale: DV3(0.85, 0.85, 0.85), translation: DV3(p, deckTop)))
                 placed += 1
             }
@@ -323,12 +320,12 @@ nonisolated struct DioramaAmenityGenerator {
         while u <= box.halfLength - 1.0 {
             for s in [-1.0, 1.0] {
                 let p = box.centre + box.axis * u + box.across * (s * (box.halfWidth + 1.3))
-                guard DioramaPolygon.contains(deck, p), !DioramaPolygon.contains(ring, p) else { continue }
+                guard onDeck(p), !DioramaPolygon.contains(ring, p) else { continue }
                 guard !buildings.contains(where: { $0.box.expanded(by: 0.3).contains(p) }) else { continue }
                 props.append(library.lounger, DioramaTransform(rotation: (box.across * -s).angle, translation: DV3(p, deckTop)))
                 if rng.chance(0.4) {
                     let q = p + box.axis * 1.1
-                    if DioramaPolygon.contains(deck, q), !DioramaPolygon.contains(ring, q) {
+                    if onDeck(q), !DioramaPolygon.contains(ring, q) {
                         props.append(rng.pick(library.parasol), DioramaTransform(rotation: rng.range(0...6.28), scale: DV3(0.8, 0.8, 0.8), translation: DV3(q, deckTop)))
                     }
                 }
@@ -337,19 +334,22 @@ nonisolated struct DioramaAmenityGenerator {
         }
     }
 
-    private func terrace(_ ring: [DV2], rng: inout DioramaRandom, ground: inout DioramaMesh, props: inout DioramaMesh, glow: inout DioramaMesh, lights: inout [DioramaLight]) {
+    private func terrace(_ ring: [DV2], areaID: UInt64, rng: inout DioramaRandom, ground: inout DioramaMesh, props: inout DioramaMesh, glow: inout DioramaMesh, lights: inout [DioramaLight]) {
         let base = z(DioramaPolygon.centroid(ring))
         let top = base + 0.35
-        ground.extrude(ring, z0: base - 0.4, z1: top, .pierWood, top: .deckWood)
-        // Plank lines across the deck.
-        let box = DioramaPolygon.minimumAreaRectangle(ring)
-        var u = -box.halfLength
-        while u < box.halfLength {
-            let p0 = box.centre + box.axis * u - box.across * box.halfWidth, p1 = box.centre + box.axis * u + box.across * box.halfWidth
-            let n = box.axis * 0.025
-            ground.quad(DV3(p0 - n, top + 0.005), DV3(p1 - n, top + 0.005), DV3(p1 + n, top + 0.005), DV3(p0 + n, top + 0.005), .pierWood, normal: .up)
-            u += 0.9
+        let cutouts = DioramaGroundCutouts(data: data, pavementWidth: config.pavementWidth, excludedAreaIDs: [areaID])
+        let pieces = cutouts.subtract(from: ring)
+        for piece in pieces { ground.polygon(piece, z: top, .deckWood) }
+        func onDeck(_ p: DV2) -> Bool { pieces.contains { DioramaPolygon.contains($0, p) } }
+        for i in ring.indices {
+            let a = ring[i], b = ring[(i + 1) % ring.count]
+            if !buildings.contains(where: { DioramaPolygon.contains($0.feature.ring, (a + b) * 0.5) }) {
+                ground.wall(a, b, z0: base - 0.4, z1: top, .pierWood)
+            }
         }
+        // No bounding-box plank overlays: they extended beyond concave deck edges and fought
+        // the deck surface at oblique angles. Keep a single clean timber surface.
+        let box = DioramaPolygon.minimumAreaRectangle(ring)
         // Balustrade on the edges facing water or open ground.
         let n = ring.count
         for i in 0..<n {
@@ -373,7 +373,8 @@ nonisolated struct DioramaAmenityGenerator {
             var x = -box.halfLength + 1.8 + Double(k % 2) * 1.6
             while x < box.halfLength - 1.2 {
                 let p = box.centre + box.axis * x + box.across * y
-                if DioramaPolygon.contains(ring, p), DioramaPolygon.distanceToRing(ring, p) > 1.3, !buildings.contains(where: { $0.box.expanded(by: 1.2).contains(p) }) {
+                let footprint = DioramaOrientedRect(centre: p, axis: box.axis, halfLength: 1.4, halfWidth: 1.4)
+                if onDeck(p), footprint.corners.allSatisfy(onDeck), DioramaPolygon.distanceToRing(ring, p) > 1.4, !buildings.contains(where: { $0.box.expanded(by: 1.4).contains(p) }) {
                     props.append(rng.pick(library.parasol), DioramaTransform(rotation: rng.range(0...6.28), translation: DV3(p, top)))
                 }
                 x += 3.4
