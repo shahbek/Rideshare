@@ -56,6 +56,22 @@ nonisolated struct DioramaMosqueGenerator {
             minaret(p, z: 0, height: h + max(9, radius * 2.4), radius: towerRadius, into: &mesh)
             placed += 1
         }
+        if placed == 0 {
+            // Concave plans need an interior search: a bounding-box corner can lie outside the hall.
+            let bounds = DioramaRect.bounding(ring)
+            var candidates = [centre]
+            candidates += DioramaPolygon.triangulate(ring).map { a, b, c in (ring[a] + ring[b] + ring[c]) * (1.0 / 3.0) }
+            for y in 1..<20 { for x in 1..<20 {
+                candidates.append(DV2(bounds.minX + bounds.width * Double(x) / 20,
+                                      bounds.minY + bounds.height * Double(y) / 20))
+            } }
+            if let p = candidates.max(by: { clearance($0) < clearance($1) }) {
+                let fittedRadius = min(towerRadius, clearance(p) / 1.6)
+                if fittedRadius > 0.01 {
+                    minaret(p, z: 0, height: h + max(9, radius * 2.4), radius: fittedRadius, into: &mesh)
+                }
+            }
+        }
         // Quiet repeated arched windows, in the same warm white / smoky-glass palette.
         for i in ring.indices where !flags[i] {
             let a = ring[i], b = ring[(i + 1) % ring.count]

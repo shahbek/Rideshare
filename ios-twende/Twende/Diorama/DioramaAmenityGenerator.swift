@@ -429,11 +429,7 @@ nonisolated struct DioramaAmenityGenerator {
     /// Wooden pier on piles over the bay with a railing.
     private func pier(_ line: [DV2], props: inout DioramaMesh) {
         guard line.count >= 2 else { return }
-        let endpoints = [line[0], line[line.count - 1]]
-        let dry = DioramaPolygon.densify(line, maxStep: 1).filter { !isWater($0) }
-        let dryTop = dry.map { terrain.height($0) + 0.18 }.max() ?? terrain.pierLevel
-        let deck = max(connectedBuildingLevel(near: endpoints, within: 30) ?? terrain.pierLevel,
-                       max(dryTop, terrain.pierLevel))
+        let deck = terrain.pierHeight(line)
         let half = 1.8
         // Orient from shore to sea regardless of the source way's ordering.
         let shoreFirst = terrain.height(line[0]) >= terrain.height(line[line.count - 1])

@@ -120,7 +120,7 @@ nonisolated struct DioramaBuildingOverride: Sendable {
 /// One place to tune the whole look without touching generation code.
 nonisolated struct DioramaConfig: Sendable {
     /// Bump to invalidate every cached tile.
-    var generatorVersion: Int = 28
+    var generatorVersion: Int = 29
     /// Drape the plate/ground overlays over the bundled height snapshot used by roads and foundations.
     var usesElevation: Bool = true
     /// Vertical scale of the bundled snapshot (1 = real metres). The basemap's own terrain is switched
@@ -247,6 +247,8 @@ nonisolated struct DioramaConfig: Sendable {
     // MARK: Shoreline (metres, illustrative mid-tide datum, not a tidal prediction)
     /// The sea surface is the flat basemap plane, so the bay continues seamlessly past the tile edge.
     var waterLevel: Double = 0
+    /// Low-tide offset affects water/boats, never drags the beach or docks down with it.
+    var tideOffset: Double = -0.35
     var beachWidth: Double = 12
     var beachSlope: Double = 0.12
     var seawallHeight: Double = 2.4

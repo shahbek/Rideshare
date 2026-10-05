@@ -499,10 +499,9 @@ extension TripMapView {
                 dioramaFly = state.cameraFlyRequest
                 dioramaRegenerate = state.regenerateRequest
             } else if !state.isEnabled, let manager = diorama {
-                manager.remove()
-                diorama = nil
-                dioramaOwnsGround = false
-                applyTerrain()
+                // Retain the manager until its reverse reveal has restored the basemap.
+                // View dismantling still calls removeDiorama() for immediate resource cleanup.
+                manager.scheduleUpdate(delay: 0)
             }
             guard let diorama else { return }
             if state.regenerateRequest != dioramaRegenerate {

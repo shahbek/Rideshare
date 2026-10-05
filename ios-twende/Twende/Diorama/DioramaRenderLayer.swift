@@ -71,6 +71,9 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
     private var reducedEffects: Bool = false
     private var depthState: MTLDepthStencilState?
     private var noWriteDepthState: MTLDepthStencilState?
+    private var seabedDepthPipeline: MTLRenderPipelineState?
+    private var seabedDepthState: MTLDepthStencilState?
+    private var seabedMask: DioramaSeabedMask?
     private var blankReflection: MTLTexture?
     private var shadowMap: DioramaShadowMap?
     private var postProcess: DioramaPostProcess?
@@ -182,6 +185,15 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
             postProcess = DioramaPostProcess(device: metalDevice, library: library, colorFormat: colorFormat, depthFormat: depthFormat)
             depthState = metalDevice.makeDepthStencilState(descriptor: depth)
             noWriteDepthState = metalDevice.makeDepthStencilState(descriptor: noWrite)
+            let floorDescriptor = descriptor(color: colorFormat, depth: depthFormat, stencil: true)
+            floorDescriptor.fragmentFunction = library.makeFunction(name: "dioramaSeabedDepth")
+            floorDescriptor.colorAttachments[0].writeMask = []
+            seabedDepthPipeline = try metalDevice.makeRenderPipelineState(descriptor: floorDescriptor)
+            let floorDepth = MTLDepthStencilDescriptor()
+            floorDepth.depthCompareFunction = .always
+            floorDepth.isDepthWriteEnabled = true
+            seabedDepthState = metalDevice.makeDepthStencilState(descriptor: floorDepth)
+            seabedMask = DioramaSeabedMask(device: metalDevice, library: library, depthFormat: depthFormat)
 
             func upload<T>(_ items: [T], fallback: T) -> MTLBuffer? {
                 // Metal rejects zero-length buffers, so always upload at least one slot.
@@ -340,6 +352,8 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
         }
         if aoStrength > 0, postProcess?.occlusion == nil { uniforms.post.x = 0 }
 
+        let viewport = MTLViewport(originX: 0, originY: 0, width: Double(texture.width), height: Double(texture.height), znear: Double(parameters.depthRange.min), zfar: Double(parameters.depthRange.max))
+        let floorMask = wireframe ? nil : seabedMask?.draw(command: mtlCommandBuffer, native: mtlRenderPassDescriptor, vertices: vertexBuffer, indices: indexBuffer, ranges: mainRanges, matrix: matrix, uniforms: uniforms, viewport: viewport)
         guard let encoder = mtlCommandBuffer.makeRenderCommandEncoder(descriptor: mtlRenderPassDescriptor) else { return }
         encoder.label = "Zuri diorama"
         encoder.setViewport(MTLViewport(originX: 0, originY: 0, width: Double(texture.width), height: Double(texture.height), znear: Double(parameters.depthRange.min), zfar: Double(parameters.depthRange.max)))
@@ -369,6 +383,16 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
             if wanted != cullMode { encoder.setCullMode(wanted); cullMode = wanted }
         }
         let opaqueRanges = mainRanges.filter { $0.category != .water && $0.category != .propGlow }
+        if !wireframe, let floorMask, let seabedDepthPipeline, let seabedDepthState {
+            encoder.setFragmentTexture(floorMask, index: 4)
+            encoder.setRenderPipelineState(seabedDepthPipeline)
+            encoder.setDepthStencilState(seabedDepthState)
+            for range in mainRanges where range.category == .ground {
+                cull(range.doubleSided)
+                encoder.drawIndexedPrimitives(type: .triangle, indexCount: range.count, indexType: .uint32, indexBuffer: indexBuffer, indexBufferOffset: range.start * MemoryLayout<UInt32>.stride)
+            }
+            encoder.setRenderPipelineState(pipeline)
+        }
         encoder.setDepthStencilState(depthState)
         for range in opaqueRanges {
             cull(range.doubleSided)
@@ -422,6 +446,9 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
         waterPipeline = nil
         depthState = nil
         noWriteDepthState = nil
+        seabedDepthPipeline = nil
+        seabedDepthState = nil
+        seabedMask = nil
         vertexBuffer = nil
         indexBuffer = nil
         instanceBuffer = nil

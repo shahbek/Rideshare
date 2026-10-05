@@ -352,7 +352,7 @@ nonisolated enum DioramaTileGenerator {
             parts: parts, lights: lights, lightGrid: lightGrid,
             waterHeight: terrain.waterLevel, shorelineReport: DioramaShoreline.report(data.shorelines), generationSeconds: Date().timeIntervalSince(started),
             groundImage: image,
-            buildingLabels: built.map { DioramaBuildingLabel.make($0, terrain: terrain, config: config) }
+            buildingLabels: DioramaBuildingLabel.all(buildings: built, data: data, terrain: terrain, config: config)
         )
         cacheLock.lock()
         cache[cacheKey(data.tile, config: config, reduced: reduced)] = artifacts

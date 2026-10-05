@@ -145,6 +145,8 @@ nonisolated enum DioramaShaderSource {
         return max(delta.x, delta.y) - u.reveal.z;
     }
     void dioramaRevealClip(float3 p, constant DioramaUniforms &u) {
+        float2 tileUV = (p.xy - u.groundImage.xy) * u.groundImage.zw;
+        if (any(tileUV < float2(0.0)) || any(tileUV > float2(1.0))) discard_fragment();
         if (u.reveal.w > 0.5 && dioramaRevealDistance(p, u) > 0.0) discard_fragment();
     }
 
@@ -305,6 +307,20 @@ nonisolated enum DioramaShaderSource {
         return sum;
     }
 
+    // Replace only the native flat floor's depth under our below-datum seabed. All scene
+    // geometry and water subsequently use normal shared-depth testing, not always-on-top drawing.
+    fragment float4 dioramaSeabedMask(DioramaVarying in [[stage_in]], constant DioramaUniforms &u [[buffer(0)]]) {
+        dioramaRevealClip(in.worldPosition, u);
+        if (in.appearance.y < 8.5 || in.appearance.y > 9.5 || in.worldPosition.z >= 0.0) discard_fragment();
+        return float4(1.0);
+    }
+    fragment float4 dioramaSeabedDepth(DioramaVarying in [[stage_in]], constant DioramaUniforms &u [[buffer(0)]], texture2d<float, access::read> floorMask [[texture(4)]]) {
+        dioramaRevealClip(in.worldPosition, u);
+        if (in.appearance.y < 8.5 || in.appearance.y > 9.5 || in.worldPosition.z >= 0.0) discard_fragment();
+        if (floorMask.read(uint2(in.position.xy)).r < 0.5) discard_fragment();
+        return float4(0.0);
+    }
+
     fragment float4 dioramaFragment(DioramaVarying in [[stage_in]],
                                     bool isFront [[front_facing]],
                                     constant DioramaUniforms &u [[buffer(0)]],
@@ -322,9 +338,13 @@ nonisolated enum DioramaShaderSource {
 
         if (u.reveal.w > 0.5) {
             float edge = -dioramaRevealDistance(in.worldPosition, u);
-            if (edge < 1.4) {
-                float heat = 1.0 - smoothstep(0.0, 1.4, edge);
-                return float4(mix(in.color.rgb * 0.55, float3(1.0, 0.84, 0.52), heat), 1.0);
+            if (edge < 2.1) {
+                float grain = 0.5 + 0.5 * sin(in.worldPosition.x * 9.1 + sin(in.worldPosition.y * 11.7));
+                float rim = 1.0 - smoothstep(0.0, 0.4 + grain * 0.18, edge);
+                float scorch = (1.0 - smoothstep(0.25, 2.1, edge)) * (1.0 - rim);
+                float3 metal = mix(float3(0.45, 0.49, 0.52), float3(1.0, 0.84, 0.52), grain * 0.35 + 0.5);
+                float3 burned = mix(in.color.rgb, float3(0.15, 0.08, 0.04), scorch * 0.65);
+                return float4(mix(burned, metal * 1.15 + float3(0.28, 0.07, 0.01), rim), 1.0);
             }
         }
         // Reflection pass: only what is above the water surface reflects; never the water itself.
