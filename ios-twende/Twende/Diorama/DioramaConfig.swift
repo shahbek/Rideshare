@@ -6,6 +6,7 @@ nonisolated enum DioramaSwatch: Int, CaseIterable, Sendable {
     // Plaster walls
     case whitewash, cream, ochre, sunflower, coral, skyBlue, mint, terracottaWall
     case brick, sage, dustyRose, slateWall, paleYellow, slipwayBlue
+    case hotelTeal, deltaStone, muralBlue, tileClay, coralStone
     // Roofs
     case roofTeal, roofRust, roofSlate, roofGreen, roofTerracotta, roofConcrete
     // Trim, caps and openings
@@ -36,6 +37,8 @@ nonisolated enum DioramaSwatch: Int, CaseIterable, Sendable {
         .whitewash: 0xF4EFE7, .cream: 0xF1E2C4, .ochre: 0xD8A46A, .sunflower: 0xF0C46A,
         .coral: 0xE8A08C, .skyBlue: 0x9FC4DD, .mint: 0xA9D4BC, .terracottaWall: 0xB9674C,
         .brick: 0xB4624A, .sage: 0xB9C7A6, .dustyRose: 0xE2B4A6, .slateWall: 0x8E9BB3, .paleYellow: 0xF2DDA4, .slipwayBlue: 0x8DBFD6,
+        .hotelTeal: 0x418D98, .deltaStone: 0xB7B6AC, .muralBlue: 0x216391,
+        .tileClay: 0xB88770, .coralStone: 0xB6A485,
         .roofTeal: 0x3A7F8C, .roofRust: 0xA9472E, .roofSlate: 0x4A5E8E, .roofGreen: 0x3F7D4A,
         .roofTerracotta: 0xC0603C, .roofConcrete: 0xC9C2B6,
         .trimWhite: 0xFAF7F0, .capTerracotta: 0xB5573A, .capCharcoal: 0x3B3A3D, .glass: 0x2C3440,
@@ -102,8 +105,8 @@ nonisolated struct DioramaLight: Sendable {
     var intensity: Float
 }
 
-/// Hand-tuned look for a landmark building whose real colours matter (the blue Slipway Hotel, the
-/// terracotta-roofed DoubleTree). Keyed by OSM way id.
+/// Hand-tuned materials for secondary mapped buildings. Bespoke hotels bypass these generic rules.
+/// Keyed by OSM way id.
 nonisolated struct DioramaBuildingOverride: Sendable {
     var wallColor: DioramaSwatch? = nil
     var roofColor: DioramaSwatch? = nil
@@ -114,7 +117,7 @@ nonisolated struct DioramaBuildingOverride: Sendable {
 /// One place to tune the whole look without touching generation code.
 nonisolated struct DioramaConfig: Sendable {
     /// Bump to invalidate every cached tile.
-    var generatorVersion: Int = 9
+    var generatorVersion: Int = 10
     /// When false the diorama sits on a flat plate at the basemap's ground level (Mapbox Standard has no
     /// terrain at this zoom, so a lumpy plate would float off the streets around it).
     var usesElevation: Bool = false
@@ -158,11 +161,10 @@ nonisolated struct DioramaConfig: Sendable {
     /// Dar roofs are mostly terracotta tile and rust-red or green corrugated iron, so most pitched roofs
     /// are warm.
     var terracottaRoofShare: Double = 0.45
-    /// Landmarks matched to the real Slipway: the pale blue Slipway Hotel with white bands, the DoubleTree
-    /// (cream, terracotta hip roof), its green-roofed convention block, the rust tin Waterfront bar.
+    /// Secondary complex blocks only. The two hotels and courtyard galleries bypass this generic
+    /// palette override entirely through DioramaHotelGenerator.
     var buildingOverrides: [UInt64: DioramaBuildingOverride] = [
-        688_368_950: DioramaBuildingOverride(wallColor: .slipwayBlue, roofColor: .roofConcrete, flatRoof: true),
-        142_262_988: DioramaBuildingOverride(wallColor: .cream, roofColor: .roofTerracotta, flatRoof: false),
+        688_368_950: DioramaBuildingOverride(wallColor: .paleYellow, roofColor: .roofConcrete, flatRoof: true),
         142_262_992: DioramaBuildingOverride(wallColor: .whitewash, roofColor: .roofGreen, flatRoof: false),
         688_369_154: DioramaBuildingOverride(wallColor: .whitewash, roofColor: .roofRust, flatRoof: false),
         180_607_949: DioramaBuildingOverride(wallColor: .cream, roofColor: .roofConcrete, flatRoof: true),

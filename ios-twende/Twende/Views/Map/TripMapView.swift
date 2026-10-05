@@ -422,6 +422,13 @@ extension TripMapView {
             let coordinate = isPicking
                 ? parent.selectionPoint.map { GeoPoint(map.coordinate(for: $0)) }
                 : (parent.illuminatedDestination ?? parent.destination)
+            // A selected native footprint must not install a second generic shell over bespoke hotels.
+            if DioramaState.shared.isEnabled, let coordinate,
+               coordinate.latitude >= -6.757351500676301, coordinate.latitude <= -6.751896464843376,
+               coordinate.longitude >= 39.2706298828125, coordinate.longitude <= 39.276123046875 {
+                buildingHighlight.clear(on: map)
+                return
+            }
             let point = isPicking ? parent.selectionPoint : coordinate.map { map.point(for: $0.coordinate) }
             buildingHighlight.schedule(
                 at: point.flatMap { mapView.bounds.contains($0) ? $0 : nil },

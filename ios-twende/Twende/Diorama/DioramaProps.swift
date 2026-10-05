@@ -17,6 +17,9 @@ nonisolated struct DioramaPropLibrary: Sendable {
     let dalaDala: DioramaMesh
     let cars: [DioramaMesh]
     let dhow: DioramaMesh
+    let canoe: DioramaMesh
+    let yacht: DioramaMesh
+    let playground: DioramaMesh
     let lamp: DioramaMesh
     let lampGlow: DioramaMesh
     let lampHalo: DioramaMesh
@@ -46,7 +49,10 @@ nonisolated struct DioramaPropLibrary: Sendable {
         boda = Self.makeBoda()
         dalaDala = Self.makeDalaDala()
         cars = [Self.makeCar(.carSilver), Self.makeCar(.carRed), Self.makeCar(.carWhite), Self.makeCar(.sunflower)]
-        dhow = Self.makeDhow()
+        dhow = DioramaMarineModels.dhow()
+        canoe = DioramaMarineModels.canoe()
+        yacht = DioramaMarineModels.yacht()
+        playground = DioramaPlaygroundModel.make()
         (lamp, lampGlow) = Self.makeLamp()
         lampHalo = Self.makeHalo(radius: 2.4, .lampGlow)
         (bollard, bollardGlow) = Self.makeBollard()
@@ -329,18 +335,6 @@ nonisolated struct DioramaPropLibrary: Sendable {
 
     // MARK: Water
 
-    private static func makeDhow() -> DioramaMesh {
-        var m = DioramaMesh()
-        let hull: [DV2] = [DV2(-3.2, 0), DV2(-2.2, -0.9), DV2(1.6, -1.0), DV2(3.4, -0.3), DV2(3.4, 0.3), DV2(1.6, 1.0), DV2(-2.2, 0.9)]
-        m.extrude(hull, z0: -0.1, z1: 0.9, .hullWood, top: .deckWood)
-        m.polygon(hull, z: -0.1, .hullWood, dark: true, facingUp: false)
-        m.tube(from: DV3(0.3, 0, 0.9), to: DV3(0.3, 0, 6.2), r0: 0.08, r1: 0.05, sides: 4, .trunk)
-        m.tube(from: DV3(-3.0, 0, 2.2), to: DV3(2.6, 0, 7.4), r0: 0.06, r1: 0.04, sides: 4, .trunk)
-        m.triangle(DV3(-2.9, 0.02, 2.3), DV3(2.5, 0.02, 7.2), DV3(1.2, 0.02, 1.4), .sailCream, normal: DV3(0, 1, 0))
-        m.triangle(DV3(-2.9, -0.02, 2.3), DV3(2.5, -0.02, 7.2), DV3(1.2, -0.02, 1.4), .sailCream, normal: DV3(0, -1, 0))
-        return m
-    }
-
     // MARK: Street furniture
 
     /// Height of the lamp's light source above its base.
@@ -490,6 +484,8 @@ nonisolated struct DioramaPropPlacer {
 
     private func isFree(_ p: DV2, radius: Double) -> Bool {
         guard data.rect.expanded(by: -1).contains(p) else { return false }
+        if DioramaHotelGrounds.ownsCourtyard(p, data: data, margin: radius) { return false }
+        if data.pois.contains(where: { $0.kind == "playground" && $0.point.distance(to: p) < 7 + radius }) { return false }
         if roads.isOnRoad(p, margin: radius) { return false }
         for b in buildings where b.box.expanded(by: radius).contains(p) { return false }
         if isOnAmenity(p, margin: radius) || isOnPath(p, margin: radius + 0.8) { return false }
@@ -815,14 +811,22 @@ nonisolated struct DioramaPropPlacer {
             }
         }
 
-        // Dhows out on the water, well clear of the shore.
+        // Deterministic mixed anchorage; keep complete hulls apart and away from mapped piers.
+        var vesselSpots: [DV2] = []
         var dhows = 0
         var attempts = 0
         while dhows < config.dhowsPerTile, attempts < 60 {
             attempts += 1
             let p = DV2(rng.range(between: data.rect.minX, and: data.rect.maxX), rng.range(between: data.rect.minY, and: data.rect.maxY))
-            guard isWater(p), data.water.allSatisfy({ DioramaPolygon.distanceToRing($0.rings[0], p) > 25 }) else { continue }
-            mesh.append(library.dhow, DioramaTransform(rotation: rng.range(0...6.28), translation: DV3(p, DioramaTerrain.waterSurface)))
+            guard isWater(p), data.water.allSatisfy({ DioramaPolygon.distanceToRing($0.rings[0], p) > 25 }),
+                  !vesselSpots.contains(where: { $0.distance(to: p) < 22 }), !isOnPath(p, margin: 18) else { continue }
+            vesselSpots.append(p)
+            let model = dhows % 3 == 0 ? library.yacht : (dhows % 3 == 1 ? library.canoe : library.dhow)
+            let heading = rng.range(0...6.28), direction = DV2(cos(heading), sin(heading))
+            mesh.append(model, DioramaTransform(rotation: heading, translation: DV3(p, DioramaTerrain.waterSurface)))
+            let buoy = p + direction * 8
+            mesh.sphere(centre: DV3(buoy, DioramaTerrain.waterSurface + 0.12), radii: DV3(0.25, 0.25, 0.2), .sailCream)
+            mesh.tube(from: DV3(p + direction * (dhows % 3 == 0 ? 5.5 : 2.8), DioramaTerrain.waterSurface + 0.5), to: DV3(buoy, DioramaTerrain.waterSurface + 0.16), r0: 0.02, r1: 0.02, sides: 4, .sailCream)
             dhows += 1
         }
     }

@@ -68,7 +68,11 @@ nonisolated enum DioramaTileGenerator {
         built.reserveCapacity(data.buildings.count)
         var porchLights: [DioramaLight] = []
         for feature in data.buildings {
-            built.append(builder.build(feature, into: &buildings, glow: &windowGlow, lights: true, pointLights: &porchLights))
+            if DioramaHotelGenerator.ids.contains(feature.id) {
+                built.append(DioramaHotelGenerator(terrain: terrain).build(feature, mesh: &buildings, glow: &windowGlow, lights: &porchLights))
+            } else {
+                built.append(builder.build(feature, into: &buildings, glow: &windowGlow, lights: true, pointLights: &porchLights))
+            }
         }
 
         let wallGenerator = DioramaCompoundWallGenerator(config: config, roads: roadIndex, buildings: built, tileRect: data.rect, terrain: terrain, landuse: data.landuse)
@@ -79,6 +83,9 @@ nonisolated enum DioramaTileGenerator {
 
         let amenities = DioramaAmenityGenerator(config: config, data: data, roads: roadIndex, library: library, buildings: built, terrain: terrain)
         amenities.generate(ground: &ground, props: &props, glow: &propGlow, lights: &lights)
+
+        DioramaHotelGrounds(data: data, terrain: terrain, library: library, roads: roadIndex)
+            .generate(ground: &ground, props: &props, vegetation: &vegetation, glow: &propGlow, lights: &lights)
 
         let placer = DioramaPropPlacer(config: config, data: data, roads: roadIndex, library: library, buildings: built, compounds: compounds, reduceDetail: reduced, terrain: terrain)
         placer.vegetation(into: &vegetation)

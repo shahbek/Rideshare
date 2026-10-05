@@ -392,7 +392,7 @@ nonisolated struct DioramaAmenityGenerator {
         for i in 0..<(dense.count - 1) {
             let a = dense[i], b = dense[i + 1]
             let mid = (a + b) * 0.5
-            guard !roads.isOnCarriageway(mid, margin: 0.2), !isWater(mid) else { continue }
+            guard !roads.isOnCarriageway(mid, margin: 0.2), !isWater(mid), !DioramaHotelGrounds.ownsCourtyard(mid, data: data) else { continue }
             guard !buildings.contains(where: { $0.box.expanded(by: -0.2).contains(mid) }) else { continue }
             let n = (b - a).normalized.right * half
             let top = z(mid) + Self.pathLift
@@ -521,35 +521,25 @@ nonisolated struct DioramaAmenityGenerator {
 
     private func playground(at p: DV2, rng: inout DioramaRandom, ground: inout DioramaMesh, props: inout DioramaMesh) {
         let base = z(p)
-        guard !roads.isOnRoad(p, margin: 2), !buildings.contains(where: { $0.box.expanded(by: 2).contains(p) }) else { return }
-        let pad = DioramaOrientedRect(centre: p, axis: DV2(1, 0), halfLength: 5, halfWidth: 4)
-        ground.extrude(pad.corners, z0: base - 0.2, z1: base + 0.1, .kerb, top: .rubberRed)
-        let top = base + 0.1
-        // Swing frame.
-        let s0 = p + DV2(-3.2, 1.8), s1 = p + DV2(-3.2, -1.8)
-        for s in [s0, s1] {
-            props.tube(from: DV3(s + DV2(-0.6, 0), top), to: DV3(s, top + 2.4), r0: 0.05, r1: 0.05, sides: 4, .signBlue, cap: false)
-            props.tube(from: DV3(s + DV2(0.6, 0), top), to: DV3(s, top + 2.4), r0: 0.05, r1: 0.05, sides: 4, .signBlue, cap: false)
+        let candidates = [0.0, Double.pi / 4, Double.pi / 2, Double.pi * 3 / 4]
+        let pad = candidates.map { angle in
+            DioramaOrientedRect(centre: p, axis: DV2(cos(angle), sin(angle)), halfLength: 5.3, halfWidth: 4.1)
+        }.first { rect in
+            let ring = rect.corners
+            let samples = DioramaPolygon.densify(ring + [ring[0]], maxStep: 0.4) + [p]
+            return samples.allSatisfy { q in
+                !roads.isOnCarriageway(q, margin: 0.5) && !isWater(q) &&
+                !buildings.contains { DioramaPolygon.contains($0.feature.ring, q) || DioramaPolygon.distanceToRing($0.feature.ring, q) < 0.4 }
+            } && !buildings.contains { $0.feature.ring.contains(where: rect.contains) }
         }
-        props.box(centre: (s0 + s1) * 0.5, z0: top + 2.36, axis: DV2(0, 1), halfLength: 1.8, halfWidth: 0.04, height: 0.08, .signBlue)
-        for y in [-0.7, 0.7] {
-            let seat = p + DV2(-3.2, y)
-            props.tube(from: DV3(seat + DV2(0, -0.2), top + 2.3), to: DV3(seat + DV2(0, -0.2), top + 0.6), r0: 0.015, r1: 0.015, sides: 3, .metalCharcoal, cap: false)
-            props.tube(from: DV3(seat + DV2(0, 0.2), top + 2.3), to: DV3(seat + DV2(0, 0.2), top + 0.6), r0: 0.015, r1: 0.015, sides: 3, .metalCharcoal, cap: false)
-            props.box(centre: seat, z0: top + 0.55, halfLength: 0.15, halfWidth: 0.25, height: 0.05, .signYellow)
+        guard let pad else {
+            #if DEBUG
+            print("[Diorama] playground footprint blocked; retaining mapped point without overlapping equipment")
+            #endif
+            return
         }
-        // Slide: platform, ladder and the chute.
-        let plat = p + DV2(1.5, 0)
-        props.box(centre: plat, z0: top, halfLength: 0.6, halfWidth: 0.6, height: 1.6, .signGreen, top: .signYellow, bevel: 0.04)
-        for k in 0..<4 { props.box(centre: plat + DV2(-0.9, 0), z0: top + 0.35 * Double(k + 1), halfLength: 0.03, halfWidth: 0.3, height: 0.04, .metalCharcoal) }
-        let chuteTop = DV3(plat + DV2(0.6, 0), top + 1.55), chuteEnd = DV3(plat + DV2(3.0, 0), top + 0.35)
-        props.quad(chuteTop + DV3(0, -0.35, 0), chuteEnd + DV3(0, -0.35, 0), chuteEnd + DV3(0, 0.35, 0), chuteTop + DV3(0, 0.35, 0), .signRed)
-        props.quad(chuteTop + DV3(0, -0.35, 0), chuteEnd + DV3(0, -0.35, 0), chuteEnd + DV3(0, -0.35, 0.15), chuteTop + DV3(0, -0.35, 0.15), .signRed, normal: DV3(0, -1, 0))
-        props.quad(chuteTop + DV3(0, 0.35, 0), chuteEnd + DV3(0, 0.35, 0), chuteEnd + DV3(0, 0.35, 0.15), chuteTop + DV3(0, 0.35, 0.15), .signRed, normal: DV3(0, 1, 0))
-        // Spring rider and a bench.
-        props.sphere(centre: DV3(p + DV2(0, 2.6), top + 0.55), radii: DV3(0.35, 0.25, 0.3), .signYellow, detail: 0)
-        props.cylinder(centre: p + DV2(0, 2.6), z0: top, z1: top + 0.45, r0: 0.08, r1: 0.08, sides: 5, .metalCharcoal)
-        props.append(library.bench, DioramaTransform(rotation: Double.pi / 2, translation: DV3(p + DV2(0, -3.4), top)))
+        ground.extrude(pad.corners, z0: base - 0.1, z1: base + 0.1, .coralStone, top: .earth)
+        props.append(library.playground, DioramaTransform(rotation: pad.axis.angle, translation: DV3(p, base + 0.1)))
     }
 
     private func sculpture(at p: DV2, ground: inout DioramaMesh, props: inout DioramaMesh) {
