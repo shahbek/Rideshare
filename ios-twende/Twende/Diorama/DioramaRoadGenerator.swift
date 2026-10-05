@@ -78,8 +78,8 @@ nonisolated struct DioramaRoadGenerator {
             let a0 = line[i] + normals[i].vector * (o0 * normals[i].scale), a1 = line[i] + normals[i].vector * (o1 * normals[i].scale)
             let b0 = line[i + 1] + normals[i + 1].vector * (o0 * normals[i + 1].scale), b1 = line[i + 1] + normals[i + 1].vector * (o1 * normals[i + 1].scale)
             if blocked((a0 + a1) * 0.5, (b0 + b1) * 0.5, exclude: exclude) { continue }
-            let za0 = surfaceHeight(line[i], lift: lift), zb0 = surfaceHeight(line[i + 1], lift: lift)
-            mesh.quad(DV3(a0, za0), DV3(b0, zb0), DV3(b1, zb0), DV3(a1, za0), s, normal: .up)
+            mesh.quad(DV3(a0, surfaceHeight(a0, lift: lift)), DV3(b0, surfaceHeight(b0, lift: lift)),
+                      DV3(b1, surfaceHeight(b1, lift: lift)), DV3(a1, surfaceHeight(a1, lift: lift)), s, normal: .up)
         }
     }
 
@@ -92,7 +92,7 @@ nonisolated struct DioramaRoadGenerator {
             let a = line[i] + normals[i].vector * (o * normals[i].scale)
             let b = line[i + 1] + normals[i + 1].vector * (o * normals[i + 1].scale)
             if blocked(a, b, exclude: exclude) { continue }
-            let ha = terrain.height(line[i]), hb = terrain.height(line[i + 1])
+            let ha = terrain.height(a), hb = terrain.height(b)
             let out = DV3((b - a).normalized.right * (facingOut ? 1 : -1), 0)
             mesh.quad(DV3(a, ha + z0), DV3(b, hb + z0), DV3(b, hb + z1), DV3(a, ha + z1), s, normal: out)
         }

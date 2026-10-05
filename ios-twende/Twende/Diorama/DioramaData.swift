@@ -127,7 +127,8 @@ nonisolated enum DioramaBundledTile {
             guard area > 12 else { continue }
             let centroid = DioramaPolygon.centroid(pts)
             guard rect.contains(centroid) else { continue }
-            let height = (b.height ?? 0) > config.placeholderHeight ? b.height : nil
+            // This is bundled OSM, not Mapbox's synthesized 3 m fallback: keep genuine low heights.
+            let height = b.height.flatMap { $0.isFinite && $0 > 0 ? $0 : nil }
             if let existing = buildings[b.id], existing.area >= area { continue }
             buildings[b.id] = DioramaBuildingFeature(id: b.id, ring: pts, clipped: flags, area: area, centroid: centroid, height: height, type: b.type)
         }

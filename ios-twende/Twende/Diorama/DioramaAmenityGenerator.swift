@@ -273,14 +273,27 @@ nonisolated struct DioramaAmenityGenerator {
         let deckWidth = isPrivate ? 1.1 : 2.2
         let deck = DioramaPolygon.offset(ring, by: deckWidth) ?? ring
         let deckTop = base + 0.12
-        ground.extrude(deck, z0: base - 0.2, z1: deckTop, .poolCoping, top: .poolCoping)
+        ground.extrude(deck, z0: base - 0.2, z1: deckTop, .poolCoping)
+        // Annular deck, never a solid lid across the water.
+        if deck.count == ring.count {
+            for i in ring.indices {
+                let j = (i + 1) % ring.count
+                ground.quad(DV3(ring[i], deckTop), DV3(ring[j], deckTop),
+                            DV3(deck[j], deckTop), DV3(deck[i], deckTop), .poolCoping, normal: .up)
+            }
+        }
         // Basin walls in pale tile, the floor a step lower, then the water sheet just under the coping.
         ground.extrude(ring, z0: base - 0.5, z1: deckTop + 0.01, .skyBlue, top: nil)
         ground.polygon(ring, z: base - 0.5, .skyBlue)
         ground.polygon(ring, z: deckTop - 0.08, .poolBlue)
         // Rounded coping lip so the edge catches the light.
-        if let lip = DioramaPolygon.offset(ring, by: 0.18) {
-            ground.extrude(lip, z0: deckTop, z1: deckTop + 0.05, .trimWhite, top: .trimWhite)
+        if let lip = DioramaPolygon.offset(ring, by: 0.18), lip.count == ring.count {
+            ground.extrude(lip, z0: deckTop, z1: deckTop + 0.05, .trimWhite)
+            for i in ring.indices {
+                let j = (i + 1) % ring.count
+                ground.quad(DV3(ring[i], deckTop + 0.05), DV3(ring[j], deckTop + 0.05),
+                            DV3(lip[j], deckTop + 0.05), DV3(lip[i], deckTop + 0.05), .trimWhite, normal: .up)
+            }
         }
         let box = DioramaPolygon.minimumAreaRectangle(ring)
         if isPrivate {

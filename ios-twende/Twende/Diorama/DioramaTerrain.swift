@@ -1,8 +1,7 @@
 import Foundation
 
-/// Smoothed ground elevation for the tile, sampled from a small bundled SRTM grid
-/// (`slipway_terrain.json`). Every generator drapes its geometry over this so streets climb the
-/// Msasani rise and the shore drops to the bay, the way the real peninsula does.
+/// Shared ground datum for every generator. Flat by default; the optional bundled SRTM grid is
+/// sampled only when elevation is explicitly enabled.
 nonisolated struct DioramaTerrain: Sendable {
     /// Height added to all land so the diorama's floor always sits above the basemap's ground plane.
     static let lift: Double = 0.3
@@ -42,6 +41,14 @@ nonisolated struct DioramaTerrain: Sendable {
         }
         let floor = file.elevations.min() ?? 0
         return DioramaTerrain(rect: rect, columns: file.columns, rows: file.rows, values: file.elevations.map { $0 - floor })
+    }
+
+    /// Level foundation above the highest sampled ground along the footprint, not just its centroid.
+    func foundationHeight(_ ring: [DV2]) -> Double {
+        guard let first = ring.first else { return Self.lift }
+        let perimeter = DioramaPolygon.densify(ring + [first], maxStep: 2)
+        return max(perimeter.map { height($0) }.max() ?? Self.lift,
+                   height(DioramaPolygon.centroid(ring))) + 0.04
     }
 
     /// Ground height (including `lift`) at a local point. Clamped at the tile edges.

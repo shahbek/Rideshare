@@ -1,7 +1,7 @@
 import Foundation
 
-/// The diorama's floor. A continuous grass plate covers the whole tile (the shader adds the blade and
-/// tuft texture), parks and gardens are brighter raised lawns with a pale edging, compounds get a lawn
+/// The diorama's floor. A continuous quiet grass surface covers the tile; parks and gardens are
+/// near-flush lawns cut around occupied footprints, compounds get a lawn
 /// and a paved drive from gate to house, and a strip of pale sand runs along the shore. Hard-surfaced
 /// amenities (courts, car parks, forecourts, pools, decks) are laid on top by `DioramaAmenityGenerator`.
 /// Water is built separately into the `.water` category so it can be toggled and shaded on its own.
@@ -11,11 +11,13 @@ nonisolated struct DioramaGroundGenerator {
     let roads: DioramaRoadIndex
     let terrain: DioramaTerrain
 
+    let cutouts: DioramaGroundCutouts
+
     /// Plate resolution (metres between grid vertices). Fine enough for a soft shoreline slope.
     private let plateStep: Double = 8
 
     /// Lift of park lawns above the plate.
-    static let parkLift: Double = 0.14
+    static let parkLift: Double = 0.025
 
     func generate(compounds: [DioramaCompound], into mesh: inout DioramaMesh, water waterMesh: inout DioramaMesh) {
         plate(into: &mesh)
@@ -91,12 +93,7 @@ nonisolated struct DioramaGroundGenerator {
             guard ring.count >= 3, DioramaPolygon.area(ring) > 40 else { continue }
             let lift = Self.parkLift
             draped(ring, lift: lift, .lawn, into: &mesh)
-            let n = ring.count
-            for i in 0..<n {
-                let a = ring[i], b = ring[(i + 1) % n]
-                let out = DV3((b - a).normalized.right, 0)
-                mesh.quad(DV3(a, terrain.height(a)), DV3(b, terrain.height(b)), DV3(b, terrain.height(b) + lift), DV3(a, terrain.height(a) + lift), .parkEdge, normal: out)
-            }
+            // No raised perimeter slab: a mapped park boundary can cross a street or a building.
         }
     }
 
@@ -104,7 +101,7 @@ nonisolated struct DioramaGroundGenerator {
         for compound in compounds {
             var rng = DioramaRandom(seed: compound.building.feature.id, salt: 11)
             let plot = DioramaPolygon.offset(compound.ring, by: -0.35) ?? compound.ring
-            draped(plot, lift: 0.06, .lawn, into: &mesh)
+            draped(plot, lift: 0.02, .lawn, into: &mesh)
             if let gate = compound.gate {
                 let house = compound.building.box
                 let toHouse = house.centre - gate.point
@@ -208,12 +205,14 @@ nonisolated struct DioramaGroundGenerator {
 
     private func polygonOnTerrain(_ ring: [DV2], lift: Double, _ s: DioramaSwatch, into mesh: inout DioramaMesh) {
         guard ring.count >= 3 else { return }
-        mesh.reserve(ring.count)
         let uv = DioramaAtlas.uv(s, dark: false)
-        let base = mesh.positions.count
-        for p in ring { mesh.vertex(DV3(p, terrain.height(p) + lift), .up, uv) }
-        for (a, b, c) in DioramaPolygon.triangulate(ring) {
-            mesh.tri(UInt32(base + a), UInt32(base + b), UInt32(base + c))
+        for piece in cutouts.subtract(from: ring) {
+            mesh.reserve(piece.count)
+            let base = mesh.positions.count
+            for p in piece { mesh.vertex(DV3(p, terrain.height(p) + lift), .up, uv) }
+            for (a, b, c) in DioramaPolygon.triangulate(piece) {
+                mesh.tri(UInt32(base + a), UInt32(base + b), UInt32(base + c))
+            }
         }
     }
 }

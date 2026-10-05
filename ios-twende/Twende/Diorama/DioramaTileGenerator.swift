@@ -73,7 +73,7 @@ nonisolated enum DioramaTileGenerator {
         let wallGenerator = DioramaCompoundWallGenerator(config: config, roads: roadIndex, buildings: built, tileRect: data.rect, terrain: terrain)
         let compounds = wallGenerator.generate(into: &walls)
 
-        DioramaGroundGenerator(config: config, data: data, roads: roadIndex, terrain: terrain).generate(compounds: compounds, into: &ground, water: &water)
+        DioramaGroundGenerator(config: config, data: data, roads: roadIndex, terrain: terrain, cutouts: DioramaGroundCutouts(data: data, pavementWidth: config.pavementWidth)).generate(compounds: compounds, into: &ground, water: &water)
         DioramaRoadGenerator(config: config, data: data, roads: roadIndex, terrain: terrain).generate(into: &roadsMesh)
 
         let amenities = DioramaAmenityGenerator(config: config, data: data, roads: roadIndex, library: library, buildings: built, terrain: terrain)

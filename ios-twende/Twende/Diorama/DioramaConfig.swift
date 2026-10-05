@@ -37,7 +37,7 @@ nonisolated enum DioramaSwatch: Int, CaseIterable, Sendable {
         .coral: 0xE8A08C, .skyBlue: 0x9FC4DD, .mint: 0xA9D4BC, .terracottaWall: 0xB9674C,
         .brick: 0xB4624A, .sage: 0xB9C7A6, .dustyRose: 0xE2B4A6, .slateWall: 0x8E9BB3, .paleYellow: 0xF2DDA4, .slipwayBlue: 0x8DBFD6,
         .roofTeal: 0x3A7F8C, .roofRust: 0xA9472E, .roofSlate: 0x4A5E8E, .roofGreen: 0x3F7D4A,
-        .roofTerracotta: 0xC0603C, .roofConcrete: 0x55638F,
+        .roofTerracotta: 0xC0603C, .roofConcrete: 0xC9C2B6,
         .trimWhite: 0xFAF7F0, .capTerracotta: 0xB5573A, .capCharcoal: 0x3B3A3D, .glass: 0x2C3440,
         .frame: 0xE9E4DA, .shutterGreen: 0x3E7A5A, .shutterBlue: 0x3C6E9E, .doorWood: 0x6B4126,
         .carvedWood: 0x4E2E1A, .metalCharcoal: 0x2E2F33, .gateGreen: 0x2F5E46, .gateBlue: 0x2D5785,
@@ -114,7 +114,7 @@ nonisolated struct DioramaBuildingOverride: Sendable {
 /// One place to tune the whole look without touching generation code.
 nonisolated struct DioramaConfig: Sendable {
     /// Bump to invalidate every cached tile.
-    var generatorVersion: Int = 7
+    var generatorVersion: Int = 8
     /// When false the diorama sits on a flat plate at the basemap's ground level (Mapbox Standard has no
     /// terrain at this zoom, so a lumpy plate would float off the streets around it).
     var usesElevation: Bool = false
@@ -144,14 +144,14 @@ nonisolated struct DioramaConfig: Sendable {
     var placeholderHeight: Double = 3.1
     var bevel: Double = 0.22
     /// Corner radius for the rounded footprint silhouette.
-    var cornerRadius: Double = 1.1
+    var cornerRadius: Double = 0.18
     /// Soft roof-edge bevel (metres) on flat roofs.
-    var roofBevel: Double = 0.45
+    var roofBevel: Double = 0.16
     var aoBandHeight: Double = 0.55
     var aoDarkening: Double = 0.7
-    var roofOverhang: Double = 0.7
+    var roofOverhang: Double = 0.9
     var roofPitchDegrees: Double = 24
-    var hipRoofShare: Double = 0.5
+    var hipRoofShare: Double = 0.85
     /// A pitched roof only fits a footprint that nearly fills its bounding rectangle; anything more
     /// irregular (L- and U-shapes) gets a flat roof so the roof always matches the walls below it.
     var hipRoofMinimumFill: Double = 0.86
@@ -170,7 +170,7 @@ nonisolated struct DioramaConfig: Sendable {
     var windowSpacing: Double = 3.1
     var maxWindowsPerBuilding: Int = 40
     var litWindowRatio: Double = 0.68
-    var verandaChance: Double = 0.6
+    var verandaChance: Double = 0.85
     var swahiliTouchChance: Double = 0.3
     var standTankChance: Double = 0.55
     var dishChance: Double = 0.3
@@ -218,8 +218,8 @@ nonisolated struct DioramaConfig: Sendable {
 
     // MARK: Palette
     var palette: [DioramaSwatch: UInt32] = DioramaSwatch.defaultPalette
-    var wallColors: [DioramaSwatch] = [.whitewash, .cream, .paleYellow, .dustyRose, .sage, .skyBlue, .mint, .cream]
-    var apartmentWallColors: [DioramaSwatch] = [.brick, .cream, .whitewash, .paleYellow, .slateWall, .brick]
+    var wallColors: [DioramaSwatch] = [.whitewash, .cream, .whitewash, .paleYellow, .sage, .cream]
+    var apartmentWallColors: [DioramaSwatch] = [.cream, .whitewash, .paleYellow, .whitewash, .sage]
     var commercialWallColors: [DioramaSwatch] = [.brick, .whitewash, .cream, .ochre]
     var apartmentAccents: [DioramaSwatch] = [.trimWhite, .trimWhite, .skyBlue, .sage]
     var metalRoofColors: [DioramaSwatch] = [.roofRust, .roofGreen, .roofRust, .roofTeal, .roofSlate]
