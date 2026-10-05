@@ -9,7 +9,8 @@ nonisolated struct DioramaShaderUniforms {
     var sunColor: SIMD4<Float>
     var skyColor: SIMD4<Float>
     var groundColor: SIMD4<Float>
-    /// x: emissive glow strength, y: unused, z: time-of-day index, w: reflection pass flag (1 = mirrored).
+    /// x: emissive glow strength, y: animation time in seconds (0 when motion is reduced), z: time-of-day
+    /// index, w: reflection pass flag (1 = mirrored).
     var params: SIMD4<Float>
     /// x: grid min x, y: grid min y, z: cell size, w: cells per side.
     var lightGrid: SIMD4<Float>
@@ -203,25 +204,19 @@ nonisolated enum DioramaShaderSource {
         float3 view = normalize(u.eye.xyz - in.worldPosition);
         float3 albedo = in.color.rgb;
 
-        // Procedural ground textures (appearance.y): grass blades and tufts, sand ripples, asphalt grain,
-        // paving slabs. Evaluated in world space so the pattern never swims as the camera moves.
+        // Procedural ground textures (appearance.y), kept very quiet so the toy-town surfaces read as
+        // smooth painted material with only a faint mottle: grass, sand, asphalt, paving.
         float tex = in.appearance.y;
         float2 wp = in.worldPosition.xy;
         if (tex > 0.5 && tex < 1.5) {
-            float tuft = dioramaNoise(wp * 0.9) * 0.6 + dioramaNoise(wp * 3.1) * 0.4;
-            float blade = dioramaNoise(wp * 14.0 + float2(tuft * 3.0, 0.0));
-            float mottle = dioramaNoise(wp * 0.12);
-            albedo *= 0.86 + 0.22 * tuft + 0.10 * (blade - 0.5) + 0.08 * (mottle - 0.5);
-            albedo += float3(0.06, 0.08, 0.0) * smoothstep(0.62, 0.85, tuft);
+            float mottle = dioramaNoise(wp * 0.09) * 0.7 + dioramaNoise(wp * 0.35) * 0.3;
+            albedo *= 0.96 + 0.08 * (mottle - 0.5);
         } else if (tex > 1.5 && tex < 2.5) {
-            float ripple = sin((wp.x * 0.7 + wp.y * 0.25 + dioramaNoise(wp * 0.4) * 2.0) * 4.0) * 0.5 + 0.5;
-            albedo *= 0.94 + 0.07 * ripple + 0.05 * (dioramaNoise(wp * 6.0) - 0.5);
+            albedo *= 0.98 + 0.04 * (dioramaNoise(wp * 0.5) - 0.5);
         } else if (tex > 2.5 && tex < 3.5) {
-            albedo *= 0.94 + 0.10 * dioramaNoise(wp * 5.0) + 0.04 * (dioramaNoise(wp * 0.3) - 0.5);
+            albedo *= 0.98 + 0.04 * (dioramaNoise(wp * 0.4) - 0.5);
         } else if (tex > 3.5 && tex < 4.5) {
-            float2 slab = fract(wp * 0.55);
-            float joint = smoothstep(0.0, 0.05, slab.x) * smoothstep(0.0, 0.05, slab.y);
-            albedo *= 0.90 + 0.08 * joint + 0.05 * (dioramaNoise(wp * 2.5) - 0.5);
+            albedo *= 0.98 + 0.04 * (dioramaNoise(wp * 0.6) - 0.5);
         }
 
         float hemi = n.z * 0.5 + 0.5;
@@ -238,24 +233,64 @@ nonisolated enum DioramaShaderSource {
         light += pointLight * glow;
 
         float3 color = albedo * light;
+        float time = u.params.y;
+
+        if (tex > 4.5 && tex < 5.5) {
+            // Pool water: bright turquoise with slow caustic shimmer and a soft sky sheen.
+            float c1 = dioramaNoise(wp * 1.6 + float2(time * 0.25, time * 0.18));
+            float c2 = dioramaNoise(wp * 2.9 - float2(time * 0.2, -time * 0.14));
+            float caustic = smoothstep(0.45, 0.8, c1 * 0.55 + c2 * 0.45);
+            color = albedo * light * (0.92 + 0.18 * caustic) + float3(0.10, 0.12, 0.12) * caustic;
+            color = mix(color, u.skyColor.rgb * 1.1, 0.12);
+            return float4(color, 1.0);
+        }
 
         if (code > 0.5 && code < 1.5) {
-            // Water: planar reflection distorted by gentle ripples, blended with a deep tint by fresnel.
+            // Bay water in the Msasani light: a pale milky turquoise that turns sandy-green in the
+            // shallows, with long slow swells rolling towards the beach and foam breaking on the sand.
+            // The planar reflection is only a faint sheen so the water stays light.
+            float shore = in.appearance.z;
+            float shallow = 1.0 - smoothstep(2.0, 42.0, shore);
+            float3 deepTint = float3(0.36, 0.68, 0.70);
+            float3 shallowTint = float3(0.62, 0.84, 0.78);
+            float3 sandTint = float3(0.80, 0.86, 0.74);
+            float3 body = mix(deepTint, shallowTint, shallow);
+            body = mix(body, sandTint, smoothstep(0.0, 1.0, 1.0 - smoothstep(0.0, 7.0, shore)) * 0.75);
+
+            // Swells: bands of brightness keyed to the distance from shore, so they always run parallel
+            // to the beach, plus a soft 2D choppiness that drifts across the bay.
+            float phase = shore * 0.55 - time * 1.1 + dioramaNoise(wp * 0.05 + float2(time * 0.03, 0.0)) * 2.5;
+            float swell = sin(phase) * 0.5 + 0.5;
+            swell = pow(swell, 3.0);
+            float chop = dioramaNoise(wp * 0.22 + float2(time * 0.12, time * 0.08)) * 0.6
+                       + dioramaNoise(wp * 0.6 - float2(time * 0.07, time * 0.11)) * 0.4;
+            float nearShoreWeight = 0.35 + 0.65 * shallow;
+            body *= 0.95 + 0.07 * (chop - 0.5) + 0.06 * swell * nearShoreWeight;
+
+            // Foam: a crest line on each swell that grows as the wave reaches the sand, and a lacy
+            // permanent fringe on the last couple of metres.
+            float crest = smoothstep(0.78, 0.98, sin(phase + 0.3) * 0.5 + 0.5);
+            float lace = dioramaNoise(wp * 1.4 + float2(time * 0.35, -time * 0.2));
+            float foamBand = crest * smoothstep(26.0, 4.0, shore) * smoothstep(0.35, 0.7, lace);
+            float fringe = (1.0 - smoothstep(0.0, 2.6, shore)) * smoothstep(0.3, 0.6, lace + 0.15 * sin(time * 1.6 + shore * 2.0));
+            float foam = saturate(foamBand + fringe);
+
             float2 uv = in.position.xy / u.water.zw;
-            float2 ripple = float2(dioramaNoise(in.worldPosition.xy * 0.35 + float2(3.1, 7.7)),
-                                   dioramaNoise(in.worldPosition.xy * 0.35)) - 0.5;
-            uv += ripple * 0.012;
+            float2 ripple = float2(dioramaNoise(wp * 0.3 + float2(3.1 + time * 0.1, 7.7)),
+                                   dioramaNoise(wp * 0.3 + float2(0.0, time * 0.08))) - 0.5;
+            uv += ripple * 0.010;
             uv = clamp(uv, float2(0.001), float2(0.999));
             constexpr sampler s(address::clamp_to_edge, filter::linear);
             float4 refl = reflection.sample(s, uv);
-            float3 skyRef = mix(u.skyColor.rgb * 1.05, u.sunColor.rgb * 0.8 + u.skyColor.rgb, 0.35);
-            float3 reflected = mix(skyRef, refl.rgb, refl.a);
-            float fresnel = 0.18 + 0.72 * pow(1.0 - saturate(dot(n, view)), 2.5);
-            float3 deep = albedo * (ambient * 0.9 + u.sunColor.rgb * 0.35);
-            float3 glint = u.sunColor.rgb * pow(saturate(dot(reflect(-view, n), u.sunDirection.xyz)), 70.0) * 0.5;
-            float shimmer = (dioramaNoise(in.worldPosition.xy * 1.6) - 0.5) * 0.05;
-            color = mix(deep, reflected, fresnel) + glint + shimmer;
-            color += pointLight * glow * 0.35;
+            float3 skyRef = mix(u.skyColor.rgb, float3(1.0), 0.35);
+            float3 reflected = mix(skyRef, refl.rgb, refl.a * 0.7);
+            float fresnel = 0.10 + 0.35 * pow(1.0 - saturate(dot(n, view)), 3.0);
+
+            float3 lit = body * (ambient * 0.55 + float3(0.62) + u.sunColor.rgb * 0.30);
+            float3 glint = u.sunColor.rgb * pow(saturate(dot(reflect(-view, n), u.sunDirection.xyz)), 90.0) * 0.25 * (0.6 + 0.4 * chop);
+            color = mix(lit, reflected, fresnel * (1.0 - shallow * 0.5)) + glint;
+            color = mix(color, float3(0.97, 0.98, 0.96), foam * 0.85);
+            color += pointLight * glow * 0.25;
             return float4(color, 1.0);
         }
 

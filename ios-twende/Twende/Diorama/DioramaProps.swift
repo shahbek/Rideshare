@@ -71,22 +71,16 @@ nonisolated struct DioramaPropLibrary: Sendable {
         }
     }
 
-    /// Canopy built from many overlapping lumps (the Apple Maps toy look): a dark core, mid-green lumps
-    /// around the sides, bright lumps catching the light on top.
+    /// One moulded canopy: a single sculpted mass whose surface is pushed in and out by smooth noise, so
+    /// it reads as a solid tree crown (the way Apple Maps models them) rather than a pile of balls.
+    /// Shading comes from the three-tone split: shadowed underside, mid sides, sunlit top.
     private static func lumpyCanopy(_ m: inout DioramaMesh, centre: DV3, radius R: Double, squash: Double, lumps: Int, palette: [DioramaSwatch], rng: inout DioramaRandom) {
-        m.sphere(centre: centre, radii: DV3(R * 0.78, R * 0.78, R * 0.78 * squash), palette[1])
-        let golden = 2.399963
-        for k in 0..<lumps {
-            let a = Double(k) * golden + rng.range(0...0.4)
-            let elev = -0.2 + 0.95 * Double(k) / Double(max(lumps - 1, 1)) + rng.range(-0.1...0.1)
-            let horiz = max(1 - elev * elev, 0).squareRoot()
-            let dist = R * rng.range(0.55...0.8)
-            let p = centre + DV3(cos(a) * horiz * dist, sin(a) * horiz * dist, elev * dist * squash)
-            let s = R * rng.range(0.36...0.54)
-            let swatch = elev > 0.4 ? palette[2] : (elev < 0.05 ? palette[0] : palette[1])
-            m.sphere(centre: p, radii: DV3(s, s * rng.range(0.9...1.05), s * 0.88), swatch, detail: s > R * 0.46 ? 1 : 0)
-        }
-        m.sphere(centre: centre + DV3(rng.range(-0.2...0.2), rng.range(-0.2...0.2), R * 0.72 * squash), radii: DV3(R * 0.42, R * 0.42, R * 0.36), palette[2], detail: 1)
+        let seed = rng.next()
+        let amplitude = lumps >= 10 ? 0.16 : 0.12
+        let frequency = 2.6 + Double(lumps) * 0.12
+        m.blob(centre: centre, radii: DV3(R * rng.range(0.92...1.05), R * rng.range(0.92...1.05), R * squash),
+               seed: seed, amplitude: amplitude, frequency: frequency,
+               lower: palette[0], mid: palette[1], upper: palette[2], flattenBottom: 0.35)
     }
 
     /// Classic shade tree: trunk, branches and a lumpy two-tone canopy.
@@ -96,8 +90,11 @@ nonisolated struct DioramaPropLibrary: Sendable {
         let h = rng.range(2.4...3.0) * scale
         trunk(&m, height: h + 1.0, radius: 0.3 * scale, branches: 3, rng: &rng)
         let R = rng.range(2.3...2.8) * scale
-        let palette: [DioramaSwatch] = bright ? [.leafMid, .leafLight, .leafBright] : [.leafDark, .leafMid, .leafLight]
-        lumpyCanopy(&m, centre: DV3(0, 0, h + R * 0.8), radius: R, squash: 0.9, lumps: 10, palette: palette, rng: &rng)
+        let palette: [DioramaSwatch] = bright ? [.leafMid, .leafMid, .leafLight] : [.leafDark, .leafMid, .leafMid]
+        lumpyCanopy(&m, centre: DV3(0, 0, h + R * 0.8), radius: R, squash: 0.88, lumps: 10, palette: palette, rng: &rng)
+        // A second, smaller mass pushed to one side breaks the symmetry like a real crown.
+        let a = rng.range(0...6.28)
+        lumpyCanopy(&m, centre: DV3(cos(a) * R * 0.45, sin(a) * R * 0.45, h + R * 0.55), radius: R * 0.62, squash: 0.8, lumps: 8, palette: palette, rng: &rng)
         return m
     }
 
@@ -107,10 +104,10 @@ nonisolated struct DioramaPropLibrary: Sendable {
         var rng = DioramaRandom(seed: seed, salt: 22)
         let h = rng.range(2.0...2.6)
         trunk(&m, height: h + 2.8, radius: 0.24, branches: 2, rng: &rng)
-        let tiers: [(Double, Double, [DioramaSwatch])] = [(0, 2.2, [.leafDark, .leafDark, .leafMid]), (1.6, 1.7, [.leafDark, .leafMid, .leafLight]), (3.0, 1.2, [.leafMid, .leafLight, .leafBright])]
+        let tiers: [(Double, Double, [DioramaSwatch])] = [(0, 2.2, [.leafDark, .leafDark, .leafMid]), (1.7, 1.7, [.leafDark, .leafMid, .leafMid]), (3.1, 1.2, [.leafMid, .leafMid, .leafLight])]
         for (dz, r, palette) in tiers {
             let off = DV2(rng.range(-0.25...0.25), rng.range(-0.25...0.25))
-            lumpyCanopy(&m, centre: DV3(off, h + dz), radius: r, squash: 0.6, lumps: 6, palette: palette, rng: &rng)
+            lumpyCanopy(&m, centre: DV3(off, h + dz), radius: r, squash: 0.55, lumps: 6, palette: palette, rng: &rng)
         }
         return m
     }
@@ -125,7 +122,7 @@ nonisolated struct DioramaPropLibrary: Sendable {
             let a = Double(k) / 3 * 2 * Double.pi + 0.4
             m.tube(from: DV3(0, 0, h - 0.6), to: DV3(cos(a) * 2.4, sin(a) * 2.4, h + 0.4), r0: 0.14, r1: 0.06, sides: 4, .trunk, cap: false)
         }
-        lumpyCanopy(&m, centre: DV3(0, 0, h + 0.7), radius: 3.8, squash: 0.36, lumps: 12, palette: [.leafOlive, .leafMid, .leafLight], rng: &rng)
+        lumpyCanopy(&m, centre: DV3(0, 0, h + 0.7), radius: 3.8, squash: 0.34, lumps: 12, palette: [.leafDark, .leafOlive, .leafMid], rng: &rng)
         return m
     }
 
@@ -135,7 +132,7 @@ nonisolated struct DioramaPropLibrary: Sendable {
         var rng = DioramaRandom(seed: seed, salt: 24)
         let h = rng.range(4.8...5.8)
         trunk(&m, height: h + 1.8, radius: 0.22, branches: 2, rng: &rng)
-        lumpyCanopy(&m, centre: DV3(0, 0, h + 1.5), radius: 1.6, squash: 1.6, lumps: 8, palette: [.leafDark, .leafMid, .leafLight], rng: &rng)
+        lumpyCanopy(&m, centre: DV3(0, 0, h + 1.5), radius: 1.6, squash: 1.6, lumps: 8, palette: [.leafDark, .leafMid, .leafMid], rng: &rng)
         return m
     }
 
@@ -145,7 +142,7 @@ nonisolated struct DioramaPropLibrary: Sendable {
         var rng = DioramaRandom(seed: seed, salt: 25)
         let h = rng.range(1.2...1.6)
         trunk(&m, height: h + 0.5, radius: 0.14, branches: 0, rng: &rng)
-        lumpyCanopy(&m, centre: DV3(0, 0, h + 1.2), radius: 1.3, squash: 1.0, lumps: 6, palette: [.leafMid, .leafLight, .leafBright], rng: &rng)
+        lumpyCanopy(&m, centre: DV3(0, 0, h + 1.2), radius: 1.3, squash: 1.0, lumps: 6, palette: [.leafMid, .leafMid, .leafLight], rng: &rng)
         return m
     }
 
@@ -232,7 +229,7 @@ nonisolated struct DioramaPropLibrary: Sendable {
             let a = Double(k) / 3 * 2 * Double.pi
             m.tube(from: DV3(0, 0, 3.2), to: DV3(cos(a) * 2.2, sin(a) * 2.2, 4.6), r0: 0.16, r1: 0.08, sides: 4, .trunk, cap: false)
         }
-        lumpyCanopy(&m, centre: DV3(0, 0, 5.1), radius: 4.0, squash: 0.4, lumps: 12, palette: [.leafDark, .flamboyant, .flamboyant], rng: &rng)
+        lumpyCanopy(&m, centre: DV3(0, 0, 5.1), radius: 4.0, squash: 0.38, lumps: 12, palette: [.leafDark, .flamboyant, .flamboyant], rng: &rng)
         return m
     }
 
@@ -242,14 +239,8 @@ nonisolated struct DioramaPropLibrary: Sendable {
     private static func makeBush(seed: UInt64, _ s: DioramaSwatch) -> DioramaMesh {
         var m = DioramaMesh()
         var rng = DioramaRandom(seed: seed, salt: 26)
-        let blobs = rng.int(4...6)
-        m.sphere(centre: DV3(0, 0, 0.55), radii: DV3(0.9, 0.85, 0.6), s, detail: 1)
-        for k in 0..<blobs {
-            let a = Double(k) / Double(blobs) * 2 * Double.pi + rng.range(0...0.5)
-            let r = rng.range(0.4...0.7)
-            let size = rng.range(0.35...0.55)
-            m.sphere(centre: DV3(cos(a) * r, sin(a) * r, rng.range(0.3...0.6)), radii: DV3(size, size, size * 0.8), k % 2 == 0 ? s : .leafLight, detail: 0)
-        }
+        m.blob(centre: DV3(0, 0, 0.5), radii: DV3(rng.range(0.9...1.1), rng.range(0.8...1.0), 0.6), seed: seed, amplitude: 0.18, frequency: 3.2,
+               lower: .leafDark, mid: s, upper: s == .leafDark ? .leafMid : s, flattenBottom: 0.6)
         return m
     }
 

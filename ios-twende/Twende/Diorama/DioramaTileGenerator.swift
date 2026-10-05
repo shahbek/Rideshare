@@ -110,16 +110,19 @@ nonisolated enum DioramaTileGenerator {
                 let n = mesh.normals[i]
                 let cell = DioramaAtlas.lookup(mesh.uvs[i])
                 let isHalo = category == .propGlow && cell?.swatch == .lampGlow && p.z > 0 && abs(n.z) > 1.5
-                // appearance.y picks a procedural surface texture: 1 grass, 2 sand, 3 asphalt, 4 paving.
+                // appearance.y picks a procedural surface texture: 1 grass, 2 sand, 3 asphalt, 4 paving,
+                // 5 pool water. appearance.z carries the mesh's free attribute (shore distance on water).
                 let texture: Float
                 switch cell?.swatch {
                 case .grass, .lawn, .pitchGreen: texture = 1
                 case .earth: texture = 2
                 case .asphalt: texture = 3
                 case .paving, .pavement, .concrete: texture = 4
+                case .poolBlue: texture = 5
                 default: texture = 0
                 }
-                let appearance = SIMD4<Float>(0.85, texture, 0, isHalo ? 5 : baseCode)
+                let attribute = i < mesh.attributes.count ? mesh.attributes[i] : 0
+                let appearance = SIMD4<Float>(0.85, texture, attribute.isFinite ? attribute : 0, isHalo ? 5 : baseCode)
                 guard p.x.isFinite, p.y.isFinite, p.z.isFinite else {
                     vertices.append(BuildingRenderVertex(position: SIMD4(0, 0, 0, 1), normal: SIMD4(0, 0, 1, 0), color: SIMD4(1, 0, 1, 1), appearance: appearance))
                     continue

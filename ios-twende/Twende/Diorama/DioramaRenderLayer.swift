@@ -1,5 +1,6 @@
 @_spi(Experimental) import MapboxMaps
 import Metal
+import QuartzCore
 import simd
 
 /// Draws one generated diorama tile through Mapbox's custom-layer hook, like the destination building
@@ -22,6 +23,9 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
     private let ranges: [Range]
     private let lightGrid: DioramaLightGrid
     private let waterHeight: Float
+    /// Whether the water animates (false when Reduce Motion is on: waves then freeze mid-roll).
+    private let animates: Bool
+    private let startTime: CFTimeInterval = CACurrentMediaTime()
     private var vertexBuffer: MTLBuffer?
     private var indexBuffer: MTLBuffer?
     private var lightBuffer: MTLBuffer?
@@ -42,7 +46,7 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
     /// Reflection renders at this fraction of the screen; ripples hide the softness.
     private let reflectionScale: Int = 2
 
-    init(origin: CLLocationCoordinate2D, vertices: [BuildingRenderVertex], indices: [UInt32], ranges: [Range], lightGrid: DioramaLightGrid, waterHeight: Double, visible: Set<DioramaCategory>, timeOfDay: DioramaTimeOfDay) {
+    init(origin: CLLocationCoordinate2D, vertices: [BuildingRenderVertex], indices: [UInt32], ranges: [Range], lightGrid: DioramaLightGrid, waterHeight: Double, visible: Set<DioramaCategory>, timeOfDay: DioramaTimeOfDay, animates: Bool) {
         self.origin = origin
         self.vertices = vertices
         self.indices = indices
@@ -51,6 +55,7 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
         self.waterHeight = Float(waterHeight)
         self.visible = visible
         self.timeOfDay = timeOfDay
+        self.animates = animates
         super.init()
     }
 
@@ -188,6 +193,8 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
 
         var uniforms = DioramaLighting.uniforms(for: timeOfDay, eye: eye)
         uniforms.lightGrid = SIMD4<Float>(lightGrid.minX, lightGrid.minY, lightGrid.cellSize, Float(lightGrid.cells))
+        // Wrapped so the float stays precise however long the map is open; 1.7 s into the cycle when frozen.
+        uniforms.params.y = animates ? Float((CACurrentMediaTime() - startTime).truncatingRemainder(dividingBy: 3600)) : 1.7
 
         let wantsReflection = visible.contains(.water) && ranges.contains { $0.category == .water && $0.count > 0 }
         var reflectionTexture: MTLTexture? = blankReflection

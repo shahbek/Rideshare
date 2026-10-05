@@ -1,5 +1,6 @@
 import Foundation
 @_spi(Experimental) import MapboxMaps
+import UIKit
 
 /// Observable diorama state shared by the map coordinator and the debug panel.
 @Observable
@@ -64,6 +65,8 @@ final class DioramaTileManager {
     private var thermalReduced: Bool = ProcessInfo.processInfo.thermalState.rawValue >= ProcessInfo.ThermalState.serious.rawValue
     private var thermalObserver: NSObjectProtocol? = nil
     private var renderLayer: DioramaRenderLayer? = nil
+    /// Drives the water animation while the tile is on screen (30 Hz; off under Reduce Motion).
+    private var waveTimer: Timer? = nil
 
     private var layerID: String { "zuri-diorama-\(tile.key)" }
     private var clipLayerID: String { "zuri-diorama-clip-\(tile.key)" }
@@ -210,9 +213,11 @@ final class DioramaTileManager {
     private func show(_ artifacts: DioramaTileArtifacts, on map: MapboxMap) {
         do {
             hide(on: map)
+            let animates = !UIAccessibility.isReduceMotionEnabled && !thermalReduced
             let host = DioramaRenderLayer(
                 origin: tile.centre, vertices: artifacts.vertices, indices: artifacts.indices, ranges: artifacts.ranges,
-                lightGrid: artifacts.lightGrid, waterHeight: DioramaTerrain.waterSurface, visible: state.visibleCategories, timeOfDay: state.timeOfDay
+                lightGrid: artifacts.lightGrid, waterHeight: DioramaTerrain.waterSurface, visible: state.visibleCategories, timeOfDay: state.timeOfDay,
+                animates: animates
             )
             try map.addCustomLayer(withId: layerID, layerHost: host, layerPosition: nil)
             try map.setLayerProperty(for: layerID, property: "slot", value: "middle")
@@ -226,6 +231,7 @@ final class DioramaTileManager {
             try map.addLayer(clip)
             renderLayer = host
             shown = true
+            startWaves(animates)
             state.loadedTiles[tile] = artifacts
             state.status = "Slipway loaded" + (thermalReduced ? " · reduced detail (thermal)" : "")
             map.triggerRepaint()
@@ -241,6 +247,19 @@ final class DioramaTileManager {
         if map.sourceExists(withId: clipSourceID) { try? map.removeSource(withId: clipSourceID) }
         renderLayer = nil
         shown = false
+        startWaves(false)
+    }
+
+    private func startWaves(_ on: Bool) {
+        waveTimer?.invalidate()
+        waveTimer = nil
+        guard on else { return }
+        waveTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, self.shown, self.state.visibleCategories.contains(.water) else { return }
+                self.map?.triggerRepaint()
+            }
+        }
     }
 
     // MARK: Style state

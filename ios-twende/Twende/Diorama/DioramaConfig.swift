@@ -5,7 +5,7 @@ import Foundation
 nonisolated enum DioramaSwatch: Int, CaseIterable, Sendable {
     // Plaster walls
     case whitewash, cream, ochre, sunflower, coral, skyBlue, mint, terracottaWall
-    case brick, sage, dustyRose, slateWall, paleYellow
+    case brick, sage, dustyRose, slateWall, paleYellow, slipwayBlue
     // Roofs
     case roofTeal, roofRust, roofSlate, roofGreen, roofTerracotta, roofConcrete
     // Trim, caps and openings
@@ -35,7 +35,7 @@ nonisolated enum DioramaSwatch: Int, CaseIterable, Sendable {
     static let defaultPalette: [DioramaSwatch: UInt32] = [
         .whitewash: 0xF4EFE7, .cream: 0xF1E2C4, .ochre: 0xD8A46A, .sunflower: 0xF0C46A,
         .coral: 0xE8A08C, .skyBlue: 0x9FC4DD, .mint: 0xA9D4BC, .terracottaWall: 0xB9674C,
-        .brick: 0xB4624A, .sage: 0xB9C7A6, .dustyRose: 0xE2B4A6, .slateWall: 0x8E9BB3, .paleYellow: 0xF2DDA4,
+        .brick: 0xB4624A, .sage: 0xB9C7A6, .dustyRose: 0xE2B4A6, .slateWall: 0x8E9BB3, .paleYellow: 0xF2DDA4, .slipwayBlue: 0x8DBFD6,
         .roofTeal: 0x3A7F8C, .roofRust: 0xA9472E, .roofSlate: 0x4A5E8E, .roofGreen: 0x3F7D4A,
         .roofTerracotta: 0xC0603C, .roofConcrete: 0x55638F,
         .trimWhite: 0xFAF7F0, .capTerracotta: 0xB5573A, .capCharcoal: 0x3B3A3D, .glass: 0x2C3440,
@@ -50,7 +50,7 @@ nonisolated enum DioramaSwatch: Int, CaseIterable, Sendable {
         .lawn: 0x86B85A, .pitchGreen: 0x5FA24A, .paving: 0xD9CFC0, .concrete: 0xC9C2B6, .courtBlue: 0x2F6FB5, .courtLine: 0xF7F7F2,
         .poolBlue: 0x4FC3D9, .poolCoping: 0xF2EEE6, .pierWood: 0xA67B4F, .glassPale: 0xBFD9E6,
         .goalWhite: 0xFAFAFA, .mastGrey: 0x9DA3AA, .rubberRed: 0xC8584A, .bronze: 0x7A5A33, .domeGreen: 0x2F8F5B,
-        .leafDark: 0x2F5E2E, .leafMid: 0x4C8A3A, .leafLight: 0x7DAF4A, .flamboyant: 0xE2502A,
+        .leafDark: 0x2E5A2C, .leafMid: 0x4A8838, .leafLight: 0x6FA645, .flamboyant: 0xE2502A,
         .trunk: 0x6D4C35, .palmTrunk: 0x8C7458, .bougainvilleaMagenta: 0xC8337E,
         .bougainvilleaOrange: 0xF07C3A, .coconut: 0x7A5A2C,
         .bajajiBlue: 0x2E6FBF, .bajajiRed: 0xC83A32, .bajajiYellow: 0xF2C230, .tyre: 0x1E1E20,
@@ -102,10 +102,19 @@ nonisolated struct DioramaLight: Sendable {
     var intensity: Float
 }
 
+/// Hand-tuned look for a landmark building whose real colours matter (the blue Slipway Hotel, the
+/// terracotta-roofed DoubleTree). Keyed by OSM way id.
+nonisolated struct DioramaBuildingOverride: Sendable {
+    var wallColor: DioramaSwatch? = nil
+    var roofColor: DioramaSwatch? = nil
+    /// nil keeps the generator's own choice.
+    var flatRoof: Bool? = nil
+}
+
 /// One place to tune the whole look without touching generation code.
 nonisolated struct DioramaConfig: Sendable {
     /// Bump to invalidate every cached tile.
-    var generatorVersion: Int = 6
+    var generatorVersion: Int = 7
     /// When false the diorama sits on a flat plate at the basemap's ground level (Mapbox Standard has no
     /// terrain at this zoom, so a lumpy plate would float off the streets around it).
     var usesElevation: Bool = false
@@ -146,7 +155,18 @@ nonisolated struct DioramaConfig: Sendable {
     /// A pitched roof only fits a footprint that nearly fills its bounding rectangle; anything more
     /// irregular (L- and U-shapes) gets a flat roof so the roof always matches the walls below it.
     var hipRoofMinimumFill: Double = 0.86
-    var terracottaRoofShare: Double = 0.3
+    /// Dar roofs are mostly terracotta tile and rust-red or green corrugated iron, so most pitched roofs
+    /// are warm.
+    var terracottaRoofShare: Double = 0.45
+    /// Landmarks matched to the real Slipway: the pale blue Slipway Hotel with white bands, the DoubleTree
+    /// (cream, terracotta hip roof), its green-roofed convention block, the rust tin Waterfront bar.
+    var buildingOverrides: [UInt64: DioramaBuildingOverride] = [
+        688_368_950: DioramaBuildingOverride(wallColor: .slipwayBlue, roofColor: .roofConcrete, flatRoof: true),
+        142_262_988: DioramaBuildingOverride(wallColor: .cream, roofColor: .roofTerracotta, flatRoof: false),
+        142_262_992: DioramaBuildingOverride(wallColor: .whitewash, roofColor: .roofGreen, flatRoof: false),
+        688_369_154: DioramaBuildingOverride(wallColor: .whitewash, roofColor: .roofRust, flatRoof: false),
+        180_607_949: DioramaBuildingOverride(wallColor: .cream, roofColor: .roofConcrete, flatRoof: true),
+    ]
     var windowSpacing: Double = 3.1
     var maxWindowsPerBuilding: Int = 40
     var litWindowRatio: Double = 0.68
@@ -202,7 +222,7 @@ nonisolated struct DioramaConfig: Sendable {
     var apartmentWallColors: [DioramaSwatch] = [.brick, .cream, .whitewash, .paleYellow, .slateWall, .brick]
     var commercialWallColors: [DioramaSwatch] = [.brick, .whitewash, .cream, .ochre]
     var apartmentAccents: [DioramaSwatch] = [.trimWhite, .trimWhite, .skyBlue, .sage]
-    var metalRoofColors: [DioramaSwatch] = [.roofSlate, .roofTeal, .roofConcrete, .roofGreen]
+    var metalRoofColors: [DioramaSwatch] = [.roofRust, .roofGreen, .roofRust, .roofTeal, .roofSlate]
     var signColors: [DioramaSwatch] = [.signRed, .signYellow, .signGreen, .signBlue, .signOrange]
     var canopyColors: [DioramaSwatch] = [.canopyRed, .canopyYellow, .canopyBlue, .canopyGreen]
 

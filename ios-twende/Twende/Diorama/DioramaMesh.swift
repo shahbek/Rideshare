@@ -22,6 +22,9 @@ nonisolated struct DioramaMesh: Sendable {
     private(set) var positions: [DV3] = []
     private(set) var normals: [DV3] = []
     private(set) var uvs: [SIMD2<Float>] = []
+    /// One free float per vertex, forwarded to the shader as `appearance.z` (water uses it for the
+    /// distance to the shore; pools mark themselves with -1). Zero for everything else.
+    private(set) var attributes: [Float] = []
     private(set) var indices: [UInt32] = []
     private(set) var chunks: [Chunk] = [Chunk(vertex: 0, index: 0)]
     /// Added to the z of every vertex appended while set, so generators can build a house at z = 0 and
@@ -40,10 +43,11 @@ nonisolated struct DioramaMesh: Sendable {
     }
 
     @discardableResult
-    mutating func vertex(_ p: DV3, _ n: DV3, _ uv: SIMD2<Float>) -> UInt32 {
+    mutating func vertex(_ p: DV3, _ n: DV3, _ uv: SIMD2<Float>, attribute: Float = 0) -> UInt32 {
         positions.append(baseZ == 0 ? p : DV3(p.x, p.y, p.z + baseZ))
         normals.append(n)
         uvs.append(uv)
+        attributes.append(attribute)
         return UInt32(positions.count - 1)
     }
 
@@ -84,14 +88,14 @@ nonisolated struct DioramaMesh: Sendable {
     }
 
     /// Flat horizontal polygon.
-    mutating func polygon(_ ring: [DV2], z: Double, _ s: DioramaSwatch, dark: Bool = false, facingUp: Bool = true) {
+    mutating func polygon(_ ring: [DV2], z: Double, _ s: DioramaSwatch, dark: Bool = false, facingUp: Bool = true, attribute: Float = 0) {
         let ccw = DioramaPolygon.counterClockwise(ring)
         guard ccw.count >= 3 else { return }
         reserve(ccw.count)
         let n = DV3(0, 0, facingUp ? 1 : -1)
         let uv = DioramaAtlas.uv(s, dark: dark)
         let base = positions.count
-        for p in ccw { vertex(DV3(p, z), n, uv) }
+        for p in ccw { vertex(DV3(p, z), n, uv, attribute: attribute) }
         for (a, b, c) in DioramaPolygon.triangulate(ccw) {
             tri(UInt32(base + a), UInt32(base + b), UInt32(base + c))
         }
@@ -248,6 +252,48 @@ nonisolated struct DioramaMesh: Sendable {
         }
     }
 
+    /// Sculpted foliage mass: an icosphere whose vertices are pushed in and out by smooth seeded noise,
+    /// so it reads as one moulded canopy rather than a pile of balls. The underside is flattened and
+    /// uses `lower`, the sides `mid`, the sunlit crown `upper`; normals are recomputed from the displaced
+    /// surface so the lumps shade softly.
+    mutating func blob(centre: DV3, radii: DV3, seed: UInt64, amplitude: Double, frequency: Double,
+                       lower: DioramaSwatch, mid: DioramaSwatch, upper: DioramaSwatch, flattenBottom: Double = 0.3) {
+        let shape = DioramaIcosphere.level2
+        var rng = DioramaRandom(seed: seed, salt: 91)
+        var waves: [(dir: DV3, freq: Double, phase: Double, amp: Double)] = []
+        for k in 0..<5 {
+            let dir = DV3(rng.range(-1...1), rng.range(-1...1), rng.range(-1...1)).normalized
+            waves.append((dir, frequency * (1 + Double(k) * 0.55), rng.range(0...6.28), amplitude / (1 + Double(k) * 0.7)))
+        }
+        var points: [DV3] = []
+        points.reserveCapacity(shape.vertices.count)
+        for v in shape.vertices {
+            var d = 0.0
+            for w in waves { d += w.amp * sin(v.dot(w.dir) * w.freq + w.phase) }
+            var r = 1 + d
+            if v.z < 0 { r *= 1 - flattenBottom * (-v.z) }
+            points.append(DV3(v.x * radii.x * r, v.y * radii.y * r, v.z * radii.z * r))
+        }
+        var accumulated = [DV3](repeating: DV3(0, 0, 0), count: points.count)
+        for f in shape.faces {
+            let a = points[Int(f.x)], b = points[Int(f.y)], c = points[Int(f.z)]
+            let n = (b - a).cross(c - a)
+            accumulated[Int(f.x)] = accumulated[Int(f.x)] + n
+            accumulated[Int(f.y)] = accumulated[Int(f.y)] + n
+            accumulated[Int(f.z)] = accumulated[Int(f.z)] + n
+        }
+        reserve(points.count)
+        let base = positions.count
+        for i in 0..<points.count {
+            let z = shape.vertices[i].z
+            let swatch = z > 0.42 ? upper : (z < -0.28 ? lower : mid)
+            vertex(centre + points[i], accumulated[i].normalized, DioramaAtlas.uv(swatch, dark: false))
+        }
+        for f in shape.faces {
+            tri(UInt32(base) + f.x, UInt32(base) + f.y, UInt32(base) + f.z)
+        }
+    }
+
     /// Bakes a copy of a small prototype mesh (a tree, a bajaji, a lamp) into this mesh.
     mutating func append(_ other: DioramaMesh, _ t: DioramaTransform) {
         guard !other.isEmpty else { return }
@@ -262,6 +308,7 @@ nonisolated struct DioramaMesh: Sendable {
             let nx = n.x / t.scale.x, ny = n.y / t.scale.y
             normals.append(DV3(nx * c - ny * s, nx * s + ny * c, n.z / t.scale.z).normalized)
             uvs.append(other.uvs[i])
+            attributes.append(other.attributes[i])
         }
         indices.append(contentsOf: other.indices.map { $0 + base })
     }
@@ -276,6 +323,8 @@ nonisolated enum DioramaIcosphere {
 
     static let level0: Shape = make(subdivisions: 0)
     static let level1: Shape = make(subdivisions: 1)
+    /// 162 vertices, 320 faces: smooth enough for a sculpted canopy.
+    static let level2: Shape = make(subdivisions: 2)
 
     private static func make(subdivisions: Int) -> Shape {
         let t = (1 + 5.0.squareRoot()) / 2

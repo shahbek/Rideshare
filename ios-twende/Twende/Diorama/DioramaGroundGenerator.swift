@@ -138,13 +138,43 @@ nonisolated struct DioramaGroundGenerator {
 
     // MARK: Water
 
-    /// Flat glossy sheet at the water surface; the shader adds the planar reflection and ripples.
+    /// Water surface as a grid of cells clipped to the bay, each vertex carrying its distance to the
+    /// real shoreline (tile-edge cuts don't count). The shader uses that distance to run waves towards
+    /// the beach, lighten the shallows and break foam on the sand.
     private func water(into mesh: inout DioramaMesh) {
+        let step = 10.0
         for water in data.water {
             guard let outer = water.rings.first else { continue }
             let ring = DioramaPolygon.clipPolygon(outer, to: data.rect.expanded(by: 0.5))
             guard ring.count >= 3 else { continue }
-            mesh.polygon(ring, z: DioramaTerrain.waterSurface, .sea)
+            var shore: [(DV2, DV2)] = []
+            let n = outer.count
+            for i in 0..<n where !water.clipped[i] { shore.append((outer[i], outer[(i + 1) % n])) }
+            func shoreDistance(_ p: DV2) -> Float {
+                var best = 200.0
+                for (a, b) in shore { best = min(best, DioramaPolygon.distanceToSegment(p, a, b)) }
+                return Float(best)
+            }
+            let uv = DioramaAtlas.uv(.sea, dark: false)
+            let bounds = DioramaRect.bounding(ring)
+            var y = bounds.minY
+            while y < bounds.maxY {
+                var x = bounds.minX
+                while x < bounds.maxX {
+                    let cell = DioramaRect(minX: x, minY: y, maxX: min(x + step, bounds.maxX), maxY: min(y + step, bounds.maxY))
+                    let piece = DioramaPolygon.counterClockwise(DioramaPolygon.clipPolygon(ring, to: cell))
+                    if piece.count >= 3 {
+                        mesh.reserve(piece.count)
+                        let base = mesh.positions.count
+                        for p in piece { mesh.vertex(DV3(p, DioramaTerrain.waterSurface), .up, uv, attribute: shoreDistance(p)) }
+                        for (a, b, c) in DioramaPolygon.triangulate(piece) {
+                            mesh.tri(UInt32(base + a), UInt32(base + b), UInt32(base + c))
+                        }
+                    }
+                    x += step
+                }
+                y += step
+            }
         }
     }
 

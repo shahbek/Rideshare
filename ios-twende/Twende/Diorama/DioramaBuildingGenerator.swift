@@ -65,12 +65,14 @@ nonisolated struct DioramaBuildingGenerator {
         let box = DioramaPolygon.minimumAreaRectangle(f.ring)
         let (ring, flags) = DioramaPolygon.rounded(f.ring, flags: f.clipped, radius: config.cornerRadius)
 
-        let wallColor: DioramaSwatch
+        let override = config.buildingOverrides[f.id]
+        var wallColor: DioramaSwatch
         switch kind {
         case .villa: wallColor = rng.pick(config.wallColors)
         case .apartments: wallColor = rng.pick(config.apartmentWallColors)
         case .commercial: wallColor = rng.pick(config.commercialWallColors)
         }
+        if let forced = override?.wallColor { wallColor = forced }
         let trim: DioramaSwatch = .trimWhite
 
         // Plinth down into the slope so no house floats where the terrain falls away, then a pale base band.
@@ -93,11 +95,13 @@ nonisolated struct DioramaBuildingGenerator {
         if kind == .villa, rng.chance(1 - config.hipRoofShare) { flatRoof = true }
         if !flatRoof, f.area / max(box.area, 1) < config.hipRoofMinimumFill { flatRoof = true }
         if !flatRoof, flags.contains(true) { flatRoof = true }
+        if let forced = override?.flatRoof { flatRoof = forced || flags.contains(true) }
 
+        let pitchedColor = override?.roofColor ?? roofColor(&rng)
         if flatRoof {
-            softRoof(ring, flags: flags, z: height, color: .roofConcrete, into: &mesh)
+            softRoof(ring, flags: flags, z: height, color: override?.roofColor ?? .roofConcrete, into: &mesh)
         } else {
-            hipRoof(box, z: height, color: roofColor(&rng), into: &mesh)
+            hipRoof(box, z: height, color: pitchedColor, into: &mesh)
         }
 
         // Facades: regular window grid, entrance on the front, facade lights.
