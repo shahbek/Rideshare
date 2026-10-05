@@ -19,6 +19,10 @@ nonisolated struct DioramaShaderUniforms {
     var shadowMatrix: simd_float4x4
     /// x: shadow enabled, y: texel size, z: depth bias.
     var shadowParams: SIMD4<Float>
+    /// x: shallow distance, y: foam width, z: reduced effects, w: reserved.
+    var shoreline: SIMD4<Float>
+    var waterDeep: SIMD4<Float>
+    var waterShallow: SIMD4<Float>
 }
 
 /// Lighting presets per time of day: a warm low sun and violet sky at dusk (the default), a cool
@@ -56,7 +60,10 @@ nonisolated enum DioramaLighting {
             lightGrid: .zero,
             water: .zero,
             shadowMatrix: matrix_identity_float4x4,
-            shadowParams: .zero
+            shadowParams: .zero,
+            shoreline: .zero,
+            waterDeep: .zero,
+            waterShallow: .zero
         )
     }
 }
@@ -66,8 +73,8 @@ nonisolated enum DioramaLighting {
 ///   0 solid lit surface · 1 water · 4 emissive (lit windows, lanterns) · 5 camera-facing halo sprite.
 /// Lighting is a hemisphere sky term, one directional sun and point lights looked up through a 2D grid,
 /// so street lamps and lit facades really pool light on the pavement and walls beside them.
-/// Water samples a planar-reflection texture rendered in a first pass with the scene mirrored about the
-/// water plane, so buildings, lamps and trees reflect in the bay.
+/// Bay water has distance-based colour, quiet broken foam and translucent shallows. Literal scene
+/// reflections are deliberately disabled to avoid sharp umbrella/building ghosts.
 nonisolated enum DioramaShaderSource {
     static let source: String = """
     #include <metal_stdlib>
@@ -91,6 +98,9 @@ nonisolated enum DioramaShaderSource {
         float4 water;
         float4x4 shadowMatrix;
         float4 shadowParams;
+        float4 shoreline;
+        float4 waterDeep;
+        float4 waterShallow;
     };
 
     struct DioramaLight {
@@ -238,6 +248,7 @@ nonisolated enum DioramaShaderSource {
             float a = pow(1.0 - r, 2.2) * 0.7 + pow(max(0.0, 1.0 - r * 3.0), 2.0) * 0.5;
             return float4(in.color.rgb * glow, a * min(glow, 1.0));
         }
+        if (code > 5.5) { return float4(in.color.rgb, 1.0); }
         if (code > 3.5) {
             float3 c = in.color.rgb * (0.55 + 0.8 * glow) + float3(0.12, 0.05, 0.0) * glow;
             return float4(min(c, float3(1.0)), 1.0);
@@ -328,16 +339,10 @@ nonisolated enum DioramaShaderSource {
         }
 
         if (code > 0.5 && code < 1.5) {
-            // Bay water in the Msasani light: a pale milky turquoise that turns sandy-green in the
-            // shallows, with long slow swells rolling towards the beach and foam breaking on the sand.
-            // The planar reflection is only a faint sheen so the water stays light.
-            float shore = in.appearance.z;
-            float shallow = 1.0 - smoothstep(2.0, 42.0, shore);
-            float3 deepTint = float3(0.36, 0.68, 0.70);
-            float3 shallowTint = float3(0.62, 0.84, 0.78);
-            float3 sandTint = float3(0.80, 0.86, 0.74);
-            float3 body = mix(deepTint, shallowTint, shallow);
-            body = mix(body, sandTint, smoothstep(0.0, 1.0, 1.0 - smoothstep(0.0, 7.0, shore)) * 0.75);
+            // Distance is baked against the stitched real shoreline, never tile clipping edges.
+            float shore = max(0.0, in.appearance.z);
+            float shallow = 1.0 - smoothstep(0.0, max(1.0, u.shoreline.x), shore);
+            float3 body = mix(u.waterDeep.rgb, u.waterShallow.rgb, shallow);
 
             // Swells: bands of brightness keyed to the distance from shore, so they always run parallel
             // to the beach, plus a soft 2D choppiness that drifts across the bay.
@@ -351,32 +356,17 @@ nonisolated enum DioramaShaderSource {
             float nearShoreWeight = 0.35 + 0.65 * shallow;
             body *= 0.95 + 0.07 * (chop - 0.5) + 0.06 * swell * nearShoreWeight;
 
-            // Foam: a crest line on each swell that grows as the wave reaches the sand, and a lacy
-            // permanent fringe on the last couple of metres.
-            float crest = smoothstep(0.78, 0.98, sin(phase + 0.3) * 0.5 + 0.5);
-            float lace = dioramaNoise(wp * 1.4 + float2(time * 0.35, -time * 0.2));
-            float foamBand = crest * (1.0 - smoothstep(4.0, 18.0, shore)) * smoothstep(0.45, 0.8, lace) * 0.18;
-            float fringe = (1.0 - smoothstep(0.0, 2.6, shore)) * smoothstep(0.3, 0.6, lace + 0.15 * sin(time * 1.6 + shore * 2.0));
-            float foam = saturate(foamBand + fringe * 0.22);
-
-            float2 uv = in.position.xy / u.water.zw;
-            float2 ripple = float2(dioramaNoise((wp + flow) * 0.3 + float2(3.1, 7.7)),
-                                   dioramaNoise((wp + flow) * 0.3)) - 0.5;
-            uv += ripple * 0.006;
-            uv = clamp(uv, float2(0.001), float2(0.999));
-            constexpr sampler s(address::clamp_to_edge, filter::linear);
-            float4 refl = reflection.sample(s, uv);
-            float3 skyRef = mix(u.skyColor.rgb, float3(1.0), 0.35);
-            float3 reflected = mix(skyRef, refl.rgb, refl.a * 0.92);
-            float fresnel = 0.18 + 0.50 * pow(1.0 - saturate(dot(n, view)), 3.0);
-            fresnel = max(fresnel, refl.a * 0.42);
-
-            float3 lit = body * (ambient * 0.55 + float3(0.62) + u.sunColor.rgb * 0.30);
-            float3 glint = u.sunColor.rgb * pow(saturate(dot(reflect(-view, n), u.sunDirection.xyz)), 90.0) * 0.25 * (0.6 + 0.4 * chop);
-            color = mix(lit, reflected, saturate(fresnel * (1.0 - shallow * 0.35))) + glint;
-            color = mix(color, float3(0.97, 0.98, 0.96), foam * 0.85);
-            color += pointLight * glow * 0.25;
-            return float4(color, 1.0);
+            // Broken, transient foam patches, not the former continuous near-white perimeter stroke.
+            float lace = dioramaNoise(wp * 0.8 + float2(time * 0.12, -time * 0.09));
+            float breath = smoothstep(0.78, 0.98, sin(time * 0.65 + wp.x * 0.16 + wp.y * 0.11) * 0.5 + 0.5);
+            float foamWidth = max(0.05, u.shoreline.y);
+            float contact = exp(-pow(shore / foamWidth, 2.0));
+            float foam = contact * smoothstep(0.62, 0.84, lace) * breath * 0.14 * (1.0 - u.shoreline.z);
+            color = body * (ambient * 0.35 + float3(0.72) + u.sunColor.rgb * 0.22);
+            color = mix(color, float3(0.78, 0.87, 0.83), foam);
+            color += pointLight * glow * 0.15;
+            // Shallow water reveals the actual submerged sand/rocks; opaque deep water hides the plate.
+            return float4(color, mix(1.0, 0.72, shallow));
         }
 
         if (tex > 5.5 && tex < 6.5) {

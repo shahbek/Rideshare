@@ -79,13 +79,7 @@ nonisolated struct DioramaHotelGrounds {
                                            additionalMasks: data.water.compactMap { $0.rings.first } + DioramaGroundGenerator.beachPieces(data: data) + [data.hotelCourtyardOutline, Self.stairOutline(data: data)])
         let pieces = cutouts.subtract(from: ring)
         pave(pieces, swatch: .paving, ground: &ground)
-        for piece in pieces {
-            for i in piece.indices {
-                let a = piece[i], b = piece[(i + 1) % piece.count]
-                ground.quad(DV3(a, terrain.height(a) - 0.01), DV3(b, terrain.height(b) - 0.01),
-                            DV3(b, terrain.height(b) + 0.11), DV3(a, terrain.height(a) + 0.11), .coralStone)
-            }
-        }
+        // No side faces around Boolean/ear-clipped pieces: internal edges made faint fan seams.
         func onPaving(_ p: DV2, _ r: Double) -> Bool {
             pieces.contains { DioramaPolygon.contains($0, p) } && clear(p, radius: r)
                 && !DioramaPolygon.contains(data.hotelCourtyardOutline, p)

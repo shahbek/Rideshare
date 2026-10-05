@@ -8,8 +8,8 @@ import simd
 /// and the light grid are uploaded once; category visibility and the time-of-day lighting preset change
 /// per frame without rebuilding anything.
 ///
-/// Reflection/shadow targets are cached. Spatial batches outside the camera frustum never draw;
-/// static content requires no display timer and opaque geometry skips alpha blending.
+/// Directional shadows are cached. Spatial batches outside the camera frustum never draw;
+/// only water/halos blend. There is no planar reflection pass.
 nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
     nonisolated struct Range: Sendable {
         let category: DioramaCategory
@@ -49,16 +49,15 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
     private var lightTableBuffer: MTLBuffer?
     private var lightIndexBuffer: MTLBuffer?
     private var pipeline: MTLRenderPipelineState?
-    private var reflectionPipeline: MTLRenderPipelineState?
     private var glowPipeline: MTLRenderPipelineState?
+    private var waterPipeline: MTLRenderPipelineState?
+    private var wireframe: Bool = false
+    private let shorelineSettings: SIMD4<Float>
+    private let waterDeepTint: SIMD4<Float>
+    private let waterShallowTint: SIMD4<Float>
     private var reducedEffects: Bool = false
-    private var reflectionMatrix: simd_float4x4?
-    private var reflectionPreset: DioramaTimeOfDay?
-    private var reflectionCategories: Set<DioramaCategory> = []
     private var depthState: MTLDepthStencilState?
     private var noWriteDepthState: MTLDepthStencilState?
-    private var reflectionColor: MTLTexture?
-    private var reflectionDepth: MTLTexture?
     private var blankReflection: MTLTexture?
     private var shadowMap: DioramaShadowMap?
     private let lock = NSLock()
@@ -66,10 +65,7 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
     private var timeOfDay: DioramaTimeOfDay
     private var diagnosticText: String = "not started"
 
-    /// Reflection renders at this fraction of the screen; ripples hide the softness.
-    private let reflectionScale: Int = 4
-
-    init(origin: CLLocationCoordinate2D, vertices: [BuildingRenderVertex], indices: [UInt32], ranges: [Range], lightGrid: DioramaLightGrid, waterHeight: Double, visible: Set<DioramaCategory>, timeOfDay: DioramaTimeOfDay, animates: Bool) {
+    init(origin: CLLocationCoordinate2D, vertices: [BuildingRenderVertex], indices: [UInt32], ranges: [Range], lightGrid: DioramaLightGrid, waterHeight: Double, visible: Set<DioramaCategory>, timeOfDay: DioramaTimeOfDay, animates: Bool, config: DioramaConfig = .slipway) {
         self.origin = origin
         self.vertices = vertices
         self.indices = indices
@@ -79,6 +75,13 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
         self.visible = visible
         self.timeOfDay = timeOfDay
         self.animates = animates
+        shorelineSettings = SIMD4(Float(config.shallowWaterDistance), Float(config.foamWidth), 0, 0)
+        func tint(_ hex: String) -> SIMD4<Float> {
+            let rgb = UInt32(hex.dropFirst(), radix: 16) ?? 0x17707A
+            return SIMD4(Float((rgb >> 16) & 255) / 255, Float((rgb >> 8) & 255) / 255, Float(rgb & 255) / 255, 1)
+        }
+        waterDeepTint = tint(config.waterDeepColor)
+        waterShallowTint = tint(config.waterShallowColor)
         super.init()
     }
 
@@ -93,6 +96,10 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
         visible = categories
         self.timeOfDay = timeOfDay
         lock.unlock()
+    }
+
+    func setWireframe(_ enabled: Bool) {
+        lock.lock(); wireframe = enabled; lock.unlock()
     }
 
     func setReducedEffects(_ reduced: Bool) {
@@ -133,8 +140,8 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
         noWrite.isDepthWriteEnabled = false
         do {
             pipeline = try metalDevice.makeRenderPipelineState(descriptor: descriptor(color: colorFormat, depth: depthFormat, stencil: true))
+            waterPipeline = try metalDevice.makeRenderPipelineState(descriptor: descriptor(color: colorFormat, depth: depthFormat, stencil: true, blended: true))
             glowPipeline = try metalDevice.makeRenderPipelineState(descriptor: descriptor(color: colorFormat, depth: depthFormat, stencil: true, blended: true))
-            reflectionPipeline = try metalDevice.makeRenderPipelineState(descriptor: descriptor(color: .bgra8Unorm, depth: .depth32Float, stencil: false))
             shadowMap = DioramaShadowMap(device: metalDevice, library: library, vertices: vertices)
             depthState = metalDevice.makeDepthStencilState(descriptor: depth)
             noWriteDepthState = metalDevice.makeDepthStencilState(descriptor: noWrite)
@@ -171,20 +178,6 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
         }
     }
 
-    private func ensureReflectionTargets(_ device: MTLDevice, width: Int, height: Int) {
-        let w = max(width / reflectionScale, 8), h = max(height / reflectionScale, 8)
-        if let reflectionColor, reflectionColor.width == w, reflectionColor.height == h { return }
-        let color = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm, width: w, height: h, mipmapped: false)
-        color.usage = [.renderTarget, .shaderRead]
-        color.storageMode = .private
-        let depth = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .depth32Float, width: w, height: h, mipmapped: false)
-        depth.usage = [.renderTarget]
-        depth.storageMode = .private
-        reflectionMatrix = nil
-        reflectionColor = device.makeTexture(descriptor: color)
-        reflectionDepth = device.makeTexture(descriptor: depth)
-    }
-
     func render(_ parameters: CustomLayerRenderParameters, mtlCommandBuffer: MTLCommandBuffer, mtlRenderPassDescriptor: MTLRenderPassDescriptor) {
         guard let pipeline, let vertexBuffer, let indexBuffer, let lightBuffer, let lightTableBuffer, let lightIndexBuffer,
               let depthState, let noWriteDepthState,
@@ -194,6 +187,7 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
         let visible = self.visible
         let timeOfDay = self.timeOfDay
         let reducedEffects = self.reducedEffects
+        let wireframe = self.wireframe
         lock.unlock()
         let glowOn = timeOfDay.showsLights
         let drawn = ranges.filter { range in
@@ -229,9 +223,13 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
         guard eye.x.isFinite, eye.y.isFinite, eye.z.isFinite else { return }
 
         var uniforms = DioramaLighting.uniforms(for: timeOfDay, eye: eye)
+        uniforms.shoreline = shorelineSettings
+        uniforms.shoreline.z = reducedEffects ? 1 : 0
+        uniforms.waterDeep = waterDeepTint
+        uniforms.waterShallow = waterShallowTint
         uniforms.lightGrid = SIMD4<Float>(lightGrid.minX, lightGrid.minY, lightGrid.cellSize, Float(lightGrid.cells))
         // Wrapped so the float stays precise however long the map is open; 1.7 s into the cycle when frozen.
-        uniforms.params.y = animates ? Float((CACurrentMediaTime() - startTime).truncatingRemainder(dividingBy: 3600)) : 1.7
+        uniforms.params.y = animates && !reducedEffects ? Float((CACurrentMediaTime() - startTime).truncatingRemainder(dividingBy: 3600)) : 1.7
 
         if let shadowMap, let shadowMatrix = shadowMap.update(command: mtlCommandBuffer, vertices: vertexBuffer, indices: indexBuffer, ranges: drawn,
             sun: SIMD3(uniforms.sunDirection.x, uniforms.sunDirection.y, uniforms.sunDirection.z), preset: timeOfDay) {
@@ -239,63 +237,14 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
             uniforms.shadowParams = SIMD4(1, 1.0 / 2048.0, 0.00006, 0)
         }
 
-        let wantsReflection = !reducedEffects && mainRanges.contains { $0.category == .water }
-        var reflectionTexture: MTLTexture? = blankReflection
-        if wantsReflection {
-            ensureReflectionTargets(mtlCommandBuffer.device, width: texture.width, height: texture.height)
-        }
-        let reflectionDirty = reflectionMatrix != matrix || reflectionPreset != timeOfDay || reflectionCategories != visible
-        if wantsReflection && !reflectionDirty { reflectionTexture = reflectionColor }
-
-        // Reuse the static reflection until camera, lighting, visibility or target size changes.
-        if wantsReflection, reflectionDirty, let reflectionPipeline {
-            if let color = reflectionColor, let depth = reflectionDepth {
-                let pass = MTLRenderPassDescriptor()
-                pass.colorAttachments[0].texture = color
-                pass.colorAttachments[0].loadAction = .clear
-                pass.colorAttachments[0].storeAction = .store
-                pass.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 0)
-                pass.depthAttachment.texture = depth
-                pass.depthAttachment.loadAction = .clear
-                pass.depthAttachment.storeAction = .dontCare
-                pass.depthAttachment.clearDepth = 1
-                if let encoder = mtlCommandBuffer.makeRenderCommandEncoder(descriptor: pass) {
-                    var mirrored = uniforms
-                    mirrored.params.w = 1
-                    mirrored.water = SIMD4<Float>(waterHeight, 1, Float(color.width), Float(color.height))
-                    encoder.label = "Zuri diorama reflection"
-                    encoder.setViewport(MTLViewport(originX: 0, originY: 0, width: Double(color.width), height: Double(color.height), znear: 0, zfar: 1))
-                    encoder.setRenderPipelineState(reflectionPipeline)
-                    encoder.setCullMode(.none)
-                    encoder.setVertexBuffer(vertexBuffer, offset: 0, index: 0)
-                    encoder.setVertexBytes(&matrix, length: MemoryLayout<simd_float4x4>.stride, index: 1)
-                    encoder.setVertexBytes(&mirrored, length: MemoryLayout<DioramaShaderUniforms>.stride, index: 2)
-                    encoder.setFragmentBytes(&mirrored, length: MemoryLayout<DioramaShaderUniforms>.stride, index: 0)
-                    encoder.setFragmentBuffer(lightBuffer, offset: 0, index: 1)
-                    encoder.setFragmentBuffer(lightTableBuffer, offset: 0, index: 2)
-                    encoder.setFragmentBuffer(lightIndexBuffer, offset: 0, index: 3)
-                    encoder.setFragmentTexture(blankReflection, index: 0)
-                    encoder.setFragmentTexture(shadowMap?.texture, index: 1)
-                    for range in drawn where range.category != .water && range.category != .ground && range.category != .propGlow && range.intersects(matrix, mirrorHeight: waterHeight) {
-                        encoder.setDepthStencilState(range.category == .propGlow ? noWriteDepthState : depthState)
-                        encoder.drawIndexedPrimitives(type: .triangle, indexCount: range.count, indexType: .uint32, indexBuffer: indexBuffer, indexBufferOffset: range.start * MemoryLayout<UInt32>.stride)
-                    }
-                    encoder.endEncoding()
-                    reflectionTexture = color
-                    reflectionMatrix = matrix
-                    reflectionPreset = timeOfDay
-                    reflectionCategories = visible
-                }
-            }
-        }
-
-        // Pass 2: the real scene into Mapbox's frame.
+        // Only the real scene: no literal planar reflections or additional water render target.
         uniforms.water = SIMD4<Float>(waterHeight, 0, Float(texture.width), Float(texture.height))
         guard let encoder = mtlCommandBuffer.makeRenderCommandEncoder(descriptor: mtlRenderPassDescriptor) else { return }
         encoder.label = "Zuri diorama"
         encoder.setViewport(MTLViewport(originX: 0, originY: 0, width: Double(texture.width), height: Double(texture.height), znear: Double(parameters.depthRange.min), zfar: Double(parameters.depthRange.max)))
         encoder.setRenderPipelineState(pipeline)
         encoder.setCullMode(.none)
+        encoder.setTriangleFillMode(wireframe ? .lines : .fill)
         encoder.setVertexBuffer(vertexBuffer, offset: 0, index: 0)
         encoder.setVertexBytes(&matrix, length: MemoryLayout<simd_float4x4>.stride, index: 1)
         encoder.setVertexBytes(&uniforms, length: MemoryLayout<DioramaShaderUniforms>.stride, index: 2)
@@ -303,10 +252,10 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
         encoder.setFragmentBuffer(lightBuffer, offset: 0, index: 1)
         encoder.setFragmentBuffer(lightTableBuffer, offset: 0, index: 2)
         encoder.setFragmentBuffer(lightIndexBuffer, offset: 0, index: 3)
-        encoder.setFragmentTexture(reflectionTexture, index: 0)
+        encoder.setFragmentTexture(blankReflection, index: 0)
         encoder.setFragmentTexture(shadowMap?.texture, index: 1)
         for range in mainRanges {
-            encoder.setRenderPipelineState(range.category == .propGlow ? (glowPipeline ?? pipeline) : pipeline)
+            encoder.setRenderPipelineState(range.category == .propGlow ? (glowPipeline ?? pipeline) : (range.category == .water ? (waterPipeline ?? pipeline) : pipeline))
             encoder.setDepthStencilState(range.category == .propGlow ? noWriteDepthState : depthState)
             encoder.drawIndexedPrimitives(type: .triangle, indexCount: range.count, indexType: .uint32, indexBuffer: indexBuffer, indexBufferOffset: range.start * MemoryLayout<UInt32>.stride)
         }
@@ -315,11 +264,8 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
 
     func renderingWillEnd() {
         pipeline = nil
-        reflectionPipeline = nil
         glowPipeline = nil
-        reflectionMatrix = nil
-        reflectionPreset = nil
-        reflectionCategories = []
+        waterPipeline = nil
         depthState = nil
         noWriteDepthState = nil
         vertexBuffer = nil
@@ -327,8 +273,6 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
         lightBuffer = nil
         lightTableBuffer = nil
         lightIndexBuffer = nil
-        reflectionColor = nil
-        reflectionDepth = nil
         blankReflection = nil
         shadowMap = nil
     }

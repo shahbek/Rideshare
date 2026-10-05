@@ -21,6 +21,10 @@ nonisolated struct DioramaTileData: Sendable {
     /// Paved dining apron in front of Hotel Slipway's arcade (photo-led, not a mapped area).
     var hotelDiningOutline: [DV2] = []
 
+    /// Classified real coast only, excluding artificial tile closure edges.
+    var shorelines: [DioramaShorelineSegment] = []
+    var shorelineLandMasks: [[DV2]] = []
+
     var isEmpty: Bool { buildings.isEmpty && roads.isEmpty && water.isEmpty }
 }
 
@@ -30,6 +34,8 @@ nonisolated struct DioramaPathFeature: Sendable {
     /// `footway`, `steps`, `path`, `pier`, `slipway`.
     let kind: String
     let isLit: Bool
+    var sourceID: UInt64? = nil
+    var tags: [String: String] = [:]
 }
 
 nonisolated struct DioramaPointFeature: Sendable {
@@ -72,6 +78,7 @@ nonisolated struct DioramaAreaFeature: Sendable {
     let kind: String
     /// OSM `sport` tag for pitches (`padel`, `tennis`, ...).
     var sport: String? = nil
+    var tags: [String: String] = [:]
 }
 
 /// The diorama's source data is a small OpenStreetMap extract of the Slipway tile bundled with the app
@@ -82,8 +89,8 @@ nonisolated enum DioramaBundledTile {
         nonisolated struct Tile: Decodable, Sendable { let z: Int; let x: Int; let y: Int }
         nonisolated struct Building: Decodable, Sendable { let id: UInt64; let type: String; let height: Double?; let ring: [[Double]] }
         nonisolated struct Road: Decodable, Sendable { let id: UInt64; let `class`: String; let paved: Bool; let line: [[Double]] }
-        nonisolated struct Area: Decodable, Sendable { let id: UInt64; let kind: String?; let sport: String?; let rings: [[[Double]]]; let clipped: [Bool]? }
-        nonisolated struct Path: Decodable, Sendable { let id: UInt64; let kind: String; let lit: Bool?; let line: [[Double]] }
+        nonisolated struct Area: Decodable, Sendable { let id: UInt64; let kind: String?; let sport: String?; let rings: [[[Double]]]; let clipped: [Bool]?; let tags: [String: String]? }
+        nonisolated struct Path: Decodable, Sendable { let id: UInt64; let kind: String; let lit: Bool?; let line: [[Double]]; let tags: [String: String]? }
         nonisolated struct Point: Decodable, Sendable { let id: UInt64; let kind: String; let point: [Double] }
         let tile: Tile
         let buildings: [Building]
@@ -175,7 +182,7 @@ nonisolated enum DioramaBundledTile {
                 let cleaned = DioramaPolygon.clean(hole.compactMap(local), flags: [Bool](repeating: false, count: hole.count)).points
                 if cleaned.count >= 3 { rings.append(cleaned) }
             }
-            return DioramaAreaFeature(id: a.id, rings: rings, clipped: fl, kind: kind, sport: a.sport)
+            return DioramaAreaFeature(id: a.id, rings: rings, clipped: fl, kind: kind, sport: a.sport, tags: a.tags ?? [:])
         }
 
         let water = file.water.compactMap { area($0, kind: "water", bounds: outside) }
@@ -190,7 +197,7 @@ nonisolated enum DioramaBundledTile {
             guard line.count >= 2 else { continue }
             for (pieceIndex, piece) in DioramaPolygon.clip(line, to: rect).enumerated() where DioramaPolygon.length(piece) > 1 {
                 let key = DioramaRandom.mix(p.id &+ UInt64(pieceIndex) &* 613)
-                paths.append(DioramaPathFeature(id: key, line: piece, kind: p.kind, isLit: p.lit ?? false))
+                paths.append(DioramaPathFeature(id: key, line: piece, kind: p.kind, isLit: p.lit ?? false, sourceID: p.id, tags: p.tags ?? [:]))
             }
         }
 
@@ -211,6 +218,9 @@ nonisolated enum DioramaBundledTile {
         )
         result.hotelCourtyardOutline = DioramaHotelGrounds.courtyardOutline(data: result)
         result.hotelDiningOutline = DioramaHotelGrounds.diningOutline(data: result)
+        result.shorelines = DioramaShoreline.classify(data: result, config: config,
+                                                    overrides: DioramaShorelineOverrides.load())
+        result.shorelineLandMasks = DioramaShoreline.landMasks(result.shorelines, config: config)
         return result
     }
 }

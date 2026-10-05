@@ -16,6 +16,7 @@ nonisolated enum DioramaSwatch: Int, CaseIterable, Sendable {
     case tankBlack, tankBlue, dishWhite, solarNavy
     // Ground, roads and water
     case grass, courtyard, deck, earth, seabed, sea
+    case wetSand, dampStone, algaeStone, rockWarm, rockGrey, rockPale, seaweed
     case asphalt, roadEarth, pavement, kerb, marking, crossing, parkEdge
     case stopRed, signPost
     // Landscaping
@@ -46,6 +47,8 @@ nonisolated enum DioramaSwatch: Int, CaseIterable, Sendable {
         .carvedWood: 0x4E2E1A, .metalCharcoal: 0x2E2F33, .gateGreen: 0x2F5E46, .gateBlue: 0x2D5785,
         .tankBlack: 0x232427, .tankBlue: 0x2B5FA8, .dishWhite: 0xECECEC, .solarNavy: 0x1F2E4E,
         .grass: 0x74A848, .courtyard: 0xE7D9C6, .deck: 0xB98E62, .earth: 0xE3D3B2, .seabed: 0xB7A77F, .sea: 0x2E8FA3,
+        .wetSand: 0xB7A77F, .dampStone: 0x817866, .algaeStone: 0x667B62,
+        .rockWarm: 0xB6A485, .rockGrey: 0x8E9188, .rockPale: 0xC9C2B6, .seaweed: 0x6B7352,
         .asphalt: 0x5C4A58, .roadEarth: 0xC19466, .pavement: 0xEBDCD2, .kerb: 0xF6EFE8, .marking: 0xFAF4E8, .crossing: 0xFFFBF2, .parkEdge: 0xD9CBB4,
         .stopRed: 0xC8352E, .signPost: 0x8A8F96,
         .hedge: 0x4F8A3C, .leafOlive: 0x6B8A3E, .leafBright: 0x8FC25A, .cypress: 0x35623A,
@@ -68,7 +71,7 @@ nonisolated enum DioramaSwatch: Int, CaseIterable, Sendable {
 
 /// The separately toggleable models each tile is split into.
 nonisolated enum DioramaCategory: String, CaseIterable, Codable, Sendable {
-    case ground, water, roads, buildings, walls, vegetation, props, windowGlow, propGlow
+    case ground, water, roads, buildings, walls, vegetation, props, windowGlow, propGlow, shorelineDebug
 
     /// Emissive categories are drawn unlit and only at dusk/night.
     var isEmissive: Bool { self == .windowGlow || self == .propGlow }
@@ -117,7 +120,7 @@ nonisolated struct DioramaBuildingOverride: Sendable {
 /// One place to tune the whole look without touching generation code.
 nonisolated struct DioramaConfig: Sendable {
     /// Bump to invalidate every cached tile.
-    var generatorVersion: Int = 19
+    var generatorVersion: Int = 20
     /// Drape the plate/ground overlays over the shared DEM datum used by roads and foundations.
     var usesElevation: Bool = true
 
@@ -215,6 +218,27 @@ nonisolated struct DioramaConfig: Sendable {
     var bushesPer1000m2: Double = 9
     var kioskChance: Double = 0.45
     var dhowsPerTile: Int = 4
+
+    // MARK: Shoreline (metres, illustrative mid-tide datum, not a tidal prediction)
+    var waterLevel: Double = 0.22
+    var beachWidth: Double = 12
+    var beachSlope: Double = 0.12
+    var seawallHeight: Double = 2.4
+    var seawallSubmergedDepth: Double = 0.5
+    var seawallBatter: Double = 0.12
+    var copingWidth: Double = 0.65
+    var copingHeight: Double = 0.18
+    var copingRadius: Double = 0.08
+    var rockSizeRange: ClosedRange<Double> = 0.4...1.5
+    /// Rocks per square metre on the slope; also controls row spacing.
+    var rockDensity: Double = 1.6
+    var revetmentWidth: Double = 4.5
+    var deckPostSpacing: Double = 3
+    var deckThickness: Double = 0.16
+    var foamWidth: Double = 0.65
+    var shallowWaterDistance: Double = 28
+    var shorelineSampleSpacing: Double = 2
+    var shorelineFallbackDistance: Double = 15
 
     // MARK: Palette
     var palette: [DioramaSwatch: UInt32] = DioramaSwatch.defaultPalette

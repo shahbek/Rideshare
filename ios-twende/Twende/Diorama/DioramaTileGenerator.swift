@@ -1,6 +1,5 @@
 import Foundation
 import simd
-import simd
 
 /// Everything the renderer needs for one generated tile: one interleaved vertex buffer, one index
 /// buffer, and the index range each category occupies so categories can be toggled per frame.
@@ -18,6 +17,7 @@ nonisolated struct DioramaTileArtifacts: Sendable {
     let lights: [DioramaLight]
     let lightGrid: DioramaLightGrid
     let waterHeight: Double
+    let shorelineReport: [String]
     let generationSeconds: Double
 
     var totalTriangles: Int { indices.count / 3 }
@@ -52,7 +52,9 @@ nonisolated enum DioramaTileGenerator {
         let started = Date()
 
         let roadIndex = DioramaRoadIndex(roads: data.roads, pavementWidth: config.pavementWidth)
-        let terrain = (sampledTerrain ?? DioramaTerrain.load(rect: data.rect, config: config)).resolvingSurfaces(in: data)
+        var datum = sampledTerrain ?? DioramaTerrain.load(rect: data.rect, config: config)
+        datum.midTideDatum = config.waterLevel
+        let terrain = datum.resolvingSurfaces(in: data)
         let streetLayout = DioramaStreetLayout(data: data, config: config)
         var buildings = DioramaMesh()
         var windowGlow = DioramaMesh()
@@ -63,6 +65,7 @@ nonisolated enum DioramaTileGenerator {
         var vegetation = DioramaMesh()
         var props = DioramaMesh()
         var propGlow = DioramaMesh()
+        var shorelineDebug = DioramaMesh()
         var lights: [DioramaLight] = []
 
         let builder = DioramaBuildingGenerator(config: config, roads: roadIndex, terrain: terrain)
@@ -85,6 +88,9 @@ nonisolated enum DioramaTileGenerator {
         DioramaGroundGenerator(config: config, data: data, roads: roadIndex, terrain: terrain, cutouts: DioramaGroundCutouts(data: data, pavementWidth: config.pavementWidth, streetPolygons: streetLayout.corridor.polygons, additionalMasks: data.hotelCourtyardOutline.isEmpty ? [] : [data.hotelCourtyardOutline])).generate(compounds: compounds, into: &ground, water: &water)
         DioramaRoadGenerator(config: config, data: data, roads: roadIndex, terrain: terrain, layout: streetLayout, compounds: compounds).generate(into: &roadsMesh)
 
+        DioramaShorelineGenerator(config: config, data: data, terrain: terrain, library: library)
+            .generate(ground: &ground, props: &props, vegetation: &vegetation, debug: &shorelineDebug)
+
         let amenities = DioramaAmenityGenerator(config: config, data: data, roads: roadIndex, library: library, buildings: built, terrain: terrain)
         amenities.generate(ground: &ground, props: &props, glow: &propGlow, lights: &lights)
 
@@ -100,8 +106,8 @@ nonisolated enum DioramaTileGenerator {
 
         // Order matters: opaque categories first, translucent halos (propGlow) last.
         let meshes: [(DioramaCategory, DioramaMesh)] = [
-            (.ground, ground), (.water, water), (.roads, roadsMesh), (.buildings, buildings), (.walls, walls), (.vegetation, vegetation),
-            (.props, props), (.windowGlow, windowGlow), (.propGlow, propGlow),
+            (.ground, ground), (.roads, roadsMesh), (.buildings, buildings), (.walls, walls), (.vegetation, vegetation),
+            (.props, props), (.water, water), (.windowGlow, windowGlow), (.propGlow, propGlow), (.shorelineDebug, shorelineDebug),
         ]
 
         var vertices: [BuildingRenderVertex] = []
@@ -116,7 +122,7 @@ nonisolated enum DioramaTileGenerator {
             let base = vertices.count
             let count = mesh.positions.count
             // Shader paths (appearance.w): 0 lit surface, 1 water, 4 emissive, 5 halo sprite.
-            let baseCode: Float = category.isEmissive ? 4 : (category == .water ? 1 : 0)
+            let baseCode: Float = category == .shorelineDebug ? 6 : (category.isEmissive ? 4 : (category == .water ? 1 : 0))
             for i in 0..<count {
                 let p = mesh.positions[i]
                 let n = mesh.normals[i]
@@ -127,7 +133,7 @@ nonisolated enum DioramaTileGenerator {
                 let texture: Float
                 switch cell?.swatch {
                 case .grass, .lawn, .pitchGreen: texture = 1
-                case .earth: texture = 2
+                case .earth, .wetSand: texture = 2
                 case .asphalt: texture = 3
                 case .paving, .pavement, .concrete: texture = 4
                 case .poolBlue: texture = 5
@@ -188,7 +194,7 @@ nonisolated enum DioramaTileGenerator {
 
         let artifacts = DioramaTileArtifacts(
             tile: data.tile, vertices: vertices, indices: indices, ranges: ranges, parts: parts, lights: lights, lightGrid: lightGrid,
-            waterHeight: terrain.waterLevel, generationSeconds: Date().timeIntervalSince(started)
+            waterHeight: terrain.waterLevel, shorelineReport: DioramaShoreline.report(data.shorelines), generationSeconds: Date().timeIntervalSince(started)
         )
         if sampledTerrain == nil {
             cacheLock.lock()

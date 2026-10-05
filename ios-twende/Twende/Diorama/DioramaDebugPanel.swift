@@ -29,7 +29,8 @@ struct DioramaDebugPanel: View {
             .buttonStyle(.pressableCard)
 
             if isExpanded {
-                VStack(alignment: .leading, spacing: 12) {
+                ScrollView {
+                  VStack(alignment: .leading, spacing: 12) {
                     RowDivider(leading: 0)
                     Picker("Time of day", selection: $state.timeOfDay) {
                         ForEach(DioramaTimeOfDay.allCases) { time in
@@ -46,6 +47,11 @@ struct DioramaDebugPanel: View {
                         toggle("Ground", .ground)
                         toggle("Roads", .roads)
                         toggle("Water", .water)
+                        toggle("Shoreline types", .shorelineDebug)
+                        Toggle("Wireframe", isOn: $state.showsWireframe)
+                            .font(TwendeFont.label).toggleStyle(.button).tint(TwendeColor.primary)
+                        Toggle("Basemap only", isOn: $state.isBasemapOnly)
+                            .font(TwendeFont.label).toggleStyle(.button).tint(TwendeColor.primary)
                         Toggle(isOn: $state.showsDebugOverlay) {
                             Text("Tile bounds").font(TwendeFont.label)
                         }
@@ -61,17 +67,35 @@ struct DioramaDebugPanel: View {
                         .buttonStyle(.twendeSecondary)
                         Button("Fly to Slipway") {
                             Haptics.tap()
+                            state.inspectionTarget = nil
                             state.cameraFlyRequest += 1
                         }
                         .buttonStyle(.twendeSecondary)
                     }
 
+                    if state.visibleCategories.contains(.shorelineDebug) {
+                        Text("Yellow: beach · red: seawall · orange: rocks · blue: deck · green: natural")
+                            .font(TwendeFont.label).foregroundStyle(TwendeColor.inkSecondary)
+                    }
+                    Button("Inspect beach section") {
+                        state.inspectionTarget = .beach
+                        state.cameraFlyRequest += 1
+                    }
+                    .buttonStyle(.twendeSecondary)
+                    DisclosureGroup("Shoreline classification report") {
+                        Text(state.loadedTiles.values.flatMap(\.shorelineReport).joined(separator: "\n"))
+                            .font(TwendeFont.label).foregroundStyle(TwendeColor.inkSecondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .font(TwendeFont.label)
                     Text(summary)
                         .font(TwendeFont.label)
                         .foregroundStyle(TwendeColor.inkSecondary)
                         .fixedSize(horizontal: false, vertical: true)
+                  }
+                  .padding(14)
                 }
-                .padding(14)
+                .frame(maxHeight: 340)
                 .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }

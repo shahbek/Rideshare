@@ -77,7 +77,9 @@ final class SystemIntegrationTests: XCTestCase {
         let env = makeEnvironment()
         env.trips.activeTrip.map { _ in env.trips.cancel(reason: .changedPlans) }
 
-        let found = try await FindPlaceIntent(query: "airport").perform()
+        var find = FindPlaceIntent()
+        find.query = "airport"
+        let found = try await find.perform()
         let place = found.value
         XCTAssertEqual(place?.name, DemoPlaces.airport.name)
 

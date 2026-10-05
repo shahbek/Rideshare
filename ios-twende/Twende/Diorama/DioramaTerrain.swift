@@ -3,8 +3,6 @@ import Foundation
 /// One triangulated height field for land, draped finishes, markings and structural foundations.
 nonisolated struct DioramaTerrain: Sendable {
     static let lift: Double = 0.6
-    static let waterSurface: Double = 0.22
-    static let seabed: Double = -1.0
     /// All draped surfaces use the same cell origin, diagonal and interpolation, not separate meshes.
     static let surfaceStep: Double = 4
 
@@ -17,7 +15,8 @@ nonisolated struct DioramaTerrain: Sendable {
     /// This is a rendering adjustment, not a surveyed sea-level measurement.
     var clearance: Double = 0
 
-    var waterLevel: Double { Self.waterSurface + clearance }
+    var midTideDatum: Double = DioramaConfig.slipway.waterLevel
+    var waterLevel: Double { midTideDatum + clearance }
     var pierLevel: Double { waterLevel + 0.83 }
     var seabedLevel: Double { waterLevel - 1.22 }
 
@@ -35,16 +34,21 @@ nonisolated struct DioramaTerrain: Sendable {
 
     /// Offline estimate until the already loaded Mapbox DEM is available.
     static func load(rect: DioramaRect, config: DioramaConfig) -> DioramaTerrain {
-        guard config.usesElevation else { return flat(rect) }
+        guard config.usesElevation else {
+            var result = flat(rect); result.midTideDatum = config.waterLevel
+            return result
+        }
         guard let url = Bundle.main.url(forResource: resourceName, withExtension: "json"),
               let data = try? Data(contentsOf: url),
               let file = try? JSONDecoder().decode(File.self, from: data),
               file.columns >= 2, file.rows >= 2, file.elevations.count == file.columns * file.rows,
               file.elevations.allSatisfy(\.isFinite) else {
             print("[Diorama] terrain grid missing; using flat ground")
-            return flat(rect)
+            var result = flat(rect); result.midTideDatum = config.waterLevel
+            return result
         }
-        return DioramaTerrain(rect: rect, columns: file.columns, rows: file.rows, values: file.elevations.map { $0 * 1.6 })
+        return DioramaTerrain(rect: rect, columns: file.columns, rows: file.rows,
+                              values: file.elevations.map { $0 * 1.6 }, midTideDatum: config.waterLevel)
     }
 
     /// Keep a level ocean above coastal DEM artefacts. Move the ENTIRE scene by the same amount,

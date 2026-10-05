@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "segments": [
+    {
+      "id": "slipway-stone-waterfront",
+      "type": "seawall",
+      "bounds": [39.27165, -6.75319, 39.2724, -6.75159],
+      "revetment": true,
+      "preserveMappedDecks": true,
+      "note": "Hand-authored Slipway waterfront: stone retaining edge with rock toe. Extent is illustrative, not surveyed. Mapped restaurant decks remain structures above it."
+    },
+    {
+      "id": "southern-bay-beach-preview",
+      "type": "beach",
+      "bounds": [39.2726, -6.75615, 39.27305, -6.75502],
+      "revetment": false,
+      "preserveMappedDecks": false,
+      "note": "Illustrative beach inspection section south of the hotel complex. The bundled extract has no natural=beach polygon; do not report this as a data-derived beach."
+    }
+  ]
+}

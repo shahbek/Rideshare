@@ -9,9 +9,17 @@ final class DioramaState {
     static let shared = DioramaState()
 
     var isEnabled: Bool = false
-    var timeOfDay: DioramaTimeOfDay = .dusk
-    var visibleCategories: Set<DioramaCategory> = Set(DioramaCategory.allCases)
-    var showsDebugOverlay: Bool = false
+    static let renderSettingsChanged = Notification.Name("zuri.diorama.renderSettingsChanged")
+    var timeOfDay: DioramaTimeOfDay = .dusk { didSet { notifyRenderer() } }
+    var visibleCategories: Set<DioramaCategory> = Set(DioramaCategory.allCases.filter { $0 != .shorelineDebug }) { didSet { notifyRenderer() } }
+    var showsDebugOverlay: Bool = false { didSet { notifyRenderer() } }
+    var showsWireframe: Bool = false { didSet { notifyRenderer() } }
+    var isBasemapOnly: Bool = false { didSet { notifyRenderer() } }
+
+    private func notifyRenderer() {
+        NotificationCenter.default.post(name: Self.renderSettingsChanged, object: self)
+    }
+    var inspectionTarget: DioramaShoreline.Kind? = nil
     /// Set after a successful tile load so the panel can report numbers.
     var loadedTiles: [DioramaTileID: DioramaTileArtifacts] = [:]
     var status: String = ""
@@ -62,10 +70,12 @@ final class DioramaTileManager {
     private var appliedCategories: Set<DioramaCategory> = []
     private var appliedTimeOfDay: DioramaTimeOfDay? = nil
     private var appliedDebug: Bool = false
+    private var appliedWireframe: Bool? = nil
     private var thermalReduced: Bool = ProcessInfo.processInfo.thermalState.rawValue >= ProcessInfo.ThermalState.serious.rawValue
     private var thermalObserver: NSObjectProtocol? = nil
     private var renderLayer: DioramaRenderLayer? = nil
     private var powerObserver: NSObjectProtocol? = nil
+    private var settingsObserver: NSObjectProtocol? = nil
     /// Low-rate clock for the gentle water drift. Runs only while the tile is shown, the app is
     /// active and effects are not reduced; Mapbox otherwise sleeps between camera changes.
     private var waterClock: Timer? = nil
@@ -82,12 +92,15 @@ final class DioramaTileManager {
     private var clipLayerID: String { "zuri-diorama-clip-\(tile.key)" }
     private var clipSourceID: String { "zuri-diorama-clip-src-\(tile.key)" }
 
-    init(config: DioramaConfig = .slipway, state: DioramaState = .shared) {
+    init(config: DioramaConfig = .slipway, state: DioramaState? = nil) {
         self.config = config
-        self.state = state
+        self.state = state ?? .shared
         tile = DioramaTileID(latitude: config.seedLatitude, longitude: config.seedLongitude, zoom: config.tileZoom)
         styling = DioramaMapStyling(config: config)
         library = DioramaPropLibrary(config: config)
+        settingsObserver = NotificationCenter.default.addObserver(forName: DioramaState.renderSettingsChanged, object: self.state, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.scheduleUpdate(delay: 0) }
+        }
         thermalObserver = NotificationCenter.default.addObserver(forName: ProcessInfo.thermalStateDidChangeNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self else { return }
@@ -159,6 +172,8 @@ final class DioramaTileManager {
     func remove() {
         pendingUpdate?.cancel()
         pendingUpdate = nil
+        if let settingsObserver { NotificationCenter.default.removeObserver(settingsObserver) }
+        settingsObserver = nil
         guard let map else { return }
         hide(on: map)
         styling.remove(from: map)
@@ -170,7 +185,15 @@ final class DioramaTileManager {
 
     /// Camera options for the opening shot over the tile.
     func introCamera() -> CameraOptions {
-        CameraOptions(center: tile.centre, zoom: config.cameraZoom, bearing: config.cameraBearing, pitch: config.cameraPitch)
+        if let kind = state.inspectionTarget,
+           let data = DioramaBundledTile.load(config: config),
+           let segment = data.shorelines.filter({ $0.kind == kind }).max(by: { $0.length < $1.length }) {
+            let p = segment.points[segment.points.count / 2]
+            let coordinate = data.projection.coordinate(p)
+            return CameraOptions(center: CLLocationCoordinate2D(latitude: coordinate.latitude, longitude: coordinate.longitude),
+                                 zoom: 18, bearing: config.cameraBearing, pitch: config.cameraPitch)
+        }
+        return CameraOptions(center: tile.centre, zoom: config.cameraZoom, bearing: config.cameraBearing, pitch: config.cameraPitch)
     }
 
     // MARK: Updates
@@ -189,6 +212,11 @@ final class DioramaTileManager {
         applyCategoryVisibility()
         applyDebug()
 
+        if state.isBasemapOnly {
+            if shown { hide(on: map) }
+            state.status = "Basemap-only comparison · custom shoreline hidden"
+            return
+        }
         let camera = map.cameraState
         let centreTile = DioramaTileID(latitude: camera.center.latitude, longitude: camera.center.longitude, zoom: config.tileZoom)
         let near = abs(centreTile.x - tile.x) <= config.visibilityRadiusTiles && abs(centreTile.y - tile.y) <= config.visibilityRadiusTiles
@@ -317,7 +345,7 @@ final class DioramaTileManager {
             let host = DioramaRenderLayer(
                 origin: tile.centre, vertices: artifacts.vertices, indices: artifacts.indices, ranges: artifacts.ranges,
                 lightGrid: artifacts.lightGrid, waterHeight: artifacts.waterHeight, visible: state.visibleCategories, timeOfDay: state.timeOfDay,
-                animates: animates
+                animates: animates, config: config
             )
             try map.addCustomLayer(withId: layerID, layerHost: host, layerPosition: nil)
             try map.setLayerProperty(for: layerID, property: "slot", value: "middle")
@@ -332,6 +360,8 @@ final class DioramaTileManager {
             renderLayer = host
             shown = true
             host.setReducedEffects(reducesEffects)
+            host.setWireframe(state.showsWireframe)
+            appliedWireframe = state.showsWireframe
             state.loadedTiles[tile] = artifacts
             state.status = "Slipway loaded" + (thermalReduced ? " · reduced detail (thermal)" : "")
             updateWaterClock()
@@ -347,6 +377,7 @@ final class DioramaTileManager {
         for id in [clipLayerID, layerID] where map.layerExists(withId: id) { try? map.removeLayer(withId: id) }
         if map.sourceExists(withId: clipSourceID) { try? map.removeSource(withId: clipSourceID) }
         renderLayer = nil
+        appliedWireframe = nil
         shown = false
         updateWaterClock()
     }
@@ -364,6 +395,11 @@ final class DioramaTileManager {
 
     private func applyDebug() {
         guard let map else { return }
+        if appliedWireframe != state.showsWireframe, let renderLayer {
+            renderLayer.setWireframe(state.showsWireframe)
+            appliedWireframe = state.showsWireframe
+            map.triggerRepaint()
+        }
         let show = state.showsDebugOverlay
         if show || appliedDebug {
             styling.setTileBounds(shown ? [tile] : [], visible: show, on: map)

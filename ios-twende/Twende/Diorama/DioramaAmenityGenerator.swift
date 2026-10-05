@@ -3,8 +3,8 @@ import Foundation
 /// Everything in the tile that is neither a road nor a house, built from the mapped amenities so the
 /// diorama matches the real Slipway: padel and sports courts with lines, nets and glass; the hotel car
 /// park with marked bays; the two fuel forecourts with canopies and pumps; the DoubleTree and Slipway
-/// pools with loungers; restaurant terraces with parasols; paved footways, steps, the wooden pier, the
-/// mapped pier; telecom masts, a playground, a sculpture and the mosque's minaret.
+/// pools with loungers; structural timber terraces with parasols; paved footways, steps and the
+/// mapped wooden pier; telecom masts, a playground, a sculpture and the mosque's minaret.
 nonisolated struct DioramaAmenityGenerator {
     let config: DioramaConfig
     let data: DioramaTileData
@@ -75,10 +75,7 @@ nonisolated struct DioramaAmenityGenerator {
             additionalMasks: data.water.compactMap { $0.rings.first }, excludedAreaIDs: [areaID])
         let pieces = masks.subtract(from: ring)
         for piece in pieces { ground.polygon(piece, z: top, finish) }
-        for edge in DioramaStreetSurface(pieces).boundary() {
-            let bottom = min(terrain.height(edge.a), terrain.height(edge.b)) - 0.3
-            ground.wall(edge.a, edge.b, z0: bottom, z1: top, side)
-        }
+        // Ground finishes have no generic extruded sides; actual coastal walls belong to shoreline.
         return pieces
     }
 
@@ -362,30 +359,10 @@ nonisolated struct DioramaAmenityGenerator {
         let top = base + 0.35
         let cutouts = DioramaGroundCutouts(data: data, pavementWidth: config.pavementWidth, excludedAreaIDs: [areaID])
         let pieces = cutouts.subtract(from: ring)
-        for piece in pieces { ground.polygon(piece, z: top, .deckWood) }
-        func onDeck(_ p: DV2) -> Bool { pieces.contains { DioramaPolygon.contains($0, p) } }
-        let boundary = DioramaStreetSurface(pieces).boundary()
-        for edge in boundary {
-            ground.wall(edge.a, edge.b, z0: base - 0.4, z1: top, .pierWood)
-        }
-        // No bounding-box plank overlays: they extended beyond concave deck edges and fought
-        // the deck surface at oblique angles. Keep a single clean timber surface.
         let box = DioramaPolygon.minimumAreaRectangle(ring)
-        // Balustrade on the edges facing water or open ground.
-        for edge in boundary {
-            let a = edge.a, b = edge.b
-            let mid = (a + b) * 0.5
-            let out = (b - a).normalized.right
-            guard a.distance(to: b) > 0.15, !buildings.contains(where: { $0.box.expanded(by: 0.8).contains(mid + out * 0.6) }) else { continue }
-            let dir = (b - a).normalized
-            let length = a.distance(to: b)
-            var d = 0.0
-            while d <= length {
-                props.cylinder(centre: a + dir * d, z0: top, z1: top + 1.0, r0: 0.04, r1: 0.04, sides: 4, .trimWhite)
-                d += 1.5
-            }
-            props.box(centre: mid, z0: top + 0.95, axis: dir, halfLength: length / 2, halfWidth: 0.03, height: 0.06, .trimWhite)
-        }
+        DioramaDeckGenerator(config: config, data: data, terrain: terrain)
+            .build(pieces: pieces, top: top, axis: box.axis, props: &props)
+        func onDeck(_ p: DV2) -> Bool { pieces.contains { DioramaPolygon.contains($0, p) } }
         // Parasols with tables, spaced on a grid.
         var y = -box.halfWidth + 1.8
         var k = 0
@@ -422,10 +399,6 @@ nonisolated struct DioramaAmenityGenerator {
         for piece in pieces {
             terrain.drape(piece, lift: Self.pathLift, swatch: .paving, into: &ground)
         }
-        for edge in DioramaStreetSurface(pieces).boundary() {
-            let base = z((edge.a + edge.b) * 0.5)
-            ground.wall(edge.a, edge.b, z0: base, z1: base + Self.pathLift, .kerb)
-        }
     }
 
     private func steps(_ line: [DV2], ground: inout DioramaMesh) {
@@ -448,23 +421,14 @@ nonisolated struct DioramaAmenityGenerator {
         guard line.count >= 2 else { return }
         let deck = terrain.pierHeight(line)
         let half = 1.8
-        let dense = DioramaPolygon.densify(line, maxStep: 3)
-        for i in 0..<(dense.count - 1) {
-            let a = dense[i], b = dense[i + 1]
-            let n = (b - a).normalized.right * half
-            props.quad(DV3(a - n, deck), DV3(b - n, deck), DV3(b + n, deck), DV3(a + n, deck), .pierWood, normal: .up)
-            props.quad(DV3(a - n, deck - 0.3), DV3(b - n, deck - 0.3), DV3(b + n, deck - 0.3), DV3(a + n, deck - 0.3), .pierWood, dark: true, normal: DV3(0, 0, -1))
-            for s in [-1.0, 1.0] {
-                let e0 = a + n * s, e1 = b + n * s
-                props.quad(DV3(e0, deck - 0.3), DV3(e1, deck - 0.3), DV3(e1, deck), DV3(e0, deck), .pierWood, dark: true, normal: DV3((e1 - e0).normalized.right * s, 0))
-                // Railing.
-                props.cylinder(centre: e0, z0: deck, z1: deck + 1.0, r0: 0.05, r1: 0.05, sides: 4, .trimWhite)
-                props.box(centre: (e0 + e1) * 0.5, z0: deck + 0.95, axis: (e1 - e0).normalized, halfLength: e0.distance(to: e1) / 2, halfWidth: 0.03, height: 0.06, .trimWhite)
-                // Pile down to the seabed.
-                let pile = e0 - n.normalized * (s * 0.3)
-                props.cylinder(centre: pile, z0: terrain.seabedLevel, z1: deck - 0.3, r0: 0.16, r1: 0.14, sides: 6, .trunk, cap: false)
-            }
-        }
+        let dense = DioramaPolygon.densify(line, maxStep: config.deckPostSpacing)
+        let joins = DioramaShoreline.frames(dense)
+        let left = dense.indices.map { dense[$0] + joins[$0] * half }
+        let right = dense.indices.reversed().map { dense[$0] - joins[$0] * half }
+        let outline = DioramaPolygon.counterClockwise(left + right)
+        let pieces = DioramaGroundCutouts(polygons: data.buildings.map(\.ring)).subtract(from: outline)
+        DioramaDeckGenerator(config: config, data: data, terrain: terrain)
+            .build(pieces: pieces, top: deck, axis: (line[1] - line[0]).normalized, props: &props)
         // A pair of dhows moored at the head of the pier.
         let head = dense[dense.count - 1]
         let dir = (head - dense[dense.count - 2]).normalized
@@ -475,8 +439,6 @@ nonisolated struct DioramaAmenityGenerator {
             }
         }
     }
-
-    /// Concrete boat ramp sloping from the yard down into the water.
 
     // MARK: Points of interest
 
