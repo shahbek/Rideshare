@@ -68,8 +68,10 @@ nonisolated enum DioramaTileGenerator {
         built.reserveCapacity(data.buildings.count)
         var porchLights: [DioramaLight] = []
         for feature in data.buildings {
-            if DioramaHotelGenerator.ids.contains(feature.id) {
-                built.append(DioramaHotelGenerator(terrain: terrain).build(feature, mesh: &buildings, glow: &windowGlow, lights: &porchLights))
+            if feature.id == DioramaSlipwayPavilion.buildingID {
+                built.append(DioramaSlipwayPavilion(data: data, terrain: terrain).build(feature, mesh: &buildings))
+            } else if DioramaHotelGenerator.ids.contains(feature.id) {
+                built.append(DioramaHotelGenerator(terrain: terrain, courtyardCentre: data.landuse.first(where: { $0.id == DioramaHotelGrounds.courtyardID })?.rings.first.map { DioramaPolygon.centroid($0) }).build(feature, mesh: &buildings, glow: &windowGlow, lights: &porchLights))
             } else {
                 built.append(builder.build(feature, into: &buildings, glow: &windowGlow, lights: true, pointLights: &porchLights))
             }
@@ -128,6 +130,7 @@ nonisolated enum DioramaTileGenerator {
                 case .paving, .pavement, .concrete: texture = 4
                 case .poolBlue: texture = 5
                 case .glass, .glassPale: texture = 6
+                case .tileClay: texture = 7
                 default: texture = 0
                 }
                 let attribute = i < mesh.attributes.count ? mesh.attributes[i] : 0

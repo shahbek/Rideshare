@@ -285,12 +285,27 @@ nonisolated enum DioramaPolygon {
         return out
     }
 
-    /// Ear clipping for a counter-clockwise ring. Falls back to a fan if the ring is degenerate.
+    /// Ear clipping preserving original indices. Never fan-fill a concave remainder: that creates
+    /// crossing triangles outside the footprint. Remove duplicate/collinear vertices before clipping.
     static func triangulate(_ ring: [DV2]) -> [(Int, Int, Int)] {
         let n = ring.count
         guard n >= 3 else { return [] }
-        if n == 3 { return [(0, 1, 2)] }
         var indices = Array(0..<n)
+        if signedArea(ring) < 0 { indices.reverse() }
+        var changed = true
+        while changed && indices.count > 3 {
+            changed = false
+            for k in indices.indices {
+                let a = ring[indices[(k + indices.count - 1) % indices.count]]
+                let b = ring[indices[k]], c = ring[indices[(k + 1) % indices.count]]
+                if a.distance(to: b) < 0.00001 ||
+                    (abs((b - a).cross(c - b)) < 0.0000001 && (b - a).dot(c - b) >= 0) {
+                    indices.remove(at: k)
+                    changed = true
+                    break
+                }
+            }
+        }
         var result: [(Int, Int, Int)] = []
         result.reserveCapacity(n - 2)
         var guardCounter = 0
@@ -321,7 +336,8 @@ nonisolated enum DioramaPolygon {
         if indices.count == 3 {
             result.append((indices[0], indices[1], indices[2]))
         } else if indices.count > 3 {
-            for k in 1..<(indices.count - 1) { result.append((indices[0], indices[k], indices[k + 1])) }
+            // Reject the whole invalid surface rather than drawing a plausible-looking partial lid.
+            return []
         }
         return result
     }

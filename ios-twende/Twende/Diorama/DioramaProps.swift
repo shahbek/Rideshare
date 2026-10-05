@@ -222,8 +222,17 @@ nonisolated struct DioramaPropLibrary: Sendable {
             let l1 = b + DV3(across * w1, -fold * w1 / max(width, 0.01)), r1 = b - DV3(across * w1, fold * w1 / max(width, 0.01))
             m.quad(a, b, l1, l0, s, normal: DV3(across * 0.3, 1).normalized)
             m.quad(r0, r1, b, a, s, normal: DV3(across * -0.3, 1).normalized)
-            m.quad(l0, l1, b, a, .leafDark, normal: DV3(0, 0, -1))
-            m.quad(a, b, r1, r0, .leafDark, normal: DV3(0, 0, -1))
+            // Only one skin: reverse coplanar faces fought for depth and made the palms black.
+            // Individual drooping pinnae articulate the crown instead of a solid triangular fan.
+            for j in 0..<3 {
+                let t = (Double(j) + 0.4) / 3
+                let root = a + (b - a) * t
+                let width = w0 + (w1 - w0) * t
+                for side in [-1.0, 1.0] {
+                    let tip = root + DV3(across * (side * width * 1.35) + dir * 0.24, -0.25 - width * 0.18)
+                    m.triangle(root, tip, root + DV3(dir * 0.12, -0.025), s, normal: DV3(across * (side * 0.25), 1).normalized)
+                }
+            }
         }
     }
 

@@ -153,16 +153,28 @@ nonisolated enum DioramaShaderSource {
 
     float dioramaShadow(float3 p, float3 n, constant DioramaUniforms &u, depth2d<float> shadowMap) {
         if (u.shadowParams.x < 0.5) return 1.0;
-        float4 projected = u.shadowMatrix * float4(p + n * 0.025, 1.0);
+        float4 projected = u.shadowMatrix * float4(p + n * 0.06, 1.0);
         float3 q = projected.xyz / projected.w;
         float2 uv = float2(q.x * 0.5 + 0.5, 0.5 - q.y * 0.5);
         if (any(uv < float2(0.002)) || any(uv > float2(0.998)) || q.z <= 0.0 || q.z >= 1.0) return 1.0;
         constexpr sampler shadowSampler(coord::normalized, address::clamp_to_edge, filter::linear, compare_func::less_equal);
         float bias = u.shadowParams.z * (1.0 + 2.0 * (1.0 - saturate(dot(n, u.sunDirection.xyz))));
+        // Compare each PCF tap against the receiver plane at that tap, not the centre depth.
+        // A constant centre depth self-shadows flat ground/roofs in diagonal texel-sized bands.
+        float2 dx = dfdx(uv), dy = dfdy(uv);
+        float dzdx = dfdx(q.z), dzdy = dfdy(q.z);
+        float det = dx.x * dy.y - dx.y * dy.x;
+        float2 gradient = float2(0.0);
+        if (abs(det) > 1e-10) {
+            gradient = float2(dy.y * dzdx - dx.y * dzdy, dx.x * dzdy - dy.x * dzdx) / det;
+        }
+        float footprintBias = min(dot(abs(gradient), float2(u.shadowParams.y)) * 0.75, 0.003);
         float visibility = 0.0;
         for (int y = -1; y <= 1; y++) {
             for (int x = -1; x <= 1; x++) {
-                visibility += shadowMap.sample_compare(shadowSampler, uv + float2(x, y) * u.shadowParams.y, q.z - bias);
+                float2 offset = float2(x, y) * u.shadowParams.y;
+                float receiverDepth = q.z + dot(gradient, offset) - bias - footprintBias;
+                visibility += shadowMap.sample_compare(shadowSampler, uv + offset, receiverDepth);
             }
         }
         return visibility / 9.0;
@@ -248,6 +260,20 @@ nonisolated enum DioramaShaderSource {
             albedo *= 0.98 + 0.04 * (dioramaNoise(wp * 0.4) - 0.5);
         } else if (tex > 3.5 && tex < 4.5) {
             albedo *= 0.98 + 0.04 * (dioramaNoise(wp * 0.6) - 0.5);
+        }
+
+        if (tex > 6.5 && tex < 7.5 && abs(n.z) > 0.7) {
+            float2 bond = wp / float2(0.48, 0.24);
+            bond.x += fmod(abs(floor(bond.y)), 2.0) * 0.5;
+            float2 cell = fract(bond);
+            float2 footprint = max(fwidth(bond), float2(0.0001));
+            float2 edge = min(cell, 1.0 - cell);
+            float2 interior = smoothstep(float2(0.018), float2(0.018) + footprint, edge);
+            float resolved = 1.0 - smoothstep(0.15, 0.65, max(footprint.x, footprint.y));
+            float joint = (1.0 - interior.x * interior.y) * resolved;
+            float variation = (dioramaHash(floor(bond)) - 0.5) * 0.07 * resolved;
+            albedo *= 1.0 + variation;
+            albedo = mix(albedo, albedo * 0.79, joint * 0.55);
         }
 
         // Shadows and lighting always use the original scene, including in the reflection pass.

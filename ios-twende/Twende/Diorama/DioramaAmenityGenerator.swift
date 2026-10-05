@@ -25,7 +25,10 @@ nonisolated struct DioramaAmenityGenerator {
     }
 
     func generate(ground: inout DioramaMesh, props: inout DioramaMesh, glow: inout DioramaMesh, lights: inout [DioramaLight]) {
+        let managedTerraces = DioramaHotelGrounds.managedTerraces(data: data)
+        let elevatedPoolID = DioramaSlipwayPavilion.pool(in: data)?.id
         for area in data.landuse {
+            guard !managedTerraces.contains(area.id), area.id != elevatedPoolID else { continue }
             guard let outer = area.rings.first else { continue }
             let ring = DioramaPolygon.clipPolygon(outer, to: data.rect.expanded(by: -0.3))
             guard ring.count >= 3, DioramaPolygon.area(ring) > 15 else { continue }
