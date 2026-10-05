@@ -16,6 +16,8 @@ nonisolated struct DioramaTileData: Sendable {
     var paths: [DioramaPathFeature] = []
     /// Point features worth a model: masts, playgrounds, artwork, the mosque.
     var pois: [DioramaPointFeature] = []
+    /// Shared inferred hardscape envelope, calculated once from the Slipway complex footprints.
+    var hotelCourtyardOutline: [DV2] = []
 
     var isEmpty: Bool { buildings.isEmpty && roads.isEmpty && water.isEmpty }
 }
@@ -190,7 +192,7 @@ nonisolated enum DioramaBundledTile {
             return DioramaPointFeature(id: poi.id, point: p, kind: poi.kind)
         }
 
-        return DioramaTileData(
+        var result = DioramaTileData(
             tile: tile, projection: projection, rect: rect,
             buildings: Array(buildings.values.sorted { $0.area != $1.area ? $0.area > $1.area : $0.id < $1.id }.prefix(config.maxBuildingsPerTile)).sorted { $0.id < $1.id },
             roads: Array(roads.values.sorted { $0.id < $1.id }.prefix(config.maxRoadsPerTile)),
@@ -200,5 +202,7 @@ nonisolated enum DioramaBundledTile {
             paths: paths.sorted { $0.id < $1.id },
             pois: pois.sorted { $0.id < $1.id }
         )
+        result.hotelCourtyardOutline = DioramaHotelGrounds.courtyardOutline(data: result)
+        return result
     }
 }

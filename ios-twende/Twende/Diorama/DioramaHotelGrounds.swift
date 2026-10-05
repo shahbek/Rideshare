@@ -1,46 +1,62 @@
 import Foundation
 
-/// Site-specific paving and furniture. The mapped garden bounds keep the courtyard out of buildings;
-/// seawall courses follow actual coastline edges, never the tile-closing edges.
+/// Connected Slipway hardscape between the complex's buildings, with occupied areas subtracted.
+/// The mapped garden anchors the furniture; it no longer limits the extent of the paving.
 nonisolated struct DioramaHotelGrounds {
     static let courtyardID: UInt64 = 1_128_180_504
     let data: DioramaTileData
     let terrain: DioramaTerrain
     let library: DioramaPropLibrary
     let roads: DioramaRoadIndex
+    let streetPolygons: [[DV2]]
+
+    /// Inferred site envelope, not a new surveyed OSM boundary. Buildings determine its outer limits.
+    static func courtyardOutline(data: DioramaTileData) -> [DV2] {
+        let siteIDs: Set<UInt64> = [DioramaHotelGenerator.waterfront, DioramaHotelGenerator.gallery,
+                                  DioramaHotelGenerator.yellowBlock, DioramaHotelGenerator.arcade,
+                                  142_262_992, 180_607_949, 688_369_154]
+        var points = data.buildings.filter { siteIDs.contains($0.id) }.flatMap(\.ring)
+        points += data.landuse.filter { $0.id == courtyardID }.flatMap { $0.rings.first ?? [] }
+        let sorted = points.sorted { $0.x == $1.x ? $0.y < $1.y : $0.x < $1.x }
+        guard sorted.count >= 3 else { return [] }
+        func chain(_ points: [DV2]) -> [DV2] {
+            var result: [DV2] = []
+            for p in points {
+                while result.count >= 2 {
+                    let a = result[result.count - 2], b = result[result.count - 1]
+                    if (b - a).cross(p - b) > 0.000001 { break }
+                    result.removeLast()
+                }
+                result.append(p)
+            }
+            return result
+        }
+        return Array(chain(sorted).dropLast()) + Array(chain(Array(sorted.reversed())).dropLast())
+    }
 
     static func ownsCourtyard(_ p: DV2, data: DioramaTileData, margin: Double = 0) -> Bool {
-        data.landuse.contains { $0.id == courtyardID && (DioramaPolygon.contains(polygon: $0.rings, p) || ($0.rings.first.map { DioramaPolygon.distanceToRing($0, p) < margin } ?? false)) }
+        let ring = data.hotelCourtyardOutline
+        guard ring.count >= 3 else { return false }
+        return DioramaPolygon.contains(ring, p) || DioramaPolygon.distanceToRing(ring, p) < margin
     }
 
     func generate(ground: inout DioramaMesh, props: inout DioramaMesh, vegetation: inout DioramaMesh,
                   glow: inout DioramaMesh, lights: inout [DioramaLight]) {
-        if let area = data.landuse.first(where: { $0.id == Self.courtyardID }), let ring = area.rings.first {
-            courtyard(ring, ground: &ground, props: &props, vegetation: &vegetation, glow: &glow, lights: &lights)
+        let ring = data.hotelCourtyardOutline
+        if ring.count >= 3 {
+            let furnitureRing = data.landuse.first(where: { $0.id == Self.courtyardID })?.rings.first ?? ring
+            courtyard(ring, furnitureRing: furnitureRing, ground: &ground, props: &props, vegetation: &vegetation, glow: &glow, lights: &lights)
         }
         seawall(ground: &ground)
     }
 
-    private func courtyard(_ ring: [DV2], ground: inout DioramaMesh, props: inout DioramaMesh,
+    private func courtyard(_ pavingRing: [DV2], furnitureRing ring: [DV2], ground: inout DioramaMesh, props: inout DioramaMesh,
                            vegetation: inout DioramaMesh, glow: inout DioramaMesh, lights: inout [DioramaLight]) {
         let box = DioramaPolygon.minimumAreaRectangle(ring), z = terrain.height(box.centre) + 0.11
-        let cutouts = DioramaGroundCutouts(data: data, pavementWidth: 1.7)
-        let pieces = cutouts.subtract(from: ring)
-        for piece in pieces { ground.polygon(piece, z: z, .coralStone) }
-        // Individual joints, not texture noise. Alternating rectangular pavers around a central drain.
-        let bounds = DioramaRect.bounding(ring)
-        var row = 0
-        for y in stride(from: bounds.minY, to: bounds.maxY, by: 0.48) {
-            for x in stride(from: bounds.minX - Double(row % 2) * 0.24, to: bounds.maxX, by: 0.96) {
-                let tile = [DV2(x + 0.015, y + 0.015), DV2(x + 0.945, y + 0.015), DV2(x + 0.945, y + 0.465), DV2(x + 0.015, y + 0.465)]
-                for piece in pieces where DioramaRect.bounding(piece).intersects(DioramaRect.bounding(tile)) {
-                    var clipped = tile
-                    for i in piece.indices { clipped = DioramaGroundCutouts.halfPlane(clipped, a: piece[i], b: piece[(i + 1) % piece.count], inside: true) }
-                    if clipped.count >= 3 { ground.polygon(clipped, z: z + 0.005, .tileClay) }
-                }
-            }
-            row += 1
-        }
+        let cutouts = DioramaGroundCutouts(data: data, pavementWidth: 1.7, streetPolygons: streetPolygons,
+                                           additionalMasks: data.water.compactMap { $0.rings.first })
+        let pieces = cutouts.subtract(from: pavingRing)
+        pave(pieces, z: z, ground: &ground)
         for t in stride(from: -box.halfLength + 1, to: box.halfLength - 1, by: 0.65) {
             let p = box.centre + box.axis * t
             guard clear(p, radius: 0.4), DioramaPolygon.contains(ring, p) else { continue }
@@ -57,7 +73,7 @@ nonisolated struct DioramaHotelGrounds {
                 cafe(at: p, z: z + 0.02, props: &props)
             }
         }
-        let trees = data.trees.filter { DioramaPolygon.contains(ring, $0) && clear($0, radius: 0.8) }
+        let trees = data.trees.filter { DioramaPolygon.contains(pavingRing, $0) && clear($0, radius: 0.8) }
         for (i, p) in trees.enumerated() {
             vegetation.append(library.palms[i % library.palms.count], DioramaTransform(translation: DV3(p, z)))
             annularSeat(at: p, z: z, props: &props)
@@ -91,12 +107,45 @@ nonisolated struct DioramaHotelGrounds {
         let entry = box.centre + box.axis * (box.halfLength - 2)
         if clear(entry, radius: 2.0), DioramaPolygon.contains(ring, entry) {
             ground.box(centre: entry, z0: z + 0.015, axis: box.across, halfLength: 2.7, halfWidth: 0.65, height: 0.025, .coralStone)
-            DioramaLettering.line("THE SLIPWAY", centre: DV3(entry - box.axis * 0.3, z + 0.045), right: box.across, up: DV3(-box.axis, 0), height: 0.55, swatch: .trimWhite, mesh: &ground)
+            DioramaLettering.line("THE SLIPWAY", centre: DV3(entry - box.axis * 0.3, z + 0.045), up: DV3(-box.axis, 0), facing: .up, height: 0.55, swatch: .trimWhite, mesh: &ground)
+        }
+    }
+
+    private func pave(_ pieces: [[DV2]], z: Double, ground: inout DioramaMesh) {
+        // A single world-aligned bond runs through every passage. Iterate piece bounds, not all tiles
+        // against all cutouts, keeping the larger courtyard's generation cost bounded.
+        for piece in pieces where piece.count >= 3 && DioramaPolygon.area(piece) > 0.0001 {
+            ground.polygon(piece, z: z, .coralStone)
+            let bounds = DioramaRect.bounding(piece)
+            let firstRow = Int(floor(bounds.minY / 0.48)), lastRow = Int(ceil(bounds.maxY / 0.48))
+            for row in firstRow..<lastRow {
+                let y = Double(row) * 0.48, offset = Double(row & 1) * 0.48
+                let firstColumn = Int(floor((bounds.minX - offset) / 0.96))
+                let lastColumn = Int(ceil((bounds.maxX - offset) / 0.96))
+                for column in firstColumn..<lastColumn {
+                    let x = Double(column) * 0.96 + offset
+                    var tile = [DV2(x + 0.015, y + 0.015), DV2(x + 0.945, y + 0.015),
+                                DV2(x + 0.945, y + 0.465), DV2(x + 0.015, y + 0.465)]
+                    for i in piece.indices {
+                        tile = DioramaGroundCutouts.halfPlane(tile, a: piece[i], b: piece[(i + 1) % piece.count], inside: true)
+                        if tile.count < 3 { break }
+                    }
+                    if tile.count >= 3, DioramaPolygon.area(tile) > 0.0001 {
+                        ground.polygon(tile, z: z + 0.005, .tileClay)
+                    }
+                }
+            }
         }
     }
 
     private func clear(_ p: DV2, radius: Double) -> Bool {
-        !roads.isOnRoad(p, margin: radius) && !data.buildings.contains { DioramaPolygon.contains($0.ring, p) || DioramaPolygon.distanceToRing($0.ring, p) < radius }
+        guard !roads.isOnRoad(p, margin: radius),
+              !data.buildings.contains(where: { DioramaPolygon.contains($0.ring, p) || DioramaPolygon.distanceToRing($0.ring, p) < radius }) else { return false }
+        let occupied = data.water + data.landuse.filter { ["pool", "pitch", "parking", "fuel", "terrace"].contains($0.kind) }
+        return !occupied.contains { area in
+            DioramaPolygon.contains(polygon: area.rings, p) ||
+            (area.rings.first.map { DioramaPolygon.distanceToRing($0, p) < radius } ?? false)
+        }
     }
 
     private func annularSeat(at p: DV2, z: Double, props: inout DioramaMesh) {

@@ -78,13 +78,13 @@ nonisolated enum DioramaTileGenerator {
         let wallGenerator = DioramaCompoundWallGenerator(config: config, roads: roadIndex, buildings: built, tileRect: data.rect, terrain: terrain, landuse: data.landuse)
         let compounds = wallGenerator.generate(into: &walls)
 
-        DioramaGroundGenerator(config: config, data: data, roads: roadIndex, terrain: terrain, cutouts: DioramaGroundCutouts(data: data, pavementWidth: config.pavementWidth, streetPolygons: streetLayout.corridor.polygons)).generate(compounds: compounds, into: &ground, water: &water)
+        DioramaGroundGenerator(config: config, data: data, roads: roadIndex, terrain: terrain, cutouts: DioramaGroundCutouts(data: data, pavementWidth: config.pavementWidth, streetPolygons: streetLayout.corridor.polygons, additionalMasks: data.hotelCourtyardOutline.isEmpty ? [] : [data.hotelCourtyardOutline])).generate(compounds: compounds, into: &ground, water: &water)
         DioramaRoadGenerator(config: config, data: data, roads: roadIndex, terrain: terrain, layout: streetLayout, compounds: compounds).generate(into: &roadsMesh)
 
         let amenities = DioramaAmenityGenerator(config: config, data: data, roads: roadIndex, library: library, buildings: built, terrain: terrain)
         amenities.generate(ground: &ground, props: &props, glow: &propGlow, lights: &lights)
 
-        DioramaHotelGrounds(data: data, terrain: terrain, library: library, roads: roadIndex)
+        DioramaHotelGrounds(data: data, terrain: terrain, library: library, roads: roadIndex, streetPolygons: streetLayout.corridor.polygons)
             .generate(ground: &ground, props: &props, vegetation: &vegetation, glow: &propGlow, lights: &lights)
 
         let placer = DioramaPropPlacer(config: config, data: data, roads: roadIndex, library: library, buildings: built, compounds: compounds, reduceDetail: reduced, terrain: terrain)

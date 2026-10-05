@@ -5,9 +5,10 @@ import Foundation
 nonisolated struct DioramaHotelGenerator {
     static let delta: UInt64 = 681_375_591
     static let waterfront: UInt64 = 681_320_838
-    static let gallery: UInt64 = 142_262_988
+    static let gallery: UInt64 = 688_368_950
+    static let yellowBlock: UInt64 = 142_262_988
     static let arcade: UInt64 = 142_262_989
-    static let ids: Set<UInt64> = [delta, waterfront, gallery, arcade]
+    static let ids: Set<UInt64> = [delta, waterfront, gallery, yellowBlock, arcade]
     let terrain: DioramaTerrain
 
     func build(_ f: DioramaBuildingFeature, mesh: inout DioramaMesh, glow: inout DioramaMesh,
@@ -17,10 +18,11 @@ nonisolated struct DioramaHotelGenerator {
         mesh.baseZ = base; glow.baseZ = base
         defer { mesh.baseZ = old; glow.baseZ = oldGlow }
         let isDelta = f.id == Self.delta, isTeal = f.id == Self.waterfront, isArcade = f.id == Self.arcade
-        let floors = isDelta ? 7 : (isTeal ? 4 : (isArcade ? 1 : 6))
+        let isHotel = f.id == Self.gallery, isYellow = f.id == Self.yellowBlock
+        let floors = isDelta ? 7 : (isTeal ? 4 : (isArcade ? 1 : (isHotel ? 5 : 6)))
         let height = f.height ?? Double(floors) * 3.2
         let pitch = height / Double(floors)
-        let color: DioramaSwatch = isTeal ? .hotelTeal : (isDelta ? .deltaStone : .whitewash)
+        let color: DioramaSwatch = isYellow ? .paleYellow : (isTeal ? .hotelTeal : (isDelta ? .deltaStone : .whitewash))
         let box = DioramaPolygon.minimumAreaRectangle(f.ring)
         let ring = DioramaPolygon.rounded(f.ring, flags: f.clipped, radius: isTeal ? 0.7 : 0.12).0
         mesh.extrude(ring, z0: -1.5, z1: 0.16, .concrete, top: .courtyard)
@@ -105,7 +107,7 @@ nonisolated struct DioramaHotelGenerator {
                 }
             }
             mesh.extrude([a, b, b - out * 0.22, a - out * 0.22], z0: height + 0.19, z1: height + 0.8, color, top: .trimWhite)
-            if !isDelta && !isTeal && !isArcade && length > 10 {
+            if isHotel && length > 10 {
                 mural(a: a, b: b, z: height - 0.1, mesh: &mesh)
             }
         }
@@ -121,7 +123,7 @@ nonisolated struct DioramaHotelGenerator {
                 }
             }
         }
-        if !isTeal && !isArcade {
+        if isDelta || isHotel {
             canopy(at: entrance, dir: (fb - fa).normalized, out: entranceOut, isDelta: isDelta, mesh: &mesh, glow: &glow)
             lights.append(DioramaLight(position: DV3(entrance + entranceOut * 3, base + 3.5), color: SIMD3<Float>(1, 0.83, 0.62), radius: 12, intensity: 1.1))
         }
@@ -217,8 +219,8 @@ nonisolated struct DioramaHotelGenerator {
         }
         let fascia = p + out * (depth + 0.03)
         mesh.facadeBox(a: fascia - dir * width, dir: dir, out: out, u: width, width: width * 2, z0: 3.75, z1: 4.65, depth: 0.1, isDelta ? .deltaStone : .capCharcoal)
-        DioramaLettering.line(isDelta ? "DELTA HOTELS" : "HOTEL SLIPWAY", centre: DV3(fascia + out * 0.12, 3.91), right: dir, up: .up, height: 0.57, swatch: .trimWhite, mesh: &mesh)
-        DioramaLettering.line(isDelta ? "DELTA HOTELS" : "HOTEL SLIPWAY", centre: DV3(fascia + out * 0.13, 3.91), right: dir, up: .up, height: 0.57, swatch: .lampGlow, mesh: &glow)
+        DioramaLettering.line(isDelta ? "DELTA HOTELS" : "HOTEL SLIPWAY", centre: DV3(fascia + out * 0.12, 3.91), up: .up, facing: DV3(out, 0), height: 0.57, swatch: .trimWhite, mesh: &mesh)
+        DioramaLettering.line(isDelta ? "DELTA HOTELS" : "HOTEL SLIPWAY", centre: DV3(fascia + out * 0.13, 3.91), up: .up, facing: DV3(out, 0), height: 0.57, swatch: .lampGlow, mesh: &glow)
     }
 
     private func mural(a: DV2, b: DV2, z: Double, mesh: inout DioramaMesh) {
