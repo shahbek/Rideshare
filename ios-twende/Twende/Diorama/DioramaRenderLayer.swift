@@ -207,7 +207,7 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
         model[1, 1] = -metresToPixels
         model[3, 0] = point.x
         model[3, 1] = point.y
-        // Vertex heights already include absolute DEM elevation and exaggeration.
+        // Vertex heights use Mapbox's absolute elevations, with no extra scene lift or scaling.
         // Adding the origin elevation again would lift the sea and double-count the terrain.
         model[3, 2] = 0
         let transform = projection * model

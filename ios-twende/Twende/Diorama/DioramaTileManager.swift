@@ -82,7 +82,7 @@ final class DioramaTileManager {
     private var sampledTerrain: DioramaTerrain? = nil
     private var lastTerrainSample: Date = .distantPast
     private var terrainRetryCount: Int = 0
-    private var terrainSampledCells: Set<Int> = []
+    private var terrainSamples: [Int: Double] = [:]
 
     private var reducesEffects: Bool {
         thermalReduced || ProcessInfo.processInfo.isLowPowerModeEnabled
@@ -160,7 +160,8 @@ final class DioramaTileManager {
         shown = false
         updateWaterClock()
         renderLayer = nil
-        terrainSampledCells.removeAll()
+        terrainSamples.removeAll()
+        status = .idle
         sampledTerrain = nil
         terrainRetryCount = 0
         lastTerrainSample = .distantPast
@@ -220,15 +221,17 @@ final class DioramaTileManager {
         let camera = map.cameraState
         let centreTile = DioramaTileID(latitude: camera.center.latitude, longitude: camera.center.longitude, zoom: config.tileZoom)
         let near = abs(centreTile.x - tile.x) <= config.visibilityRadiusTiles && abs(centreTile.y - tile.y) <= config.visibilityRadiusTiles
-        guard near, camera.zoom >= config.minimumZoom else {
+        guard near else {
             hide(on: map)
-            state.status = near ? "Zoom in to \(Int(config.minimumZoom)) to build the diorama" : "Fly to Slipway to see the diorama"
+            state.status = "Fly to Slipway to see the diorama"
             return
         }
-
-        if case .loaded = status, refreshTerrain(on: map) {
+        // A wider view can load native heights for the full tile before the close-up scene appears.
+        if camera.zoom >= 13 { _ = refreshTerrain(on: map) }
+        guard camera.zoom >= config.minimumZoom else {
             hide(on: map)
-            status = .idle
+            if sampledTerrain != nil { state.status = "Zoom in to \(Int(config.minimumZoom)) to build the diorama" }
+            return
         }
         switch status {
         case .idle:
@@ -244,48 +247,51 @@ final class DioramaTileManager {
 
     // MARK: Generation
 
-    /// Reads the already loaded DEM, never an extra elevation/network API. Missing off-screen
-    /// samples keep their previous height (or the explicitly estimated bundled fallback).
+    /// Samples the same globally aligned 4 m lattice used by the mesh. Values already include
+    /// Mapbox's active exaggeration. Missing cells are never filled from unrelated SRTM terrain.
     private func refreshTerrain(on map: MapboxMap) -> Bool {
         guard Date().timeIntervalSince(lastTerrainSample) > 1 else { return false }
         lastTerrainSample = Date()
         let projection = DioramaProjection(origin: tile.centre)
-        let rect = projection.rect(of: tile)
-        let previous = sampledTerrain ?? DioramaTerrain.load(rect: rect, config: config)
-        let size = 65
-        var values: [Double] = []
-        var changed = sampledTerrain == nil
-        var available = 0
-        for row in 0..<size {
-            for column in 0..<size {
-                let p = DV2(rect.minX + rect.width * Double(column) / Double(size - 1),
-                            rect.minY + rect.height * Double(row) / Double(size - 1))
+        guard sampledTerrain == nil else { return false }
+        let bounds = projection.rect(of: tile)
+        let step = DioramaTerrain.surfaceStep
+        let rect = DioramaRect(minX: floor(bounds.minX / step) * step, minY: floor(bounds.minY / step) * step,
+                               maxX: ceil(bounds.maxX / step) * step, maxY: ceil(bounds.maxY / step) * step)
+        let columns = Int((rect.width / step).rounded()) + 1
+        let rows = Int((rect.height / step).rounded()) + 1
+        for row in 0..<rows {
+            for column in 0..<columns {
+                let index = row * columns + column
+                guard terrainSamples[index] == nil else { continue }
+                let p = DV2(rect.minX + Double(column) * step, rect.minY + Double(row) * step)
                 let c = projection.coordinate(p)
-                let old = previous.rawHeight(p)
-                let index = row * size + column
-                if terrainSampledCells.contains(index) {
-                    values.append(old)
-                    continue
+                if let h = map.elevation(at: CLLocationCoordinate2D(latitude: c.latitude, longitude: c.longitude)), h.isFinite {
+                    terrainSamples[index] = h
                 }
-                let elevation = map.elevation(at: CLLocationCoordinate2D(latitude: c.latitude, longitude: c.longitude))
-                let h = elevation.flatMap { $0.isFinite ? $0 : nil } ?? old
-                if let elevation, elevation.isFinite {
-                    available += 1
-                    terrainSampledCells.insert(index)
-                    changed = true
-                }
-                if abs(h - old) > 0.15 { changed = true }
-                values.append(h)
             }
         }
-        guard available > 0 else { return false }
-        if changed { sampledTerrain = DioramaTerrain(rect: rect, columns: size, rows: size, values: values) }
-        return changed
+        let count = columns * rows
+        guard terrainSamples.count == count else {
+            state.status = "Loading Mapbox terrain \(terrainSamples.count * 100 / count)% · zoom out to include the whole Slipway tile"
+            return false
+        }
+        let values = (0..<count).compactMap { terrainSamples[$0] }
+        sampledTerrain = DioramaTerrain(rect: rect, columns: columns, rows: rows, values: values, midTideDatum: config.waterLevel)
+        return true
     }
 
     private func generate() {
         if let map { _ = refreshTerrain(on: map) }
-        let sampledTerrain = self.sampledTerrain
+        guard let sampledTerrain = self.sampledTerrain else {
+            // Leave Standard visible until every terrain cell has a genuine native height.
+            if terrainRetryCount < 3 {
+                terrainRetryCount += 1
+                scheduleUpdate(delay: 2)
+            }
+            return
+        }
+        terrainRetryCount = 0
         status = .generating
         state.status = "Generating Slipway…"
         let config = self.config

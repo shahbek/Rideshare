@@ -2,7 +2,7 @@ import Foundation
 
 /// One triangulated height field for land, draped finishes, markings and structural foundations.
 nonisolated struct DioramaTerrain: Sendable {
-    static let lift: Double = 0.6
+    static let lift: Double = 0
     /// All draped surfaces use the same cell origin, diagonal and interpolation, not separate meshes.
     static let surfaceStep: Double = 4
 
@@ -11,9 +11,8 @@ nonisolated struct DioramaTerrain: Sendable {
     let rows: Int
     /// Absolute exaggerated DEM values, row-major from south to north.
     let values: [Double]
-    /// Visual clearance shared by the whole tile, including sea, boats, lights and reflections.
-    /// This is a rendering adjustment, not a surveyed sea-level measurement.
-    var clearance: Double = 0
+    /// Native terrain elevations are absolute; never offset the whole scene to clear the ocean.
+    var clearance: Double { 0 }
 
     var midTideDatum: Double = DioramaConfig.slipway.waterLevel
     var waterLevel: Double { midTideDatum + clearance }
@@ -51,28 +50,9 @@ nonisolated struct DioramaTerrain: Sendable {
                               values: file.elevations.map { $0 * 1.6 }, midTideDatum: config.waterLevel)
     }
 
-    /// Keep a level ocean above coastal DEM artefacts. Move the ENTIRE scene by the same amount,
-    /// rather than raising water into boats/buildings or deforming the ocean into a hillside.
+    /// Coastline geometry cannot change the Mapbox elevation datum.
     func resolvingSurfaces(in data: DioramaTileData) -> DioramaTerrain {
-        var result = self
-        var highest = 0.0
-        let water = data.water.compactMap { $0.rings.first }
-        for ring in water where ring.count >= 3 {
-            for p in DioramaPolygon.densify(ring + [ring[0]], maxStep: Self.surfaceStep) {
-                highest = max(highest, rawHeight(p))
-            }
-        }
-        for row in 0..<rows {
-            for column in 0..<columns {
-                let p = DV2(rect.minX + rect.width * Double(column) / Double(columns - 1),
-                            rect.minY + rect.height * Double(row) / Double(rows - 1))
-                if water.contains(where: { DioramaPolygon.contains($0, p) }) {
-                    highest = max(highest, values[row * columns + column])
-                }
-            }
-        }
-        result.clearance = highest + Self.lift
-        return result
+        self
     }
 
     /// Site datum for level floors; the original landscape is never cut, filled or flattened.
@@ -119,10 +99,10 @@ nonisolated struct DioramaTerrain: Sendable {
             let h01 = rawHeight(DV2(x, y + step))
             h = h00 * (1 - ty) + h11 * tx + h01 * (ty - tx)
         }
-        return h + Self.lift + clearance
+        return h
     }
 
-    /// Raw DEM interpolation, with no visual offsets. Used when filling missing live DEM samples.
+    /// DEM interpolation with no visual offsets or additional exaggeration.
     func rawHeight(_ p: DV2) -> Double {
         guard rect.width > 0, rect.height > 0 else { return 0 }
         let fx = min(max((p.x - rect.minX) / rect.width, 0), 1) * Double(columns - 1)

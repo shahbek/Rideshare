@@ -2,7 +2,7 @@ import Foundation
 
 /// The diorama's floor. A continuous quiet grass surface covers the tile; parks and gardens are
 /// near-flush lawns cut around occupied footprints, compounds get a lawn
-/// and a paved drive from gate to house, and a strip of pale sand runs along the shore. Hard-surfaced
+/// and a paved drive from gate to house. Hard-surfaced
 /// amenities (courts, car parks, forecourts, pools, decks) are laid on top by `DioramaAmenityGenerator`.
 /// Water is built separately into the `.water` category so it can be toggled and shaded on its own.
 nonisolated struct DioramaGroundGenerator {
@@ -25,24 +25,21 @@ nonisolated struct DioramaGroundGenerator {
 
     // MARK: Plate
 
-    /// Land is clipped to the SAME boundary as the sea, never classified on an 8 m vertex grid.
-    /// This removes the square coastal wedges and also leaves real openings below pool water.
+    /// Continuous native-elevation backing under every finish and structure, including pools.
+    /// Ownership cutouts apply only to the upper finishes, never to this terrain skin.
     private func plate(into mesh: inout DioramaMesh) {
         let r = data.rect
         let corners = [DV2(r.minX, r.minY), DV2(r.maxX, r.minY), DV2(r.maxX, r.maxY), DV2(r.minX, r.maxY)]
-        let waterRings = (data.water + data.landuse.filter { $0.kind == "pool" }).compactMap { $0.rings.first }
-            + data.shorelineLandMasks
-            + [DioramaHotelGrounds.stairOutline(data: data)]
-        let land = DioramaGroundCutouts(polygons: waterRings)
-        mesh.polygon(corners, z: terrain.seabedLevel, .seabed)
-        let step = DioramaTerrain.surfaceStep
-        for y in stride(from: floor(r.minY / step) * step, to: r.maxY, by: step) {
-            for x in stride(from: floor(r.minX / step) * step, to: r.maxX, by: step) {
-                let cell = DioramaPolygon.clipPolygon([DV2(x, y), DV2(x + step, y),
-                    DV2(x + step, y + step), DV2(x, y + step)], to: r)
-                for piece in land.subtract(from: cell) {
-                    terrain.drape(piece, lift: 0, swatch: .grass, into: &mesh)
-                }
+        // Colour ocean backing as seabed without deleting any terrain triangles.
+        let ocean = DioramaGroundCutouts(polygons: data.water.compactMap { $0.rings.first })
+        terrain.drape(corners, lift: 0, swatch: .seabed, into: &mesh)
+        for piece in ocean.subtract(from: corners) {
+            terrain.drape(piece, lift: 0.002, swatch: .grass, into: &mesh)
+        }
+        // Ocean polygon holes are land, not holes in the continuous backing.
+        for area in data.water {
+            for ring in area.rings.dropFirst() {
+                terrain.drape(DioramaPolygon.clipPolygon(ring, to: r), lift: 0.002, swatch: .grass, into: &mesh)
             }
         }
     }

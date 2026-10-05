@@ -247,6 +247,7 @@ extension TripMapView {
         func observe(_ mapView: MapView) {
             mapView.mapboxMap.onMapLoaded.observe { [weak self] _ in
                 self?.refreshBuildingHighlight(immediately: true)
+                self?.diorama?.scheduleUpdate(delay: 1.1)
             }.store(in: &cancelables)
             mapView.mapboxMap.onMapIdle.observe { [weak self] _ in
                 guard let self else { return }
@@ -254,6 +255,7 @@ extension TripMapView {
                 self.reportSelectionCoordinate()
                 self.refreshBuildingHighlight(immediately: true)
                 if let map = self.mapView?.mapboxMap { self.airtelHouse.update(on: map, settled: true) }
+                self.diorama?.scheduleUpdate(delay: 1.1)
             }.store(in: &cancelables)
             mapView.mapboxMap.onStyleLoaded.observe { [weak self] _ in
                 guard let self else { return }
