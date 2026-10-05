@@ -85,14 +85,7 @@ final class DioramaTileManager {
     private var revealClock: Timer? = nil
     private var revealStarted: CFTimeInterval? = nil
     private var revealRequested: CFTimeInterval = 0
-    private let mapboxSource = DioramaMapboxSource()
-    private var sourceRequested: CFTimeInterval? = nil
-    private var sourceSupplement = DioramaMapSupplement()
-    private var hasLimitedMapDetails: Bool = false
-    private var generationRevision: Int = 0
-    private var isHiding: Bool = false
-    private var revealFraction: Double = 0
-    private var revealFrom: Double = 0
+    private var labelMaskCount: Int = -1
     private var labelClipID: String { layerID + "-label-clip" }
     private var labelSourceID: String { layerID + "-label-mask" }
 
@@ -109,10 +102,6 @@ final class DioramaTileManager {
         self.state = state ?? .shared
         tile = DioramaTileID(latitude: config.seedLatitude, longitude: config.seedLongitude, zoom: config.tileZoom)
         styling = DioramaMapStyling(config: config)
-        mapboxSource.onReady = { [weak self] in
-            guard let self, case .idle = self.status else { return }
-            self.scheduleUpdate(delay: 0)
-        }
         settingsObserver = NotificationCenter.default.addObserver(forName: DioramaState.renderSettingsChanged, object: self.state, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.scheduleUpdate(delay: 0) }
         }
@@ -168,18 +157,12 @@ final class DioramaTileManager {
     func install(on map: MapboxMap) {
         self.map = map
         installed = true
-        do { try mapboxSource.install(on: map) } catch { print("[Diorama] Mapbox source unavailable") }
         scheduleUpdate(delay: 0.2)
     }
 
     /// Called when the style reloads: Mapbox drops every runtime layer and source.
     func styleDidReload() {
         installed = false
-        generationRevision += 1
-        if case .generating = status { status = .idle }
-        mapboxSource.reset()
-        sourceRequested = nil
-        isHiding = false
         shown = false
         revealClock?.invalidate()
         revealClock = nil
@@ -194,14 +177,11 @@ final class DioramaTileManager {
     func remove() {
         pendingUpdate?.cancel()
         pendingUpdate = nil
-        generationRevision += 1
-        if case .generating = status { status = .idle }
         if let settingsObserver { NotificationCenter.default.removeObserver(settingsObserver) }
         settingsObserver = nil
         guard let map else { return }
         hide(on: map)
         styling.remove(from: map)
-        mapboxSource.remove(from: map)
         state.loadedTiles.removeAll()
         installed = false
     }
@@ -244,10 +224,6 @@ final class DioramaTileManager {
         guard installed, let map else { return }
         applyCategoryVisibility()
         applyDebug()
-        if !state.isEnabled {
-            beginConceal()
-            return
-        }
 
         if state.isBasemapOnly {
             if shown { hide(on: map) }
@@ -258,42 +234,22 @@ final class DioramaTileManager {
         let centreTile = DioramaTileID(latitude: camera.center.latitude, longitude: camera.center.longitude, zoom: config.tileZoom)
         let near = abs(centreTile.x - tile.x) <= config.visibilityRadiusTiles && abs(centreTile.y - tile.y) <= config.visibilityRadiusTiles
         guard near else {
-            beginConceal()
+            hide(on: map)
             state.status = "Fly to Slipway to see the diorama"
             return
         }
         guard camera.zoom >= config.minimumZoom else {
-            beginConceal()
+            hide(on: map)
             state.status = "Zoom in to \(Int(config.minimumZoom)) to build the diorama"
             return
         }
         switch status {
         case .idle:
-            if sourceRequested == nil { sourceRequested = CACurrentMediaTime() }
-            let snapshot = mapboxSource.snapshot(tile: tile)
-            if mapboxSource.isReady, !snapshot.buildings.isEmpty, !snapshot.roads.isEmpty {
-                sourceSupplement = snapshot
-                hasLimitedMapDetails = false
-                DioramaTileGenerator.clearCache(for: tile, config: config)
-                generate()
-            } else if CACurrentMediaTime() - (sourceRequested ?? 0) > 8 {
-                // Live Streets data enriches the bundled tile; it must not disable it.
-                // Keep every successfully queried feature and disclose the limited coverage.
-                print("[Diorama source] Deadline reached (\(mapboxSource.diagnostic)); generating bundled tile with available supplement")
-                sourceSupplement = snapshot
-                hasLimitedMapDetails = true
-                DioramaTileGenerator.clearCache(for: tile, config: config)
-                generate()
-            } else {
-                state.status = "Loading Mapbox streets and place names…"
-                mapboxSource.request(on: map)
-                scheduleUpdate(delay: 0.4)
-            }
+            generate()
         case .generating:
             state.status = "Generating Slipway…"
         case .loaded(let artifacts):
             if !shown { show(artifacts, on: map) }
-            else if isHiding { beginReveal(restarting: false) }
         case .failed:
             state.status = "Diorama generation failed"
         }
@@ -301,28 +257,24 @@ final class DioramaTileManager {
 
     private func updateEffectStatus() {
         guard shown else { return }
-        let detail = hasLimitedMapDetails ? " · extra map details unavailable; Regenerate to retry" : ""
         if thermalReduced {
-            state.status = "Slipway loaded · bloom/AO off (thermal)" + detail
+            state.status = "Slipway loaded · bloom/AO off (thermal)"
         } else if ProcessInfo.processInfo.isLowPowerModeEnabled {
-            state.status = "Slipway loaded · bloom/AO off (Low Power)" + detail
+            state.status = "Slipway loaded · bloom/AO off (Low Power)"
         } else {
-            state.status = "Slipway loaded · full effects" + detail
+            state.status = "Slipway loaded · full effects"
         }
     }
 
     // MARK: Generation
 
-    /// Merge the loaded Mapbox Streets snapshot with the authored bundle off the main thread.
-    /// Terrain remains the fixed bundled heightfield; live queries supply geometry and names only.
+    /// Builds the tile from bundled data only. Nothing is read from the live map, so the result is
+    /// the same every session and needs no terrain-loading wait.
     private func generate() {
         status = .generating
         state.status = "Generating Slipway…"
         let config = self.config
         let reduced = thermalReduced
-        let supplement = sourceSupplement
-        generationRevision += 1
-        let revision = generationRevision
         Task.detached(priority: .userInitiated) {
             let artifacts: DioramaTileArtifacts?
             let started = Date()
@@ -335,7 +287,7 @@ final class DioramaTileManager {
                     // even when the diorama was off. Build lazily here, after checking the cache.
                     let library = DioramaPropLibrary(config: config)
                     print("[Diorama timing] bundle + prototypes: \(String(format: "%.3f", Date().timeIntervalSince(started)))s")
-                    artifacts = try DioramaTileGenerator.generate(supplement.merging(into: data, config: config), config: config, library: library, reduced: reduced)
+                    artifacts = try DioramaTileGenerator.generate(data, config: config, library: library, reduced: reduced)
                 } catch {
                     print("[Diorama] generate failed: \(error)")
                     artifacts = nil
@@ -344,7 +296,7 @@ final class DioramaTileManager {
                 artifacts = nil
             }
             await MainActor.run {
-                guard self.generationRevision == revision, case .generating = self.status else { return }
+                guard case .generating = self.status else { return }
                 guard let artifacts else {
                     self.status = .failed
                     self.state.status = "Diorama generation failed"
@@ -362,11 +314,6 @@ final class DioramaTileManager {
         guard let map else { return }
         DioramaTileGenerator.clearCache(for: tile, config: config)
         hide(on: map)
-        generationRevision += 1
-        sourceRequested = nil
-        sourceSupplement = DioramaMapSupplement()
-        hasLimitedMapDetails = false
-        mapboxSource.reset()
         status = .idle
         state.loadedTiles[tile] = nil
         scheduleUpdate(delay: 0.05)
@@ -389,7 +336,7 @@ final class DioramaTileManager {
             try map.addCustomLayer(withId: layerID, layerHost: host, layerPosition: nil)
             try map.setLayerProperty(for: layerID, property: "slot", value: "middle")
             var source = GeoJSONSource(id: clipSourceID)
-            source.data = .featureCollection(FeatureCollection(features: []))
+            source.data = .geometry(.polygon(Polygon([tile.outline])))
             try map.addSource(source)
             var clip = ClipLayer(id: clipLayerID, source: clipSourceID)
             clip.slot = .top
@@ -404,6 +351,7 @@ final class DioramaTileManager {
             labelClip.clipLayerScope = .constant(["basemap"])
             labelClip.clipLayerTypes = .constant([.symbol])
             try map.addLayer(labelClip)
+            labelMaskCount = -1
             renderLayer = host
             shown = true
             beginReveal()
@@ -428,8 +376,7 @@ final class DioramaTileManager {
         for id in [labelClipID, clipLayerID, layerID] where map.layerExists(withId: id) { try? map.removeLayer(withId: id) }
         if map.sourceExists(withId: clipSourceID) { try? map.removeSource(withId: clipSourceID) }
         if map.sourceExists(withId: labelSourceID) { try? map.removeSource(withId: labelSourceID) }
-        isHiding = false
-        revealFraction = 0
+        labelMaskCount = -1
         renderLayer = nil
         appliedWireframe = nil
         shown = false
@@ -438,30 +385,14 @@ final class DioramaTileManager {
     }
 
     /// One finite 30 Hz reveal, including cached tiles and explicit focus requests.
-    private func beginConceal() {
-        guard shown, !isHiding else { return }
-        isHiding = true
-        revealFrom = revealFraction
-        startRevealClock()
-    }
-
-    private func beginReveal(restarting: Bool = true) {
-        guard shown else { return }
-        isHiding = false
-        if restarting { revealFraction = 0 }
-        revealFrom = revealFraction
-        startRevealClock()
-    }
-
-    private func startRevealClock() {
+    private func beginReveal() {
         revealClock?.invalidate()
         revealClock = nil
         guard shown, let renderLayer else { return }
         revealStarted = nil
         revealRequested = CACurrentMediaTime()
-        let extent = revealExtent(revealFraction)
-        renderLayer.setReveal(SIMD4(0, 0, Float(extent), 1))
-        setRevealClip(halfExtent: extent)
+        renderLayer.setReveal(SIMD4(0, 0, 0.8, 1))
+        setRevealClip(halfExtent: 0.8)
         let timer = Timer(timeInterval: 1.0 / 30, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.advanceReveal() }
         }
@@ -485,25 +416,15 @@ final class DioramaTileManager {
         }
         if revealStarted == nil { revealStarted = now }
         let progress = finish ? 1 : min(1, max(0, (now - (revealStarted ?? now)) / 1.8))
-        let eased = progress * progress * (3 - 2 * progress)
-        revealFraction = revealFrom + ((isHiding ? 0 : 1) - revealFrom) * eased
-        if progress >= 1, isHiding {
-            if let map { hide(on: map); map.triggerRepaint() }
-            return
-        }
-        let extent = revealExtent(revealFraction)
+        let rect = DioramaProjection(origin: tile.centre).rect(of: tile)
+        let extent = 0.8 + (max(rect.width, rect.height) * 0.5 + 12) * (progress * progress * (3 - 2 * progress))
         renderLayer.setReveal(progress >= 1 ? .zero : SIMD4(0, 0, Float(extent), 1))
         setRevealClip(halfExtent: progress >= 1 ? nil : extent)
         map?.triggerRepaint()
         if progress >= 1 { revealClock?.invalidate(); revealClock = nil }
     }
 
-    private func revealExtent(_ fraction: Double) -> Double {
-        let rect = DioramaProjection(origin: tile.centre).rect(of: tile)
-        return 0.05 + (max(rect.width, rect.height) * 0.5 + 12) * fraction
-    }
-
-    /// Native symbols follow the same square in both directions; only replaced models are masked.
+    /// The native buildings disappear behind the same growing square, not all at once.
     private func setRevealClip(halfExtent: Double?) {
         guard let map, map.sourceExists(withId: clipSourceID) else { return }
         let projection = DioramaProjection(origin: tile.centre)
@@ -517,27 +438,24 @@ final class DioramaTileManager {
                 return CLLocationCoordinate2D(latitude: c.latitude, longitude: c.longitude)
             }
         } else { coordinates = tile.outline }
-        let ready = renderLayer?.diagnostic.hasPrefix("ready") == true
-        let extent = halfExtent ?? max(rect.width, rect.height)
-        let revealed = DioramaRect(minX: max(rect.minX, -extent), minY: max(rect.minY, -extent), maxX: min(rect.maxX, extent), maxY: min(rect.maxY, extent))
-        var features: [Feature] = []
-        if ready, state.visibleCategories.contains(.buildings), case .loaded(let artifacts) = status {
-            features = artifacts.buildingLabels.compactMap { label in
-                guard label.footprint.count >= 3 else { return nil }
-                let ring = DioramaPolygon.clipPolygon(label.footprint, to: revealed)
-                guard ring.count >= 3 else { return nil }
-                let coordinates = (ring + [ring[0]]).map { p in
-                    let c = projection.coordinate(p)
-                    return CLLocationCoordinate2D(latitude: c.latitude, longitude: c.longitude)
-                }
-                return Feature(geometry: .polygon(Polygon([coordinates])))
+        map.updateGeoJSONSource(withId: clipSourceID, geoJSON: .geometry(.polygon(Polygon([coordinates]))))
+        if case .loaded(let artifacts) = status, map.sourceExists(withId: labelSourceID) {
+            let labels = artifacts.buildingLabels.filter { label in
+                guard renderLayer?.hasCustomLabels == true, state.visibleCategories.contains(.buildings), !state.showsWireframe else { return false }
+                guard let extent = halfExtent else { return true }
+                return max(abs(Double(label.anchor.x)), abs(Double(label.anchor.y))) + 3 <= extent
             }
-        }
-        map.updateGeoJSONSource(withId: clipSourceID, geoJSON: .featureCollection(FeatureCollection(features: features)))
-        if map.sourceExists(withId: labelSourceID) {
-            let suppress = ready && renderLayer?.hasCustomLabels == true && !state.showsWireframe && state.visibleCategories.contains(.buildings)
-            let symbols = suppress ? [Feature(geometry: .polygon(Polygon([coordinates])))] : []
-            map.updateGeoJSONSource(withId: labelSourceID, geoJSON: .featureCollection(FeatureCollection(features: symbols)))
+            if labelMaskCount != labels.count {
+                labelMaskCount = labels.count
+                let features = labels.map { label in
+                    let ring = (label.footprint + [label.footprint[0]]).map { p in
+                        let c = projection.coordinate(p)
+                        return CLLocationCoordinate2D(latitude: c.latitude, longitude: c.longitude)
+                    }
+                    return Feature(geometry: .polygon(Polygon([ring])))
+                }
+                map.updateGeoJSONSource(withId: labelSourceID, geoJSON: .featureCollection(FeatureCollection(features: features)))
+            }
         }
     }
 

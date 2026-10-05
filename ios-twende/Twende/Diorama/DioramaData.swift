@@ -67,7 +67,6 @@ nonisolated struct DioramaRoadFeature: Sendable {
     let isPaved: Bool
     /// Approximate carriageway width in metres.
     let width: Double
-    var name: String? = nil
     var isMain: Bool { ["motorway", "trunk", "primary", "secondary", "tertiary"].contains(roadClass) }
 }
 
@@ -138,9 +137,9 @@ nonisolated enum DioramaBundledTile {
             (pts, flags) = DioramaPolygon.counterClockwise(pts, flags: flags)
             guard pts.count >= 3 else { continue }
             let area = DioramaPolygon.area(pts)
-            guard area > 0.1 else { continue }
+            guard area > 12 else { continue }
             let centroid = DioramaPolygon.centroid(pts)
-            guard DioramaPolygon.area(DioramaPolygon.clipPolygon(pts, to: rect)) > 0.1 else { continue }
+            guard rect.contains(centroid) else { continue }
             // This is bundled OSM, not Mapbox's synthesized 3 m fallback: keep genuine low heights.
             let height = b.height.flatMap { $0.isFinite && $0 > 0 ? $0 : nil }
             if let existing = buildings[b.id], existing.area >= area { continue }
@@ -164,7 +163,7 @@ nonisolated enum DioramaBundledTile {
             }
             let line = r.line.compactMap(local)
             guard line.count >= 2 else { continue }
-            for (pieceIndex, piece) in DioramaPolygon.clip(line, to: rect).enumerated() where DioramaPolygon.length(piece) > 0.05 {
+            for (pieceIndex, piece) in DioramaPolygon.clip(line, to: rect).enumerated() where DioramaPolygon.length(piece) > 3 {
                 let key = DioramaRandom.mix(r.id &+ UInt64(pieceIndex) &* 977)
                 roads[key] = DioramaRoadFeature(id: key, line: piece, roadClass: r.class, isPaved: r.paved, width: width)
             }
@@ -200,7 +199,7 @@ nonisolated enum DioramaBundledTile {
             guard line.count >= 2 else { continue }
             for (pieceIndex, piece) in DioramaPolygon.clip(line, to: rect).enumerated() where DioramaPolygon.length(piece) > 1 {
                 let key = DioramaRandom.mix(p.id &+ UInt64(pieceIndex) &* 613)
-                paths.append(DioramaPathFeature(id: key, line: piece, kind: p.id == 1286596031 ? "pier" : p.kind, isLit: p.lit ?? false, sourceID: p.id, tags: p.id == 1286596031 ? (p.tags ?? [:]).merging(["zuri:structure": "raised Delta waterfront walkway; user correction, height illustrative"], uniquingKeysWith: { _, new in new }) : (p.tags ?? [:])))
+                paths.append(DioramaPathFeature(id: key, line: piece, kind: p.kind, isLit: p.lit ?? false, sourceID: p.id, tags: p.tags ?? [:]))
             }
         }
 
@@ -232,8 +231,8 @@ nonisolated enum DioramaBundledTile {
 
         var result = DioramaTileData(
             tile: tile, projection: projection, rect: rect,
-            buildings: buildings.values.sorted { $0.id < $1.id },
-            roads: roads.values.sorted { $0.id < $1.id },
+            buildings: Array(buildings.values.sorted { $0.area != $1.area ? $0.area > $1.area : $0.id < $1.id }.prefix(config.maxBuildingsPerTile)).sorted { $0.id < $1.id },
+            roads: Array(roads.values.sorted { $0.id < $1.id }.prefix(config.maxRoadsPerTile)),
             water: water.sorted { $0.id < $1.id },
             landuse: landuse.sorted { $0.id < $1.id },
             trees: trees,

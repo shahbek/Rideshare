@@ -45,11 +45,9 @@ nonisolated struct DioramaTerrain: Sendable {
     }
 
     var midTideDatum: Double = DioramaConfig.slipway.waterLevel
-    var tideOffset: Double = DioramaConfig.slipway.tideOffset
-    var waterLevel: Double { midTideDatum + tideOffset }
-    var pierLevel: Double { midTideDatum + 0.83 }
-    var seabedLevel: Double { midTideDatum - 1.22 }
-    var resolvedPierLevels: [String: Double] = [:]
+    var waterLevel: Double { midTideDatum }
+    var pierLevel: Double { waterLevel + 0.83 }
+    var seabedLevel: Double { waterLevel - 1.22 }
 
     nonisolated struct File: Decodable, Sendable {
         let columns: Int
@@ -67,7 +65,7 @@ nonisolated struct DioramaTerrain: Sendable {
     /// and instant, and the gentle Msasani landform is kept at `config.terrainRelief`.
     static func load(rect: DioramaRect, config: DioramaConfig) -> DioramaTerrain {
         guard config.usesElevation else {
-            var result = flat(rect); result.midTideDatum = config.waterLevel; result.tideOffset = config.tideOffset
+            var result = flat(rect); result.midTideDatum = config.waterLevel
             return result
         }
         guard let url = Bundle.main.url(forResource: resourceName, withExtension: "json"),
@@ -76,11 +74,11 @@ nonisolated struct DioramaTerrain: Sendable {
               file.columns >= 2, file.rows >= 2, file.elevations.count == file.columns * file.rows,
               file.elevations.allSatisfy(\.isFinite) else {
             print("[Diorama] terrain grid missing; using flat ground")
-            var result = flat(rect); result.midTideDatum = config.waterLevel; result.tideOffset = config.tideOffset
+            var result = flat(rect); result.midTideDatum = config.waterLevel
             return result
         }
         return DioramaTerrain(rect: rect, columns: file.columns, rows: file.rows, values: file.elevations,
-                              relief: config.terrainRelief, edgeEase: config.terrainEdgeEase, midTideDatum: config.waterLevel, tideOffset: config.tideOffset)
+                              relief: config.terrainRelief, edgeEase: config.terrainEdgeEase, midTideDatum: config.waterLevel)
     }
 
     /// Binds the mapped coastline. The sea datum is the configured one (the flat basemap plane by
@@ -107,20 +105,6 @@ nonisolated struct DioramaTerrain: Sendable {
                 !data.water.contains { DioramaPolygon.contains(polygon: $0.rings, p) }
             }
             result.attach(dry, reach: 30, data: data)
-        }
-        for path in data.paths where path.kind == "pier" {
-            let samples = DioramaPolygon.densify(path.line, maxStep: 1)
-            let dryTop = samples.filter { result.coast?.isWater($0) != true }.map { result.height($0) + 0.18 }.max() ?? result.pierLevel
-            let nearby = data.buildings.filter { building in
-                path.line.contains { DioramaPolygon.distanceToRing(building.ring, $0) < 30 }
-            }
-            let dockTop = nearby.map { result.buildingHeight($0) }.max() ?? result.pierLevel
-            let terraceTop = data.landuse.filter { area in
-                area.kind == "terrace" && area.rings.contains { ring in
-                    path.line.contains { DioramaPolygon.distanceToRing(ring, $0) < 4 }
-                }
-            }.compactMap { $0.rings.first }.map { result.foundationHeight($0) + 0.12 }.max() ?? result.pierLevel
-            result.resolvedPierLevels[Self.pierKey(path.line)] = max(dryTop, dockTop, terraceTop, result.pierLevel)
         }
         return result
     }
@@ -189,12 +173,8 @@ nonisolated struct DioramaTerrain: Sendable {
         return (DioramaPolygon.densify(ring + [first], maxStep: 1).map { height($0) }.min() ?? height(first)) - 0.3
     }
 
-    private static func pierKey(_ line: [DV2]) -> String {
-        line.map { "\($0.x),\($0.y)" }.joined(separator: ";")
-    }
-
     func pierHeight(_ line: [DV2]) -> Double {
-        resolvedPierLevels[Self.pierKey(line)] ?? max(pierLevel, DioramaPolygon.densify(line, maxStep: 1).map { height($0) + 0.18 }.max() ?? pierLevel)
+        max(pierLevel, line.first.map { height($0) + 0.1 } ?? pierLevel)
     }
 
     /// All support queries interpolate the exact same connected land–sea mesh.
@@ -245,7 +225,7 @@ nonisolated struct DioramaTerrain: Sendable {
         var h = interpolated(p) * relief * edgeFactor(p)
         if let coast, let near = coast.nearest(p, within: Self.coastEase), near.kind.easesToWater {
             let t = Self.smooth(near.distance / Self.coastEase)
-            let datum = midTideDatum + 0.02 - Self.lift
+            let datum = waterLevel + 0.02 - Self.lift
             h = min(h, datum + (h - datum) * t)
         }
         return h
@@ -262,7 +242,7 @@ nonisolated struct DioramaTerrain: Sendable {
         let shoreDepth = (near?.kind.easesToWater ?? true) ? Self.softShoreDepth : Self.hardShoreDepth
         var depth = shoreDepth + (Self.openWaterDepth - shoreDepth) * (1 - exp(-d / Self.openWaterReach))
         depth += (Self.noise(p * 0.045) - 0.5) * 0.5 * Self.smooth(min(d / 14, 1))
-        return midTideDatum - depth
+        return waterLevel - depth
     }
 
     static func smooth(_ x: Double) -> Double {
