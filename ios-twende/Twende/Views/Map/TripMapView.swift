@@ -176,6 +176,8 @@ extension TripMapView {
         private let billboardTeasers: [BillboardTeaser] = BillboardCatalogue.all.map { BillboardTeaser(ad: $0) }
         /// Procedural Slipway diorama; created only while `DioramaState.shared.isEnabled`.
         private var diorama: DioramaTileManager? = nil
+        /// True while the diorama tile is on screen and Standard's 3D terrain must stay off.
+        private var dioramaOwnsGround: Bool = false
         private var dioramaRegenerate: Int = 0
         private var dioramaFly: Int = 0
         func removeLandmarks() {
@@ -340,9 +342,14 @@ extension TripMapView {
 
         /// Real elevation under Standard's 3D buildings. DEM tiles stop at z14 and are cached in the
         /// shared TileStore (and included in offline areas). Keep the datum stable in Low Power;
-        /// the diorama instead reduces reflections and stops its animation clock.
+        /// the diorama instead reduces reflections and stops its animation clock. While the Slipway
+        /// diorama is shown it owns the ground, so the terrain stays off until it hides.
         func applyTerrain() {
             guard let map = mapView?.mapboxMap else { return }
+            guard !dioramaOwnsGround else {
+                map.removeTerrain()
+                return
+            }
             do {
                 if !map.sourceExists(withId: Self.demSourceID) {
                     var dem = RasterDemSource(id: Self.demSourceID)
@@ -481,6 +488,11 @@ extension TripMapView {
             guard let mapView else { return }
             if state.isEnabled, diorama == nil {
                 let manager = DioramaTileManager()
+                manager.setBasemapTerrainEnabled = { [weak self] enabled in
+                    guard let self else { return }
+                    self.dioramaOwnsGround = !enabled
+                    self.applyTerrain()
+                }
                 diorama = manager
                 if styleReady { manager.install(on: mapView.mapboxMap) }
                 mapView.camera.fly(to: manager.introCamera(), duration: 1.6)
@@ -489,6 +501,8 @@ extension TripMapView {
             } else if !state.isEnabled, let manager = diorama {
                 manager.remove()
                 diorama = nil
+                dioramaOwnsGround = false
+                applyTerrain()
             }
             guard let diorama else { return }
             if state.regenerateRequest != dioramaRegenerate {
@@ -505,6 +519,8 @@ extension TripMapView {
         func removeDiorama() {
             diorama?.remove()
             diorama = nil
+            dioramaOwnsGround = false
+            applyTerrain()
         }
 
         // MARK: Camera

@@ -44,12 +44,16 @@ final class DioramaState {
 }
 
 /// Lifecycle of the single Slipway tile on one map. The whole thing is built from the bundled OSM
-/// extract on a background thread, then shown through one custom Metal layer, exactly like the
-/// destination buildings and city landmarks. Mapbox is only asked for two things: a custom layer
-/// slot and a clip layer that hides Standard's own 3D buildings under the toy town.
+/// extract and height snapshot on a background thread, then shown through one custom Metal layer,
+/// exactly like the destination buildings and city landmarks. Mapbox is asked for three things: a
+/// custom layer slot, a clip layer that hides Standard's own 3D buildings under the toy town, and to
+/// switch its 3D terrain off while the tile is shown so the diorama is the only ground renderer.
 @MainActor
 final class DioramaTileManager {
     let config: DioramaConfig
+    /// Owned by the map coordinator: `false` removes the basemap terrain, `true` restores it.
+    var setBasemapTerrainEnabled: ((Bool) -> Void)? = nil
+    private var basemapTerrainSuppressed: Bool = false
     private let state: DioramaState
     private let styling: DioramaMapStyling
     private let library: DioramaPropLibrary
@@ -79,10 +83,6 @@ final class DioramaTileManager {
     /// Low-rate clock for the gentle water drift. Runs only while the tile is shown, the app is
     /// active and effects are not reduced; Mapbox otherwise sleeps between camera changes.
     private var waterClock: Timer? = nil
-    private var sampledTerrain: DioramaTerrain? = nil
-    private var lastTerrainSample: Date = .distantPast
-    private var terrainRetryCount: Int = 0
-    private var terrainSamples: [Int: Double] = [:]
 
     private var reducesEffects: Bool {
         thermalReduced || ProcessInfo.processInfo.isLowPowerModeEnabled
@@ -160,11 +160,7 @@ final class DioramaTileManager {
         shown = false
         updateWaterClock()
         renderLayer = nil
-        terrainSamples.removeAll()
-        status = .idle
-        sampledTerrain = nil
-        terrainRetryCount = 0
-        lastTerrainSample = .distantPast
+        basemapTerrainSuppressed = false
         appliedCategories = []
         appliedTimeOfDay = nil
         appliedDebug = false
@@ -180,6 +176,13 @@ final class DioramaTileManager {
         styling.remove(from: map)
         state.loadedTiles.removeAll()
         installed = false
+    }
+
+    /// The diorama owns the ground while shown; Standard's terrain returns as soon as it hides.
+    private func suppressBasemapTerrain(_ suppress: Bool) {
+        guard suppress != basemapTerrainSuppressed else { return }
+        basemapTerrainSuppressed = suppress
+        setBasemapTerrainEnabled?(!suppress)
     }
 
     // MARK: Camera
@@ -226,11 +229,9 @@ final class DioramaTileManager {
             state.status = "Fly to Slipway to see the diorama"
             return
         }
-        // A wider view can load native heights for the full tile before the close-up scene appears.
-        if camera.zoom >= 13 { _ = refreshTerrain(on: map) }
         guard camera.zoom >= config.minimumZoom else {
             hide(on: map)
-            if sampledTerrain != nil { state.status = "Zoom in to \(Int(config.minimumZoom)) to build the diorama" }
+            state.status = "Zoom in to \(Int(config.minimumZoom)) to build the diorama"
             return
         }
         switch status {
@@ -247,51 +248,9 @@ final class DioramaTileManager {
 
     // MARK: Generation
 
-    /// Samples the same globally aligned 4 m lattice used by the mesh. Values already include
-    /// Mapbox's active exaggeration. Missing cells are never filled from unrelated SRTM terrain.
-    private func refreshTerrain(on map: MapboxMap) -> Bool {
-        guard Date().timeIntervalSince(lastTerrainSample) > 1 else { return false }
-        lastTerrainSample = Date()
-        let projection = DioramaProjection(origin: tile.centre)
-        guard sampledTerrain == nil else { return false }
-        let bounds = projection.rect(of: tile)
-        let step = DioramaTerrain.surfaceStep
-        let rect = DioramaRect(minX: floor(bounds.minX / step) * step, minY: floor(bounds.minY / step) * step,
-                               maxX: ceil(bounds.maxX / step) * step, maxY: ceil(bounds.maxY / step) * step)
-        let columns = Int((rect.width / step).rounded()) + 1
-        let rows = Int((rect.height / step).rounded()) + 1
-        for row in 0..<rows {
-            for column in 0..<columns {
-                let index = row * columns + column
-                guard terrainSamples[index] == nil else { continue }
-                let p = DV2(rect.minX + Double(column) * step, rect.minY + Double(row) * step)
-                let c = projection.coordinate(p)
-                if let h = map.elevation(at: CLLocationCoordinate2D(latitude: c.latitude, longitude: c.longitude)), h.isFinite {
-                    terrainSamples[index] = h
-                }
-            }
-        }
-        let count = columns * rows
-        guard terrainSamples.count == count else {
-            state.status = "Loading Mapbox terrain \(terrainSamples.count * 100 / count)% · zoom out to include the whole Slipway tile"
-            return false
-        }
-        let values = (0..<count).compactMap { terrainSamples[$0] }
-        sampledTerrain = DioramaTerrain(rect: rect, columns: columns, rows: rows, values: values, midTideDatum: config.waterLevel)
-        return true
-    }
-
+    /// Builds the tile from bundled data only. Nothing is read from the live map, so the result is
+    /// the same every session and needs no terrain-loading wait.
     private func generate() {
-        if let map { _ = refreshTerrain(on: map) }
-        guard let sampledTerrain = self.sampledTerrain else {
-            // Leave Standard visible until every terrain cell has a genuine native height.
-            if terrainRetryCount < 3 {
-                terrainRetryCount += 1
-                scheduleUpdate(delay: 2)
-            }
-            return
-        }
-        terrainRetryCount = 0
         status = .generating
         state.status = "Generating Slipway…"
         let config = self.config
@@ -301,7 +260,7 @@ final class DioramaTileManager {
             let artifacts: DioramaTileArtifacts?
             if let data = DioramaBundledTile.load(config: config), !data.isEmpty {
                 do {
-                    artifacts = try DioramaTileGenerator.generate(data, config: config, library: library, reduced: reduced, sampledTerrain: sampledTerrain)
+                    artifacts = try DioramaTileGenerator.generate(data, config: config, library: library, reduced: reduced)
                 } catch {
                     print("[Diorama] generate failed: \(error)")
                     artifacts = nil
@@ -317,15 +276,8 @@ final class DioramaTileManager {
                     return
                 }
                 self.status = .loaded(artifacts)
-                print("[Diorama] \(artifacts.tile): \(artifacts.totalTriangles) tris, \(artifacts.totalBytes / 1024) KB in \(String(format: "%.2f", artifacts.generationSeconds))s")
+                print("[Diorama] \(artifacts.tile): \(artifacts.totalTriangles) unique tris, \(artifacts.lightDrawnTriangles)–\(artifacts.drawnTriangles) drawn (light–full LOD), \(artifacts.totalInstances) instances, \(artifacts.totalBytes / 1024) KB in \(String(format: "%.2f", artifacts.generationSeconds))s")
                 self.scheduleUpdate(delay: 0.05)
-                if self.terrainRetryCount < 3 {
-                    self.terrainRetryCount += 1
-                    Task { @MainActor [weak self] in
-                        try? await Task.sleep(for: .seconds(2))
-                        self?.scheduleUpdate(delay: 0.05)
-                    }
-                }
             }
         }
     }
@@ -350,7 +302,8 @@ final class DioramaTileManager {
             let animates = !UIAccessibility.isReduceMotionEnabled
             let host = DioramaRenderLayer(
                 origin: tile.centre, vertices: artifacts.vertices, indices: artifacts.indices, ranges: artifacts.ranges,
-                lightGrid: artifacts.lightGrid, waterHeight: artifacts.waterHeight, visible: state.visibleCategories, timeOfDay: state.timeOfDay,
+                groups: artifacts.groups, instances: artifacts.allInstances, lightGrid: artifacts.lightGrid, waterHeight: artifacts.waterHeight, groundImage: artifacts.groundImage,
+                groundRect: DioramaProjection(origin: tile.centre).rect(of: tile), visible: state.visibleCategories, timeOfDay: state.timeOfDay,
                 animates: animates, config: config
             )
             try map.addCustomLayer(withId: layerID, layerHost: host, layerPosition: nil)
@@ -365,6 +318,7 @@ final class DioramaTileManager {
             try map.addLayer(clip)
             renderLayer = host
             shown = true
+            suppressBasemapTerrain(true)
             host.setReducedEffects(reducesEffects)
             host.setWireframe(state.showsWireframe)
             appliedWireframe = state.showsWireframe
@@ -385,6 +339,7 @@ final class DioramaTileManager {
         renderLayer = nil
         appliedWireframe = nil
         shown = false
+        suppressBasemapTerrain(false)
         updateWaterClock()
     }
 

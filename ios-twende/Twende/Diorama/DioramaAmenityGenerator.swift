@@ -12,9 +12,7 @@ nonisolated struct DioramaAmenityGenerator {
     let library: DioramaPropLibrary
     let buildings: [DioramaBuilt]
     let terrain: DioramaTerrain
-
-    /// Footway surface above the ground plate.
-    static let pathLift: Double = DioramaSurfaceLevel.footway.rawValue
+    let painter: DioramaGroundPainter
 
     private func z(_ p: DV2) -> Double { terrain.height(p) }
 
@@ -39,7 +37,7 @@ nonisolated struct DioramaAmenityGenerator {
             default: break
             }
         }
-        footways(ground: &ground)
+        footways()
         for path in data.paths {
             switch path.kind {
             case "pier": pier(path.line, props: &props)
@@ -223,7 +221,7 @@ nonisolated struct DioramaAmenityGenerator {
                 let bayCentre = box.centre + a * (u + 1.3) + c * (s * (box.halfWidth - bayDepth / 2))
                 if u + 2.6 <= box.halfLength - 1.5, DioramaOrientedRect(centre: bayCentre, axis: c, halfLength: 2.2, halfWidth: 1.0).corners.allSatisfy(onParking), rng.chance(0.55) {
                     let heading = (c * -s).angle + rng.range(-0.04...0.04)
-                    props.append(rng.pick(library.cars), DioramaTransform(rotation: heading, translation: DV3(bayCentre, top)))
+                    props.instance(rng.pick(library.cars), DioramaTransform(rotation: heading, translation: DV3(bayCentre, top)))
                 }
             }
             u += 2.6
@@ -232,7 +230,7 @@ nonisolated struct DioramaAmenityGenerator {
         if box.halfLength > 14 {
             let island = DioramaOrientedRect(centre: box.centre, axis: a, halfLength: 2.0, halfWidth: 0.9)
             ground.extrude(island.corners, z0: top, z1: top + 0.25, .kerb, top: .soil)
-            props.append(library.trees[8], DioramaTransform(rotation: rng.range(0...6.28), translation: DV3(box.centre, top + 0.25)))
+            props.instance(library.trees[8], DioramaTransform(rotation: rng.range(0...6.28), translation: DV3(box.centre, top + 0.25)))
         }
     }
 
@@ -275,7 +273,7 @@ nonisolated struct DioramaAmenityGenerator {
             lights.append(DioramaLight(position: DV3(canopy.centre, top + h - 0.2), color: SIMD3<Float>(1.0, 0.95, 0.82), radius: 14, intensity: 1.1))
         }
         let car = island.centre + island.across * 2.2
-        props.append(rng.pick(library.cars), DioramaTransform(rotation: island.axis.angle, translation: DV3(car, top)))
+        props.instance(rng.pick(library.cars), DioramaTransform(rotation: island.axis.angle, translation: DV3(car, top)))
         // Price totem by the road.
         if let road = roads.nearest(to: box.centre, within: 60) {
             let toRoad = (road.point - box.centre).normalized
@@ -333,7 +331,7 @@ nonisolated struct DioramaAmenityGenerator {
                 let p = box.centre + box.across * (s * (box.halfWidth + 0.7)) + box.axis * rng.range(-0.6...0.6)
                 let clear = DioramaPolygon.distanceToRing(ring, p) > 0.45 && !DioramaPolygon.contains(ring, p)
                 guard clear, onDeck(p), !buildings.contains(where: { $0.box.expanded(by: 0.3).contains(p) }), !roads.isOnCarriageway(p, margin: 0.5) else { continue }
-                props.append(library.lounger, DioramaTransform(rotation: (box.across * -s).angle, scale: DV3(0.85, 0.85, 0.85), translation: DV3(p, deckTop)))
+                props.instance(library.lounger, DioramaTransform(rotation: (box.across * -s).angle, scale: DV3(0.85, 0.85, 0.85), translation: DV3(p, deckTop)))
                 placed += 1
             }
             return
@@ -346,11 +344,11 @@ nonisolated struct DioramaAmenityGenerator {
                 let p = box.centre + box.axis * u + box.across * (s * (box.halfWidth + 1.3))
                 guard onDeck(p), !DioramaPolygon.contains(ring, p) else { continue }
                 guard !buildings.contains(where: { $0.box.expanded(by: 0.3).contains(p) }) else { continue }
-                props.append(library.lounger, DioramaTransform(rotation: (box.across * -s).angle, translation: DV3(p, deckTop)))
+                props.instance(library.lounger, DioramaTransform(rotation: (box.across * -s).angle, translation: DV3(p, deckTop)))
                 if rng.chance(0.4) {
                     let q = p + box.axis * 1.1
                     if onDeck(q), !DioramaPolygon.contains(ring, q) {
-                        props.append(rng.pick(library.parasol), DioramaTransform(rotation: rng.range(0...6.28), scale: DV3(0.8, 0.8, 0.8), translation: DV3(q, deckTop)))
+                        props.instance(rng.pick(library.parasol), DioramaTransform(rotation: rng.range(0...6.28), scale: DV3(0.8, 0.8, 0.8), translation: DV3(q, deckTop)))
                     }
                 }
             }
@@ -376,7 +374,7 @@ nonisolated struct DioramaAmenityGenerator {
                 let p = box.centre + box.axis * x + box.across * y
                 let footprint = DioramaOrientedRect(centre: p, axis: box.axis, halfLength: 1.4, halfWidth: 1.4)
                 if onDeck(p), footprint.corners.allSatisfy(onDeck), DioramaPolygon.distanceToRing(ring, p) > 1.4, !buildings.contains(where: { $0.box.expanded(by: 1.4).contains(p) }) {
-                    props.append(rng.pick(library.parasol), DioramaTransform(rotation: rng.range(0...6.28), translation: DV3(p, top)))
+                    props.instance(rng.pick(library.parasol), DioramaTransform(rotation: rng.range(0...6.28), translation: DV3(p, top)))
                 }
                 x += 3.4
             }
@@ -391,17 +389,10 @@ nonisolated struct DioramaAmenityGenerator {
 
     // MARK: Paths, pier, slipway
 
-    private func footways(ground: inout DioramaMesh) {
-        let paths = data.paths.filter { !["pier", "slipway", "steps"].contains($0.kind) }
-        let patches = paths.flatMap { path in
-            DioramaStreetSurface.corridor(DioramaRoadFeature(id: path.id, line: path.line,
-                roadClass: "footway", isPaved: true, width: 1.6), extra: 0)
-        }
-        let masks = data.water.compactMap { $0.rings.first } + [data.hotelCourtyardOutline, data.hotelDiningOutline, DioramaHotelGrounds.stairOutline(data: data)]
-        let cutouts = DioramaGroundCutouts(data: data, pavementWidth: config.pavementWidth, additionalMasks: masks)
-        let pieces = DioramaStreetSurface(patches).pieces().flatMap { cutouts.subtract(from: $0) }
-        for piece in pieces {
-            terrain.drape(piece, lift: Self.pathLift, swatch: .paving, into: &ground)
+    /// Footways are painted 1.6 m paving strokes; the courtyard and sea are painted after them.
+    private func footways() {
+        for path in data.paths where !["pier", "slipway", "steps"].contains(path.kind) {
+            painter.stroke(path.line, width: 1.6, .paving)
         }
     }
 
@@ -461,7 +452,7 @@ nonisolated struct DioramaAmenityGenerator {
         for s in [-1.0, 1.0] {
             let p = head + dir.right * (s * 4.5) - dir * 3
             if isWater(p) {
-                props.append(library.dhow, DioramaTransform(rotation: dir.angle + s * 0.2, scale: DV3(0.8, 0.8, 0.8), translation: DV3(p, terrain.waterLevel)))
+                props.instance(library.dhow, DioramaTransform(rotation: dir.angle + s * 0.2, scale: DV3(0.8, 0.8, 0.8), translation: DV3(p, terrain.waterLevel)))
             }
         }
     }
@@ -531,7 +522,7 @@ nonisolated struct DioramaAmenityGenerator {
         }
         let base = terrain.foundationHeight(pad.corners)
         ground.extrude(pad.corners, z0: terrain.footingHeight(pad.corners), z1: base + 0.1, .coralStone, top: .earth)
-        props.append(library.playground, DioramaTransform(rotation: pad.axis.angle, translation: DV3(p, base + 0.1)))
+        props.instance(library.playground, DioramaTransform(rotation: pad.axis.angle, translation: DV3(p, base + 0.1)))
     }
 
     private func sculpture(at p: DV2, ground: inout DioramaMesh, props: inout DioramaMesh) {

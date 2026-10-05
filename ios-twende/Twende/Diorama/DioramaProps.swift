@@ -1,78 +1,104 @@
 import Foundation
 
 /// Every prop type is built once as a tiny mesh at the origin (facing +x, standing on z = 0) and
-/// stamped around the tile with `DioramaMesh.append`, so tile geometry stays small.
+/// drawn around the tile as GPU instances through `DioramaMesh.instance`, so tile geometry stays
+/// small. Trees, palms, bushes and rocks also carry a lighter tessellation for distant placements.
 nonisolated struct DioramaPropLibrary: Sendable {
-    let palm: DioramaMesh
-    let palms: [DioramaMesh]
+    /// Every prototype by id; the tile generator bakes each one once per category that uses it.
+    let prototypes: [DioramaPrototype]
+    let palm: DioramaPrototype
+    let palms: [DioramaPrototype]
     /// Broad-leaf shade trees in several silhouettes (lumpy round, layered, umbrella, tall, small ornamental).
-    let trees: [DioramaMesh]
-    let cypress: DioramaMesh
-    let flamboyant: DioramaMesh
-    let bushes: [DioramaMesh]
-    let flowerBushes: [DioramaMesh]
-    let bougainvillea: [DioramaMesh]
-    let bajaji: [DioramaMesh]
-    let boda: DioramaMesh
-    let dalaDala: DioramaMesh
-    let cars: [DioramaMesh]
-    let dhow: DioramaMesh
-    let canoe: DioramaMesh
-    let yacht: DioramaMesh
-    let playground: DioramaMesh
-    let lamp: DioramaMesh
-    let lampGlow: DioramaMesh
+    let trees: [DioramaPrototype]
+    let cypress: DioramaPrototype
+    let flamboyant: DioramaPrototype
+    let bushes: [DioramaPrototype]
+    let flowerBushes: [DioramaPrototype]
+    let bougainvillea: [DioramaPrototype]
+    let bajaji: [DioramaPrototype]
+    let boda: DioramaPrototype
+    let dalaDala: DioramaPrototype
+    let cars: [DioramaPrototype]
+    let dhow: DioramaPrototype
+    let canoe: DioramaPrototype
+    let yacht: DioramaPrototype
+    let playground: DioramaPrototype
+    let lamp: DioramaPrototype
+    let lampGlow: DioramaPrototype
+    /// Camera-facing halo sprites stay baked: the vertex shader rebuilds them from their centre.
     let lampHalo: DioramaMesh
-    let bollard: DioramaMesh
-    let bollardGlow: DioramaMesh
-    let kiosk: [DioramaMesh]
-    let kioskGlow: DioramaMesh
-    let bench: DioramaMesh
-    let parasol: [DioramaMesh]
-    let lounger: DioramaMesh
+    let bollard: DioramaPrototype
+    let bollardGlow: DioramaPrototype
+    let kiosk: [DioramaPrototype]
+    let kioskGlow: DioramaPrototype
+    let bench: DioramaPrototype
+    let parasol: [DioramaPrototype]
+    let lounger: DioramaPrototype
+    /// Smooth shoreline rocks in three tones; placements vary rotation and scale.
+    let rocks: [DioramaPrototype]
 
     init(config: DioramaConfig) {
-        palms = [Self.makePalm(seed: 1, lean: 0.9), Self.makePalm(seed: 2, lean: 0.4), Self.makePalm(seed: 3, lean: 1.3)]
+        var registry: [DioramaPrototype] = []
+        func make(_ full: DioramaMesh, light: DioramaMesh? = nil) -> DioramaPrototype {
+            let prototype = DioramaPrototype(id: registry.count, full: full, light: light)
+            registry.append(prototype)
+            return prototype
+        }
+        palms = [(UInt64(1), 0.9), (2, 0.4), (3, 1.3)].map { make(Self.makePalm(seed: $0.0, lean: $0.1), light: Self.makePalm(seed: $0.0, lean: $0.1, light: true)) }
         palm = palms[0]
         trees = [
-            Self.makeLumpyTree(seed: 1, scale: 1.0), Self.makeLumpyTree(seed: 2, scale: 1.2), Self.makeLumpyTree(seed: 3, scale: 0.85),
-            Self.makeLumpyTree(seed: 9, scale: 1.05, bright: true),
-            Self.makeLayeredTree(seed: 4), Self.makeLayeredTree(seed: 5),
-            Self.makeUmbrellaTree(seed: 6), Self.makeTallTree(seed: 7), Self.makeOrnamentalTree(seed: 8),
+            make(Self.makeLumpyTree(seed: 1, scale: 1.0), light: Self.makeLumpyTree(seed: 1, scale: 1.0, light: true)),
+            make(Self.makeLumpyTree(seed: 2, scale: 1.2), light: Self.makeLumpyTree(seed: 2, scale: 1.2, light: true)),
+            make(Self.makeLumpyTree(seed: 3, scale: 0.85), light: Self.makeLumpyTree(seed: 3, scale: 0.85, light: true)),
+            make(Self.makeLumpyTree(seed: 9, scale: 1.05, bright: true), light: Self.makeLumpyTree(seed: 9, scale: 1.05, bright: true, light: true)),
+            make(Self.makeLayeredTree(seed: 4), light: Self.makeLayeredTree(seed: 4, light: true)),
+            make(Self.makeLayeredTree(seed: 5), light: Self.makeLayeredTree(seed: 5, light: true)),
+            make(Self.makeUmbrellaTree(seed: 6), light: Self.makeUmbrellaTree(seed: 6, light: true)),
+            make(Self.makeTallTree(seed: 7), light: Self.makeTallTree(seed: 7, light: true)),
+            make(Self.makeOrnamentalTree(seed: 8), light: Self.makeOrnamentalTree(seed: 8, light: true)),
         ]
-        cypress = Self.makeCypress()
-        flamboyant = Self.makeFlamboyant()
-        bushes = [Self.makeBush(seed: 11, .hedge), Self.makeBush(seed: 12, .leafOlive), Self.makeBush(seed: 13, .leafBright), Self.makeBush(seed: 14, .leafDark)]
-        flowerBushes = [Self.makeFlowerBush(seed: 21, .flowerPink), Self.makeFlowerBush(seed: 22, .flowerYellow), Self.makeFlowerBush(seed: 23, .flowerRed), Self.makeFlowerBush(seed: 24, .flowerWhite)]
-        bougainvillea = [Self.makeBougainvillea(.bougainvilleaMagenta), Self.makeBougainvillea(.bougainvilleaOrange)]
-        bajaji = [Self.makeBajaji(.bajajiBlue), Self.makeBajaji(.bajajiRed), Self.makeBajaji(.bajajiYellow)]
-        boda = Self.makeBoda()
-        dalaDala = Self.makeDalaDala()
-        cars = [Self.makeCar(.carSilver), Self.makeCar(.carRed), Self.makeCar(.carWhite), Self.makeCar(.sunflower)]
-        dhow = DioramaMarineModels.dhow()
-        canoe = DioramaMarineModels.canoe()
-        yacht = DioramaMarineModels.yacht()
-        playground = DioramaPlaygroundModel.make()
-        (lamp, lampGlow) = Self.makeLamp()
+        cypress = make(Self.makeCypress(), light: Self.makeCypress(light: true))
+        flamboyant = make(Self.makeFlamboyant(), light: Self.makeFlamboyant(light: true))
+        bushes = [(UInt64(11), DioramaSwatch.hedge), (12, .leafOlive), (13, .leafBright), (14, .leafDark)].map { make(Self.makeBush(seed: $0.0, $0.1), light: Self.makeBush(seed: $0.0, $0.1, light: true)) }
+        flowerBushes = [(UInt64(21), DioramaSwatch.flowerPink), (22, .flowerYellow), (23, .flowerRed), (24, .flowerWhite)].map { make(Self.makeFlowerBush(seed: $0.0, $0.1), light: Self.makeFlowerBush(seed: $0.0, $0.1, light: true)) }
+        bougainvillea = [DioramaSwatch.bougainvilleaMagenta, .bougainvilleaOrange].map { make(Self.makeBougainvillea($0), light: Self.makeBougainvillea($0, light: true)) }
+        bajaji = [DioramaSwatch.bajajiBlue, .bajajiRed, .bajajiYellow].map { make(Self.makeBajaji($0)) }
+        boda = make(Self.makeBoda())
+        dalaDala = make(Self.makeDalaDala())
+        cars = [DioramaSwatch.carSilver, .carRed, .carWhite, .sunflower].map { make(Self.makeCar($0)) }
+        dhow = make(DioramaMarineModels.dhow())
+        canoe = make(DioramaMarineModels.canoe())
+        yacht = make(DioramaMarineModels.yacht())
+        playground = make(DioramaPlaygroundModel.make())
+        let lampParts = Self.makeLamp()
+        lamp = make(lampParts.0)
+        lampGlow = make(lampParts.1)
         lampHalo = Self.makeHalo(radius: 2.4, .lampGlow)
-        (bollard, bollardGlow) = Self.makeBollard()
-        kiosk = config.canopyColors.map { Self.makeKiosk(canopy: $0) }
-        kioskGlow = Self.makeKioskGlow()
-        bench = Self.makeBench()
-        parasol = config.canopyColors.map { Self.makeParasol($0) }
-        lounger = Self.makeLounger()
+        let bollardParts = Self.makeBollard()
+        bollard = make(bollardParts.0)
+        bollardGlow = make(bollardParts.1)
+        kiosk = config.canopyColors.map { make(Self.makeKiosk(canopy: $0)) }
+        kioskGlow = make(Self.makeKioskGlow())
+        bench = make(Self.makeBench())
+        parasol = config.canopyColors.map { make(Self.makeParasol($0)) }
+        lounger = make(Self.makeLounger())
+        rocks = [DioramaSwatch.rockWarm, .rockGrey, .rockPale].enumerated().map { i, swatch in
+            make(Self.makeRock(i, swatch), light: Self.makeRock(i, swatch, light: true))
+        }
+        prototypes = registry
     }
 
     // MARK: Trees
 
     /// Trunk with a few short branches disappearing into the canopy.
-    private static func trunk(_ m: inout DioramaMesh, height h: Double, radius r: Double, branches: Int, rng: inout DioramaRandom) {
-        m.tube(from: DV3(0, 0, 0), to: DV3(0, 0, h), r0: r, r1: r * 0.72, sides: 16, .trunk, cap: false)
-        m.cylinder(centre: .zero, z0: 0, z1: 0.14, r0: r * 1.6, r1: r * 1.1, sides: 16, .trunk)
+    private static func trunk(_ m: inout DioramaMesh, height h: Double, radius r: Double, branches: Int, rng: inout DioramaRandom, light: Bool = false) {
+        m.tube(from: DV3(0, 0, 0), to: DV3(0, 0, h), r0: r, r1: r * 0.72, sides: light ? 6 : 16, .trunk, cap: false)
+        m.cylinder(centre: .zero, z0: 0, z1: 0.14, r0: r * 1.6, r1: r * 1.1, sides: light ? 6 : 16, .trunk)
         for _ in 0..<branches {
             let a = rng.range(0...6.28)
             let dir = DV2(cos(a), sin(a))
             let z0 = h * rng.range(0.72...0.95)
+            if light { continue }
             m.tube(from: DV3(0, 0, z0), to: DV3(dir * rng.range(0.9...1.5), z0 + rng.range(0.7...1.3)), r0: r * 0.45, r1: r * 0.18, sides: 12, .trunk, cap: false)
         }
     }
@@ -80,120 +106,127 @@ nonisolated struct DioramaPropLibrary: Sendable {
     /// One moulded canopy: a single sculpted mass whose surface is pushed in and out by smooth noise, so
     /// it reads as a solid tree crown (the way Apple Maps models them) rather than a pile of balls.
     /// Shading comes from the three-tone split: shadowed underside, mid sides, sunlit top.
-    private static func lumpyCanopy(_ m: inout DioramaMesh, centre: DV3, radius R: Double, squash: Double, lumps: Int, palette: [DioramaSwatch], rng: inout DioramaRandom) {
+    private static func lumpyCanopy(_ m: inout DioramaMesh, centre: DV3, radius R: Double, squash: Double, lumps: Int, palette: [DioramaSwatch], rng: inout DioramaRandom, light: Bool = false) {
         let seed = rng.next()
         let amplitude = lumps >= 10 ? 0.08 : 0.06
         let frequency = 1.8 + Double(lumps) * 0.06
         m.blob(centre: centre, radii: DV3(R * rng.range(0.92...1.05), R * rng.range(0.92...1.05), R * squash),
                seed: seed, amplitude: amplitude, frequency: frequency,
-               lower: palette[0], mid: palette[1], upper: palette[2], flattenBottom: 0.35)
+               lower: palette[0], mid: palette[1], upper: palette[2], flattenBottom: 0.35, light: light)
     }
 
     /// Classic shade tree: trunk, branches and a lumpy two-tone canopy.
-    private static func makeLumpyTree(seed: UInt64, scale: Double, bright: Bool = false) -> DioramaMesh {
+    private static func makeLumpyTree(seed: UInt64, scale: Double, bright: Bool = false, light: Bool = false) -> DioramaMesh {
         var m = DioramaMesh()
         var rng = DioramaRandom(seed: seed, salt: 21)
         let h = rng.range(2.4...3.0) * scale
-        trunk(&m, height: h + 1.0, radius: 0.3 * scale, branches: 3, rng: &rng)
+        trunk(&m, height: h + 1.0, radius: 0.3 * scale, branches: 3, rng: &rng, light: light)
         let R = rng.range(2.3...2.8) * scale
         let palette: [DioramaSwatch] = bright ? [.leafMid, .leafMid, .leafLight] : [.leafDark, .leafMid, .leafMid]
-        lumpyCanopy(&m, centre: DV3(0, 0, h + R * 0.8), radius: R, squash: 0.88, lumps: 10, palette: palette, rng: &rng)
+        lumpyCanopy(&m, centre: DV3(0, 0, h + R * 0.8), radius: R, squash: 0.88, lumps: 10, palette: palette, rng: &rng, light: light)
         // A second, smaller mass pushed to one side breaks the symmetry like a real crown.
         let a = rng.range(0...6.28)
-        lumpyCanopy(&m, centre: DV3(cos(a) * R * 0.45, sin(a) * R * 0.45, h + R * 0.55), radius: R * 0.62, squash: 0.8, lumps: 8, palette: palette, rng: &rng)
+        lumpyCanopy(&m, centre: DV3(cos(a) * R * 0.45, sin(a) * R * 0.45, h + R * 0.55), radius: R * 0.62, squash: 0.8, lumps: 8, palette: palette, rng: &rng, light: light)
         return m
     }
 
     /// Three stacked tiers of lumpy foliage, like a clipped ornamental tree.
-    private static func makeLayeredTree(seed: UInt64) -> DioramaMesh {
+    private static func makeLayeredTree(seed: UInt64, light: Bool = false) -> DioramaMesh {
         var m = DioramaMesh()
         var rng = DioramaRandom(seed: seed, salt: 22)
         let h = rng.range(2.0...2.6)
-        trunk(&m, height: h + 2.8, radius: 0.24, branches: 2, rng: &rng)
+        trunk(&m, height: h + 2.8, radius: 0.24, branches: 2, rng: &rng, light: light)
         let tiers: [(Double, Double, [DioramaSwatch])] = [(0, 2.2, [.leafDark, .leafDark, .leafMid]), (1.7, 1.7, [.leafDark, .leafMid, .leafMid]), (3.1, 1.2, [.leafMid, .leafMid, .leafLight])]
         for (dz, r, palette) in tiers {
             let off = DV2(rng.range(-0.25...0.25), rng.range(-0.25...0.25))
-            lumpyCanopy(&m, centre: DV3(off, h + dz), radius: r, squash: 0.55, lumps: 6, palette: palette, rng: &rng)
+            lumpyCanopy(&m, centre: DV3(off, h + dz), radius: r, squash: 0.55, lumps: 6, palette: palette, rng: &rng, light: light)
         }
         return m
     }
 
     /// Wide, flat umbrella canopy (acacia / neem) made of flattened lumps.
-    private static func makeUmbrellaTree(seed: UInt64) -> DioramaMesh {
+    private static func makeUmbrellaTree(seed: UInt64, light: Bool = false) -> DioramaMesh {
         var m = DioramaMesh()
         var rng = DioramaRandom(seed: seed, salt: 23)
         let h = rng.range(3.4...4.2)
-        trunk(&m, height: h, radius: 0.3, branches: 4, rng: &rng)
-        for k in 0..<3 {
+        trunk(&m, height: h, radius: 0.3, branches: 4, rng: &rng, light: light)
+        for k in 0..<3 where !light {
             let a = Double(k) / 3 * 2 * Double.pi + 0.4
             m.tube(from: DV3(0, 0, h - 0.6), to: DV3(cos(a) * 2.4, sin(a) * 2.4, h + 0.4), r0: 0.14, r1: 0.06, sides: 12, .trunk, cap: false)
         }
-        lumpyCanopy(&m, centre: DV3(0, 0, h + 0.7), radius: 3.8, squash: 0.34, lumps: 12, palette: [.leafDark, .leafOlive, .leafMid], rng: &rng)
+        lumpyCanopy(&m, centre: DV3(0, 0, h + 0.7), radius: 3.8, squash: 0.34, lumps: 12, palette: [.leafDark, .leafOlive, .leafMid], rng: &rng, light: light)
         return m
     }
 
     /// Tall slender tree with a narrow, ragged crown.
-    private static func makeTallTree(seed: UInt64) -> DioramaMesh {
+    private static func makeTallTree(seed: UInt64, light: Bool = false) -> DioramaMesh {
         var m = DioramaMesh()
         var rng = DioramaRandom(seed: seed, salt: 24)
         let h = rng.range(4.8...5.8)
-        trunk(&m, height: h + 1.8, radius: 0.22, branches: 2, rng: &rng)
-        lumpyCanopy(&m, centre: DV3(0, 0, h + 1.5), radius: 1.6, squash: 1.6, lumps: 8, palette: [.leafDark, .leafMid, .leafMid], rng: &rng)
+        trunk(&m, height: h + 1.8, radius: 0.22, branches: 2, rng: &rng, light: light)
+        lumpyCanopy(&m, centre: DV3(0, 0, h + 1.5), radius: 1.6, squash: 1.6, lumps: 8, palette: [.leafDark, .leafMid, .leafMid], rng: &rng, light: light)
         return m
     }
 
     /// Small garden tree: short trunk, dense bright ball.
-    private static func makeOrnamentalTree(seed: UInt64) -> DioramaMesh {
+    private static func makeOrnamentalTree(seed: UInt64, light: Bool = false) -> DioramaMesh {
         var m = DioramaMesh()
         var rng = DioramaRandom(seed: seed, salt: 25)
         let h = rng.range(1.2...1.6)
-        trunk(&m, height: h + 0.5, radius: 0.14, branches: 0, rng: &rng)
-        lumpyCanopy(&m, centre: DV3(0, 0, h + 1.2), radius: 1.3, squash: 1.0, lumps: 6, palette: [.leafMid, .leafMid, .leafLight], rng: &rng)
+        trunk(&m, height: h + 0.5, radius: 0.14, branches: 0, rng: &rng, light: light)
+        lumpyCanopy(&m, centre: DV3(0, 0, h + 1.2), radius: 1.3, squash: 1.0, lumps: 6, palette: [.leafMid, .leafMid, .leafLight], rng: &rng, light: light)
         return m
     }
 
     /// Italian cypress column for driveways and compound corners.
-    private static func makeCypress() -> DioramaMesh {
+    private static func makeCypress(light: Bool = false) -> DioramaMesh {
         var m = DioramaMesh()
         m.tube(from: DV3(0, 0, 0), to: DV3(0, 0, 0.5), r0: 0.12, r1: 0.1, sides: 5, .trunk, cap: false)
-        m.sphere(centre: DV3(0, 0, 2.6), radii: DV3(0.75, 0.75, 2.3), .cypress)
-        m.sphere(centre: DV3(0, 0, 4.4), radii: DV3(0.45, 0.45, 1.2), .cypress, detail: 0)
-        m.sphere(centre: DV3(0.15, 0.1, 1.6), radii: DV3(0.6, 0.55, 0.9), .leafDark, detail: 0)
+        m.sphere(centre: DV3(0, 0, 2.6), radii: DV3(0.75, 0.75, 2.3), .cypress, detail: light ? 0 : 1)
+        m.sphere(centre: DV3(0, 0, 4.4), radii: DV3(0.45, 0.45, 1.2), .cypress, detail: light ? -1 : 0)
+        if !light { m.sphere(centre: DV3(0.15, 0.1, 1.6), radii: DV3(0.6, 0.55, 0.9), .leafDark, detail: 0) }
+        return m
+    }
+
+    /// Smooth shoreline rock: 80 faces close up, 20 in the distance.
+    private static func makeRock(_ i: Int, _ swatch: DioramaSwatch, light: Bool = false) -> DioramaMesh {
+        var m = DioramaMesh()
+        m.sphere(centre: DV3(0, 0, 0), radii: DV3(0.5, 0.42 + Double(i) * 0.04, 0.36 + Double(i) * 0.035), swatch, detail: light ? -1 : 0)
         return m
     }
 
     /// Coconut palm: a gently curving ringed trunk, a crown of arching fronds that rise then droop, a
     /// few young fronds pointing up and a cluster of coconuts under the crown.
-    private static func makePalm(seed: UInt64, lean: Double) -> DioramaMesh {
+    private static func makePalm(seed: UInt64, lean: Double, light: Bool = false) -> DioramaMesh {
         var m = DioramaMesh()
         var rng = DioramaRandom(seed: seed, salt: 28)
         let height = rng.range(7.0...8.5)
         let leanDir = DV2(1, 0.3).normalized * lean
-        let segments = 24
+        let segments = light ? 6 : 24
         var prev = DV3(0, 0, 0)
         for k in 1...segments {
             let t = Double(k) / Double(segments)
             let p = DV3(leanDir * (t * t * 1.6), height * t)
             let r0 = 0.30 - 0.12 * Double(k - 1) / Double(segments), r1 = 0.30 - 0.12 * Double(k) / Double(segments)
-            m.tube(from: prev, to: p, r0: r0, r1: r1, sides: 16, .palmTrunk, cap: k == segments)
+            m.tube(from: prev, to: p, r0: r0, r1: r1, sides: light ? 6 : 16, .palmTrunk, cap: k == segments)
             prev = p
         }
         let top = prev + DV3(0, 0, 0.1)
-        m.sphere(centre: top - DV3(0, 0, 0.15), radii: DV3(0.42, 0.42, 0.4), .trunk, detail: 0)
-        let fronds = 11
+        m.sphere(centre: top - DV3(0, 0, 0.15), radii: DV3(0.42, 0.42, 0.4), .trunk, detail: light ? -1 : 0)
+        let fronds = light ? 8 : 11
         for k in 0..<fronds {
             let a = Double(k) / Double(fronds) * 2 * Double.pi + rng.range(-0.15...0.15)
             let dir = DV2(cos(a), sin(a))
             let length = rng.range(3.4...4.2)
             let droop = rng.range(1.6...2.4)
-            frond(&m, from: top, direction: dir, length: length, rise: 0.9, droop: droop, width: 0.62, k % 2 == 0 ? .leafMid : .leafBright)
+            frond(&m, from: top, direction: dir, length: length, rise: 0.9, droop: droop, width: 0.62, k % 2 == 0 ? .leafMid : .leafBright, light: light)
         }
-        for k in 0..<4 {
+        for k in 0..<4 where !light {
             let a = Double(k) / 4 * 2 * Double.pi + 0.5
             let dir = DV2(cos(a), sin(a))
             frond(&m, from: top, direction: dir, length: 2.0, rise: 1.5, droop: 0.4, width: 0.4, .leafLight)
         }
-        for k in 0..<5 {
+        for k in 0..<5 where !light {
             let a = Double(k) / 5 * 2 * Double.pi
             m.sphere(centre: top + DV3(cos(a) * 0.38, sin(a) * 0.38, -0.42), radii: DV3(0.2, 0.2, 0.24), .coconut, detail: 0)
         }
@@ -201,11 +234,15 @@ nonisolated struct DioramaPropLibrary: Sendable {
     }
 
     /// Smooth indexed frond skin with a continuous curved cross-section and drooping leaflets.
-    private static func frond(_ m: inout DioramaMesh, from top: DV3, direction dir: DV2, length: Double, rise: Double, droop: Double, width: Double, _ s: DioramaSwatch) {
-        let steps = 20, crossSteps = 6
+    private static func frond(_ m: inout DioramaMesh, from top: DV3, direction dir: DV2, length: Double, rise: Double, droop: Double, width: Double, _ s: DioramaSwatch, light: Bool = false) {
+        let steps = light ? 6 : 14, crossSteps = light ? 2 : 4
         let across = dir.left
         let uv = DioramaAtlas.uv(s, dark: false)
         let base = m.positions.count
+        // Fronds and pinnae are open sheets seen from above and below.
+        let wasDoubleSided = m.doubleSided
+        m.doubleSided = true
+        defer { m.doubleSided = wasDoubleSided }
         func spine(_ t: Double) -> DV3 {
             top + DV3(dir * (length * t), rise * t - droop * t * t)
         }
@@ -226,9 +263,10 @@ nonisolated struct DioramaPropLibrary: Sendable {
                 m.tri(a, b, b + 1); m.tri(a, b + 1, a + 1)
             }
         }
+        guard !light else { return }
         // Each pinna is a curved tapered ribbon, not a single sharp triangular shard.
-        for k in 1..<16 {
-            let t = Double(k) / 17
+        for k in 1..<11 {
+            let t = Double(k) / 12
             let w = width * sin(.pi * t)
             for side in [-1.0, 1.0] {
                 let root = spine(t) + DV3(across * (side * w * 0.75), -0.07)
@@ -249,48 +287,48 @@ nonisolated struct DioramaPropLibrary: Sendable {
         }
     }
 
-    private static func makeFlamboyant() -> DioramaMesh {
+    private static func makeFlamboyant(light: Bool = false) -> DioramaMesh {
         var m = DioramaMesh()
         var rng = DioramaRandom(seed: 61, salt: 29)
-        m.tube(from: DV3(0, 0, 0), to: DV3(0, 0, 3.4), r0: 0.34, r1: 0.22, sides: 16, .trunk, cap: false)
-        for k in 0..<3 {
+        m.tube(from: DV3(0, 0, 0), to: DV3(0, 0, 3.4), r0: 0.34, r1: 0.22, sides: light ? 6 : 16, .trunk, cap: false)
+        for k in 0..<3 where !light {
             let a = Double(k) / 3 * 2 * Double.pi
             m.tube(from: DV3(0, 0, 3.2), to: DV3(cos(a) * 2.2, sin(a) * 2.2, 4.6), r0: 0.16, r1: 0.08, sides: 12, .trunk, cap: false)
         }
-        lumpyCanopy(&m, centre: DV3(0, 0, 5.1), radius: 4.0, squash: 0.38, lumps: 12, palette: [.leafDark, .flamboyant, .flamboyant], rng: &rng)
+        lumpyCanopy(&m, centre: DV3(0, 0, 5.1), radius: 4.0, squash: 0.38, lumps: 12, palette: [.leafDark, .flamboyant, .flamboyant], rng: &rng, light: light)
         return m
     }
 
     // MARK: Shrubs and flowers
 
-    /// Low shrub: a cluster of 4–6 blobs.
-    private static func makeBush(seed: UInt64, _ s: DioramaSwatch) -> DioramaMesh {
+    /// Low shrub: one moulded mound.
+    private static func makeBush(seed: UInt64, _ s: DioramaSwatch, light: Bool = false) -> DioramaMesh {
         var m = DioramaMesh()
         var rng = DioramaRandom(seed: seed, salt: 26)
         m.blob(centre: DV3(0, 0, 0.5), radii: DV3(rng.range(0.9...1.1), rng.range(0.8...1.0), 0.6), seed: seed, amplitude: 0.18, frequency: 3.2,
-               lower: .leafDark, mid: s, upper: s == .leafDark ? .leafMid : s, flattenBottom: 0.6)
+               lower: .leafDark, mid: s, upper: s == .leafDark ? .leafMid : s, flattenBottom: 0.6, light: light)
         return m
     }
 
     /// Flowering shrub: green mound studded with small coloured blooms.
-    private static func makeFlowerBush(seed: UInt64, _ flower: DioramaSwatch) -> DioramaMesh {
+    private static func makeFlowerBush(seed: UInt64, _ flower: DioramaSwatch, light: Bool = false) -> DioramaMesh {
         var m = DioramaMesh()
         var rng = DioramaRandom(seed: seed, salt: 27)
-        m.sphere(centre: DV3(0, 0, 0.42), radii: DV3(0.8, 0.75, 0.45), .hedge, detail: 1)
-        for _ in 0..<9 {
+        m.sphere(centre: DV3(0, 0, 0.42), radii: DV3(0.8, 0.75, 0.45), .hedge, detail: light ? 0 : 1)
+        for _ in 0..<(light ? 3 : 9) {
             let a = rng.range(0...6.28), r = rng.range(0.1...0.65)
             let p = DV3(cos(a) * r, sin(a) * r, 0.42 + 0.42 * (1 - (r / 0.8) * (r / 0.8)).squareRoot() * 0.9)
-            m.sphere(centre: p, radii: DV3(0.14, 0.14, 0.12), flower, detail: 0)
+            m.sphere(centre: p, radii: DV3(0.14, 0.14, 0.12), flower, detail: light ? -1 : 0)
         }
         return m
     }
 
-    private static func makeBougainvillea(_ color: DioramaSwatch) -> DioramaMesh {
+    private static func makeBougainvillea(_ color: DioramaSwatch, light: Bool = false) -> DioramaMesh {
         var m = DioramaMesh()
-        m.sphere(centre: DV3(0, 0.1, 1.85), radii: DV3(1.4, 0.8, 0.55), color)
-        m.sphere(centre: DV3(0.7, 0.4, 1.5), radii: DV3(0.7, 0.45, 0.6), color, detail: 0)
-        m.sphere(centre: DV3(-0.8, 0.45, 1.35), radii: DV3(0.65, 0.4, 0.7), .leafDark, detail: 0)
-        m.sphere(centre: DV3(0.1, 0.5, 1.15), radii: DV3(0.55, 0.3, 0.8), color, detail: 0)
+        m.sphere(centre: DV3(0, 0.1, 1.85), radii: DV3(1.4, 0.8, 0.55), color, detail: light ? 0 : 1)
+        m.sphere(centre: DV3(0.7, 0.4, 1.5), radii: DV3(0.7, 0.45, 0.6), color, detail: light ? -1 : 0)
+        m.sphere(centre: DV3(-0.8, 0.45, 1.35), radii: DV3(0.65, 0.4, 0.7), .leafDark, detail: light ? -1 : 0)
+        m.sphere(centre: DV3(0.1, 0.5, 1.15), radii: DV3(0.55, 0.3, 0.8), color, detail: light ? -1 : 0)
         return m
     }
 
@@ -483,8 +521,10 @@ nonisolated struct DioramaPropPlacer {
     private static let hardKinds: Set<String> = ["pitch", "parking", "fuel", "pool", "terrace"]
 
     private func ground(_ p: DV2) -> Double { terrain.height(p) }
-    private func roadSurface(_ p: DV2) -> Double { terrain.height(p) + DioramaRoadGenerator.surfaceLift }
-    private func pavement(_ p: DV2) -> Double { terrain.height(p) + DioramaRoadGenerator.surfaceLift + config.kerbHeight }
+    /// Roads are paint on the ground, so vehicles sit directly on the terrain.
+    private func roadSurface(_ p: DV2) -> Double { terrain.height(p) }
+    /// Pavements are paint too; the kerb stone is the only raised road geometry.
+    private func pavement(_ p: DV2) -> Double { terrain.height(p) }
 
     private func isOnAmenity(_ p: DV2, margin: Double) -> Bool {
         for area in data.landuse where Self.hardKinds.contains(area.kind) {
@@ -526,12 +566,6 @@ nonisolated struct DioramaPropPlacer {
         return true
     }
 
-    private func parkLift(_ p: DV2) -> Double {
-        for area in data.landuse where ["park", "common", "garden"].contains(area.kind) {
-            if DioramaPolygon.contains(polygon: area.rings, p) { return DioramaGroundGenerator.parkLift }
-        }
-        return 0
-    }
 
     func vegetation(into mesh: inout DioramaMesh) {
         var rng = DioramaRandom(seed: UInt64(data.tile.x) << 32 | UInt64(data.tile.y), salt: 31)
@@ -542,10 +576,13 @@ nonisolated struct DioramaPropPlacer {
             placed.append(p)
             return true
         }
-        func stamp(_ model: DioramaMesh, at p: DV2, z: Double, rotation: Double, scale: Double) {
-            mesh.append(model, DioramaTransform(rotation: rotation, scale: DV3(scale, scale, scale), translation: DV3(p, z)))
+        // Vegetation is drawn larger than life so it reads from the map camera.
+        let grow = config.propExaggeration
+        func stamp(_ model: DioramaPrototype, at p: DV2, z: Double, rotation: Double, scale: Double) {
+            let s = scale * grow
+            mesh.instance(model, DioramaTransform(rotation: rotation, scale: DV3(s, s, s), translation: DV3(p, z)))
         }
-        func shadeTree(_ r: inout DioramaRandom) -> DioramaMesh {
+        func shadeTree(_ r: inout DioramaRandom) -> DioramaPrototype {
             let roll = r.unit()
             if roll < 0.55 { return r.pick(Array(library.trees[0..<4])) }
             if roll < 0.68 { return r.pick(Array(library.trees[4..<6])) }
@@ -559,10 +596,10 @@ nonisolated struct DioramaPropPlacer {
         for p in data.trees {
             var trng = DioramaRandom(seed: UInt64(bitPattern: Int64((p.x * 10).rounded())) &* 31 &+ UInt64(bitPattern: Int64((p.y * 10).rounded())), salt: 32)
             guard tryPlace(p, spacing: 2.2, radius: 0.7) else { continue }
-            let z = ground(p) + parkLift(p)
+            let z = ground(p)
             let nearWater = distanceToWater(p) < 45
             if nearWater ? trng.chance(0.7) : trng.chance(0.12) {
-                mesh.append(trng.pick(library.palms), DioramaTransform(rotation: trng.range(0...6.28), scale: DV3(1, 1, trng.range(0.85...1.2)), translation: DV3(p, z)))
+                mesh.instance(trng.pick(library.palms), DioramaTransform(rotation: trng.range(0...6.28), scale: DV3(grow, grow, trng.range(0.85...1.2) * grow), translation: DV3(p, z)))
             } else {
                 stamp(shadeTree(&trng), at: p, z: z, rotation: trng.range(0...6.28), scale: trng.range(0.8...1.1))
             }
@@ -582,7 +619,7 @@ nonisolated struct DioramaPropPlacer {
                     defer { d += config.coastPalmSpacing * rng.range(0.7...1.3) }
                     let p = a + dir * d + inland * rng.range(5...12)
                     guard tryPlace(p, spacing: 6) else { continue }
-                    mesh.append(rng.pick(library.palms), DioramaTransform(rotation: rng.range(0...6.28), scale: DV3(1, 1, rng.range(0.85...1.25)), translation: DV3(p, ground(p))))
+                    mesh.instance(rng.pick(library.palms), DioramaTransform(rotation: rng.range(0...6.28), scale: DV3(grow, grow, rng.range(0.85...1.25) * grow), translation: DV3(p, ground(p))))
                 }
             }
         }
@@ -604,7 +641,7 @@ nonisolated struct DioramaPropPlacer {
                 guard !blocksAccess(p, radius: 1.5), !compound.building.box.expanded(by: 2.0).contains(p), tryPlace(p, spacing: 5) else { continue }
                 let roll = crng.unit()
                 if roll < 0.2 {
-                    mesh.append(crng.pick(library.palms), DioramaTransform(rotation: crng.range(0...6.28), scale: DV3(1, 1, crng.range(0.8...1.1)), translation: DV3(p, z)))
+                    mesh.instance(crng.pick(library.palms), DioramaTransform(rotation: crng.range(0...6.28), scale: DV3(1, 1, crng.range(0.8...1.1)), translation: DV3(p, z)))
                 } else if roll < 0.3 {
                     stamp(library.cypress, at: p, z: z, rotation: crng.range(0...6.28), scale: crng.range(0.9...1.2))
                 } else {
@@ -631,7 +668,7 @@ nonisolated struct DioramaPropPlacer {
                 }
                 guard !compound.isHedge, crng.chance(min(length * config.bougainvilleaChancePerMetre, 0.5)) else { continue }
                 let p = a + dir * crng.range(between: 0.6, and: max(length - 0.6, 0.7))
-                mesh.append(crng.pick(library.bougainvillea), DioramaTransform(rotation: dir.angle, scale: DV3(crng.range(0.7...1.1), 1, 1), translation: DV3(p, z)))
+                mesh.instance(crng.pick(library.bougainvillea), DioramaTransform(rotation: dir.angle, scale: DV3(crng.range(0.7...1.1), 1, 1), translation: DV3(p, z)))
             }
             if let gate = compound.gate {
                 let inward = gate.direction.left
@@ -674,7 +711,7 @@ nonisolated struct DioramaPropPlacer {
             for _ in 0..<count {
                 let p = DV2(rng.range(between: bounds.minX, and: bounds.maxX), rng.range(between: bounds.minY, and: bounds.maxY))
                 guard DioramaPolygon.contains(polygon: park.rings, p), tryPlace(p, spacing: 6) else { continue }
-                let z = ground(p) + DioramaGroundGenerator.parkLift
+                let z = ground(p)
                 if rng.chance(0.1) { stamp(library.cypress, at: p, z: z, rotation: 0, scale: rng.range(0.9...1.3)) }
                 else { stamp(shadeTree(&rng), at: p, z: z, rotation: rng.range(0...6.28), scale: rng.range(0.8...1.15)) }
             }
@@ -682,7 +719,7 @@ nonisolated struct DioramaPropPlacer {
                 let p = DV2(rng.range(between: bounds.minX, and: bounds.maxX), rng.range(between: bounds.minY, and: bounds.maxY))
                 guard DioramaPolygon.contains(polygon: park.rings, p), isFree(p, radius: 0.6), !isWater(p) else { continue }
                 let model = rng.chance(0.45) ? rng.pick(library.flowerBushes) : rng.pick(library.bushes)
-                stamp(model, at: p, z: ground(p) + DioramaGroundGenerator.parkLift, rotation: rng.range(0...6.28), scale: rng.range(0.7...1.2))
+                stamp(model, at: p, z: ground(p), rotation: rng.range(0...6.28), scale: rng.range(0.7...1.2))
             }
         }
 
@@ -749,12 +786,12 @@ nonisolated struct DioramaPropPlacer {
                 let p = s.point + lane
                 guard data.rect.expanded(by: -3).contains(p) else { continue }
                 let roll = rng.unit()
-                let model: DioramaMesh
+                let model: DioramaPrototype
                 if roll < 0.42 { model = rng.pick(library.bajaji) }
                 else if roll < 0.7 { model = library.boda }
                 else if roll < 0.8, road.isMain { model = library.dalaDala }
                 else { model = rng.pick(library.cars) }
-                mesh.append(model, DioramaTransform(rotation: dir.angle, translation: DV3(p, roadSurface(p))))
+                mesh.instance(model, DioramaTransform(rotation: dir.angle, translation: DV3(p, roadSurface(p))))
             }
         }
 
@@ -775,8 +812,8 @@ nonisolated struct DioramaPropPlacer {
                 guard isOnPavement(p) else { continue }
                 let z = pavement(p)
                 let rotation = (s.direction.right * -side).angle
-                mesh.append(library.lamp, DioramaTransform(rotation: rotation, translation: DV3(p, z)))
-                glow.append(library.lampGlow, DioramaTransform(rotation: rotation, translation: DV3(p, z)))
+                mesh.instance(library.lamp, DioramaTransform(rotation: rotation, translation: DV3(p, z)))
+                glow.instance(library.lampGlow, DioramaTransform(rotation: rotation, translation: DV3(p, z)))
                 let head = DV3(p, z + DioramaPropLibrary.lampHeadHeight - 0.05)
                 glow.append(library.lampHalo, DioramaTransform(translation: head))
                 lights.append(DioramaLight(position: head, color: SIMD3<Float>(1.0, 0.80, 0.52), radius: config.lampLightRadius, intensity: 1.0))
@@ -802,9 +839,9 @@ nonisolated struct DioramaPropPlacer {
                 let p = s.point + s.direction.right * side * 1.1
                 guard data.rect.expanded(by: -1).contains(p), !roads.isOnCarriageway(p, margin: 0.3) else { continue }
                 guard !buildings.contains(where: { $0.box.expanded(by: 0.3).contains(p) }) else { continue }
-                let z = path.kind == "pier" ? terrain.pierHeight(path.line) : ground(p) + DioramaAmenityGenerator.pathLift
-                mesh.append(library.bollard, DioramaTransform(translation: DV3(p, z)))
-                glow.append(library.bollardGlow, DioramaTransform(translation: DV3(p, z)))
+                let z = path.kind == "pier" ? terrain.pierHeight(path.line) : ground(p)
+                mesh.instance(library.bollard, DioramaTransform(translation: DV3(p, z)))
+                glow.instance(library.bollardGlow, DioramaTransform(translation: DV3(p, z)))
                 lights.append(DioramaLight(position: DV3(p, z + DioramaPropLibrary.bollardHeight), color: SIMD3<Float>(1.0, 0.84, 0.6), radius: 5, intensity: 0.55))
             }
         }
@@ -822,8 +859,8 @@ nonisolated struct DioramaPropPlacer {
                 kioskSpots.append(end)
                 let rotation = (away.right * -1).angle
                 let z = ground(p)
-                mesh.append(rng.pick(library.kiosk), DioramaTransform(rotation: rotation, translation: DV3(p, z)))
-                glow.append(library.kioskGlow, DioramaTransform(rotation: rotation, translation: DV3(p, z)))
+                mesh.instance(rng.pick(library.kiosk), DioramaTransform(rotation: rotation, translation: DV3(p, z)))
+                glow.instance(library.kioskGlow, DioramaTransform(rotation: rotation, translation: DV3(p, z)))
                 if lights.count < config.maxLights {
                     lights.append(DioramaLight(position: DV3(p, z + 2.0), color: SIMD3<Float>(1.0, 0.72, 0.42), radius: 6, intensity: 0.8))
                 }
@@ -842,7 +879,7 @@ nonisolated struct DioramaPropPlacer {
             vesselSpots.append(p)
             let model = dhows % 3 == 0 ? library.yacht : (dhows % 3 == 1 ? library.canoe : library.dhow)
             let heading = rng.range(0...6.28), direction = DV2(cos(heading), sin(heading))
-            mesh.append(model, DioramaTransform(rotation: heading, translation: DV3(p, terrain.waterLevel)))
+            mesh.instance(model, DioramaTransform(rotation: heading, translation: DV3(p, terrain.waterLevel)))
             let buoy = p + direction * 8
             mesh.sphere(centre: DV3(buoy, terrain.waterLevel + 0.12), radii: DV3(0.25, 0.25, 0.2), .sailCream)
             mesh.tube(from: DV3(p + direction * (dhows % 3 == 0 ? 5.5 : 2.8), terrain.waterLevel + 0.5), to: DV3(buoy, terrain.waterLevel + 0.16), r0: 0.02, r1: 0.02, sides: 4, .sailCream)

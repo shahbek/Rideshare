@@ -1,54 +1,68 @@
+import CoreGraphics
 import Foundation
 
-/// The diorama's floor. A continuous quiet grass surface covers the tile; parks and gardens are
-/// near-flush lawns cut around occupied footprints, compounds get a lawn
-/// and a paved drive from gate to house. Hard-surfaced
-/// amenities (courts, car parks, forecourts, pools, decks) are laid on top by `DioramaAmenityGenerator`.
-/// Water is built separately into the `.water` category so it can be toggled and shaded on its own.
+/// The diorama's floor: one continuous draped terrain skin over the whole tile whose colour comes
+/// from the painted ground image. Grass, lawns, sand, drives and (from `DioramaRoadGenerator`) roads
+/// are all paint, never stacked geometry. Hard-surfaced amenities with real height (courts, car
+/// parks, forecourts, pools, decks) are laid on top by `DioramaAmenityGenerator`. Water is built
+/// separately into the `.water` category so it can be toggled and shaded on its own.
 nonisolated struct DioramaGroundGenerator {
     let config: DioramaConfig
     let data: DioramaTileData
     let roads: DioramaRoadIndex
     let terrain: DioramaTerrain
-
-    let cutouts: DioramaGroundCutouts
-
-    /// Lift of park lawns above the plate.
-    static let parkLift: Double = DioramaSurfaceLevel.lawn.rawValue
+    let painter: DioramaGroundPainter
 
     func generate(compounds: [DioramaCompound], into mesh: inout DioramaMesh, water waterMesh: inout DioramaMesh) {
         plate(into: &mesh)
         reef(into: &mesh)
-        parks(into: &mesh)
-        compoundGround(compounds, into: &mesh)
+        parks()
+        compoundGround(compounds)
         water(into: &waterMesh)
+    }
+
+    /// Paints the sea floor last so coastal paving and lawns stop exactly at the mapped water edge.
+    func paintWater() {
+        for area in data.water {
+            painter.fill(area.rings.map { DioramaPolygon.clipPolygon($0, to: data.rect) }, .seabed)
+        }
     }
 
     // MARK: Plate
 
-    /// One continuous DEM skin over the whole tile: grass on land, sand under the sea. The same
-    /// draped lattice continues beneath the water plane, so the coast has no step, lid or skirt.
-    /// Ownership cutouts apply only to the upper finishes, never to this terrain skin.
+    /// Land and seabed are two drapes of the same lattice split exactly at the mapped water edge, the
+    /// one authoritative coastline. Both are cut away under the swept shoreline bands so the profiles
+    /// never intersect the plate. Vertices carry the `painted` swatch, so the shader looks their
+    /// colour and grain up in the ground image instead of the palette.
     private func plate(into mesh: inout DioramaMesh) {
         let r = data.rect
         let corners = [DV2(r.minX, r.minY), DV2(r.maxX, r.minY), DV2(r.maxX, r.maxY), DV2(r.minX, r.maxY)]
-        let ocean = DioramaGroundCutouts(polygons: data.water.compactMap { $0.rings.first })
-        for piece in ocean.subtract(from: corners) {
-            terrain.drape(piece, lift: 0, swatch: .grass, into: &mesh)
+        let bands = DioramaShorelineGenerator.coverage(data.shorelines, config: config, terrain: terrain)
+        let waterRings = data.water.compactMap { $0.rings.first }
+        let landCut = DioramaGroundCutouts(polygons: waterRings + bands)
+        for piece in landCut.subtract(from: corners) {
+            terrain.drape(piece, lift: 0, swatch: .painted, into: &mesh)
         }
+        let bandCut = DioramaGroundCutouts(polygons: bands)
         for area in data.water {
             guard let outer = area.rings.first else { continue }
             let holes = DioramaGroundCutouts(polygons: Array(area.rings.dropFirst()))
             for piece in holes.subtract(from: DioramaPolygon.clipPolygon(outer, to: r)) {
-                terrain.drape(piece, lift: 0, swatch: .seabed, into: &mesh)
+                for part in bandCut.subtract(from: piece) {
+                    terrain.drape(part, lift: 0, swatch: .painted, surface: .sea, into: &mesh)
+                }
             }
             for ring in area.rings.dropFirst() {
-                terrain.drape(DioramaPolygon.clipPolygon(ring, to: r), lift: 0, swatch: .grass, into: &mesh)
+                for part in bandCut.subtract(from: DioramaPolygon.clipPolygon(ring, to: r)) {
+                    terrain.drape(part, lift: 0, swatch: .painted, into: &mesh)
+                }
             }
         }
+        painter.fillAll(.grass)
     }
 
-    /// Bounded, deterministic illustrative reef patches, not surveyed marine habitat.
+    /// Bounded, deterministic illustrative reef patches, not surveyed marine habitat. They sit on the
+    /// generated seabed and only where the water is more than a metre deep.
     private func reef(into mesh: inout DioramaMesh) {
         var count = 0
         for segment in data.shorelines {
@@ -57,8 +71,8 @@ nonisolated struct DioramaGroundGenerator {
                 let margin = [DV2(-1.5, -1.5), DV2(1.5, -1.5), DV2(1.5, 1.5), DV2(-1.5, 1.5)]
                 guard data.rect.contains(p), margin.allSatisfy({ isWater(p + $0) }),
                       !data.paths.contains(where: { path in path.kind == "pier" && zip(path.line, path.line.dropFirst()).contains { DioramaPolygon.distanceToSegment(p, $0.0, $0.1) < 5 } }) else { continue }
-                let base = terrain.height(p)
-                guard base < terrain.waterLevel - 0.5 else { continue }
+                let base = terrain.seabed(p)
+                guard terrain.waterLevel - base > 1 else { continue }
                 mesh.sphere(centre: DV3(p, base + 0.12), radii: DV3(1.1, 0.8, 0.2), .rockWarm)
                 for branch in 0..<7 {
                     let angle = Double(branch) * 2.399
@@ -80,32 +94,27 @@ nonisolated struct DioramaGroundGenerator {
 
     // MARK: Green space
 
-    /// Parks, commons and gardens as slightly raised bright lawns with a pale edging.
-    private func parks(into mesh: inout DioramaMesh) {
+    /// Parks, commons and gardens as brighter lawns. Roads painted later cross them where mapped.
+    private func parks() {
         for park in data.landuse where ["park", "common", "garden"].contains(park.kind) {
             guard let outer = park.rings.first else { continue }
-            let ring = DioramaPolygon.clipPolygon(outer, to: data.rect.expanded(by: -0.5))
+            let ring = DioramaPolygon.clipPolygon(outer, to: data.rect)
             guard ring.count >= 3, DioramaPolygon.area(ring) > 40 else { continue }
-            let lift = Self.parkLift
-            draped(ring, lift: lift, .lawn, into: &mesh)
-            // No raised perimeter slab: a mapped park boundary can cross a street or a building.
+            painter.fill(ring, .lawn)
         }
     }
 
-    private func compoundGround(_ compounds: [DioramaCompound], into mesh: inout DioramaMesh) {
+    private func compoundGround(_ compounds: [DioramaCompound]) {
         for compound in compounds {
             let plot = DioramaPolygon.offset(compound.ring, by: -0.35) ?? compound.ring
-            draped(plot, lift: 0.02, .lawn, into: &mesh)
+            painter.fill(plot, .lawn)
             if let gate = compound.gate {
                 let entrance = compound.building.entrance + compound.building.entranceOut * 0.4
-                let dir = (entrance - gate.point).normalized
-                let across = dir.left * (config.gateWidth / 2 - 0.15)
-                draped([gate.point - across, gate.point + across, entrance + across, entrance - across], lift: 0.09, .paving, into: &mesh)
+                painter.stroke([gate.point, entrance], width: config.gateWidth - 0.3, .paving, cap: .butt)
                 if let road = roads.nearest(to: gate.point, within: 25) {
                     let out = (gate.point - road.point).normalized
                     let kerb = road.point + out * roads.corridorHalfWidth(road.road)
-                    let side = road.direction * (config.gateWidth / 2)
-                    draped([kerb - side, kerb + side, gate.point + side, gate.point - side], lift: 0.09, .paving, into: &mesh)
+                    painter.stroke([kerb, gate.point], width: config.gateWidth, .paving, cap: .butt)
                 }
             }
         }
@@ -118,69 +127,93 @@ nonisolated struct DioramaGroundGenerator {
 
     // MARK: Water
 
-    /// Water surface as a grid of cells clipped to the bay, each vertex carrying its distance to the
-    /// real shoreline (tile-edge cuts don't count). The shader uses that distance to run waves towards
-    /// the beach, lighten the shallows and break foam on the sand.
+    /// Water surface as a grid of 4 m cells clipped to the bay, subdivided to 1 m within 6 m of the
+    /// mapped coast. Coarse cells bordering fine ones take the fine edge vertices and are fanned from
+    /// their centre, so the mesh is watertight (no T-junctions) and vertex displacement stays safe.
+    /// Each vertex carries its distance to the mapped shoreline for the shader's shallows and foam.
     private func water(into mesh: inout DioramaMesh) {
-        let step = 4.0
+        let step = 4.0, fineDivisions = 4
+        let coast = terrain.coast
+        let reach = max(config.shallowWaterDistance, 8) + 1
+        func shoreDistance(_ p: DV2) -> Double { coast?.nearest(p, within: reach)?.distance ?? reach }
+        let uv = DioramaAtlas.uv(.sea, dark: false)
         for water in data.water {
             guard let outer = water.rings.first else { continue }
             let ring = DioramaPolygon.clipPolygon(outer, to: data.rect.expanded(by: 0.5))
             guard ring.count >= 3 else { continue }
-            let shore = data.shorelines.flatMap { segment -> [(DV2, DV2)] in
-                let contact = segment.points.indices.map { i -> DV2 in
-                    let p = segment.points[i]
-                    let offset: Double
-                    switch segment.kind {
-                    case .beach: offset = 0
-                    case .natural, .revetment: offset = config.revetmentWidth * 0.42
-                    case .seawall, .deck:
-                        let toe = max(0, terrain.height(p) + 0.11 - terrain.waterLevel + config.seawallSubmergedDepth) * config.seawallBatter
-                        offset = toe + (segment.hasRevetment ? config.revetmentWidth * 0.21 : 0)
-                    }
-                    return p + segment.outward[i] * offset
-                }
-                return Array(zip(contact, contact.dropFirst()))
-            }
-            var shoreIndex = DioramaGrid(cell: 24)
-            for i in shore.indices { shoreIndex.insert(i, rect: DioramaRect.bounding([shore[i].0, shore[i].1])) }
-            func shoreDistance(_ p: DV2) -> Float {
-                let reach = max(config.shallowWaterDistance, 8) + 1
-                var best = reach
-                for i in shoreIndex.query(DioramaRect.bounding([p]).expanded(by: reach)) {
-                    best = min(best, DioramaPolygon.distanceToSegment(p, shore[i].0, shore[i].1))
-                }
-                return Float(best)
-            }
-            let uv = DioramaAtlas.uv(.sea, dark: false)
             let holes = DioramaGroundCutouts(polygons: Array(water.rings.dropFirst()))
             let bounds = DioramaRect.bounding(ring)
-            var y = bounds.minY
-            while y < bounds.maxY {
-                var x = bounds.minX
-                while x < bounds.maxX {
-                    let cell = DioramaRect(minX: x, minY: y, maxX: min(x + step, bounds.maxX), maxY: min(y + step, bounds.maxY))
-                    let subdivisions = shoreDistance(cell.centre) < 6 ? 4 : 1
-                    let fineStep = step / Double(subdivisions)
-                    for row in 0..<subdivisions {
-                        for column in 0..<subdivisions {
-                            let fine = DioramaRect(minX: x + Double(column) * fineStep, minY: y + Double(row) * fineStep,
-                                maxX: min(x + Double(column + 1) * fineStep, bounds.maxX),
-                                maxY: min(y + Double(row + 1) * fineStep, bounds.maxY))
-                            let clipped = DioramaPolygon.counterClockwise(DioramaPolygon.clipPolygon(ring, to: fine))
-                            for piece in (water.rings.count > 1 ? holes.subtract(from: clipped) : [clipped]) where piece.count >= 3 {
-                                mesh.reserve(piece.count)
-                                let base = mesh.positions.count
-                                for p in piece { mesh.vertex(DV3(p, terrain.waterLevel), .up, uv, attribute: shoreDistance(p)) }
-                                for (a, b, c) in DioramaPolygon.triangulate(piece) {
-                                    mesh.tri(UInt32(base + a), UInt32(base + b), UInt32(base + c))
-                                }
+            let x0 = floor(bounds.minX / step) * step, y0 = floor(bounds.minY / step) * step
+            let columns = Int(ceil((bounds.maxX - x0) / step)), rows = Int(ceil((bounds.maxY - y0) / step))
+            guard columns > 0, rows > 0 else { continue }
+            // Lattice corners inside the bay, so clipped cells can be found without re-testing corners.
+            var insideCorner = [Bool](repeating: false, count: (columns + 1) * (rows + 1))
+            for r in 0...rows {
+                for c in 0...columns {
+                    insideCorner[r * (columns + 1) + c] = DioramaPolygon.contains(ring, DV2(x0 + Double(c) * step, y0 + Double(r) * step))
+                }
+            }
+            func fullyInside(_ column: Int, _ row: Int) -> Bool {
+                insideCorner[row * (columns + 1) + column] && insideCorner[row * (columns + 1) + column + 1]
+                    && insideCorner[(row + 1) * (columns + 1) + column] && insideCorner[(row + 1) * (columns + 1) + column + 1]
+            }
+            // Fine cells: near the coast, or clipped by the bay outline or the tile edge, so every
+            // clipped piece borders either another fine cell or a stitched coarse one.
+            var fine = [Bool](repeating: false, count: columns * rows)
+            for row in 0..<rows {
+                for column in 0..<columns {
+                    let centre = DV2(x0 + (Double(column) + 0.5) * step, y0 + (Double(row) + 0.5) * step)
+                    fine[row * columns + column] = shoreDistance(centre) < 6 + step * 0.71 || !fullyInside(column, row) || water.rings.count > 1
+                }
+            }
+            func isFine(_ column: Int, _ row: Int) -> Bool {
+                guard column >= 0, row >= 0, column < columns, row < rows else { return false }
+                return fine[row * columns + column]
+            }
+            func emit(_ piece: [DV2], fan: Bool) {
+                guard piece.count >= 3 else { return }
+                mesh.reserve(piece.count + 1)
+                let base = mesh.positions.count
+                for p in piece { mesh.vertex(DV3(p, terrain.waterLevel), .up, uv, attribute: Float(shoreDistance(p))) }
+                if fan {
+                    let centre = DioramaPolygon.centroid(piece)
+                    let c = mesh.vertex(DV3(centre, terrain.waterLevel), .up, uv, attribute: Float(shoreDistance(centre)))
+                    for i in piece.indices { mesh.tri(UInt32(base + i), UInt32(base + (i + 1) % piece.count), c) }
+                } else {
+                    for (a, b, c) in DioramaPolygon.triangulate(piece) {
+                        mesh.tri(UInt32(base + a), UInt32(base + b), UInt32(base + c))
+                    }
+                }
+            }
+            for row in 0..<rows {
+                for column in 0..<columns {
+                    let cell = DioramaRect(minX: x0 + Double(column) * step, minY: y0 + Double(row) * step,
+                                           maxX: x0 + Double(column + 1) * step, maxY: y0 + Double(row + 1) * step)
+                    if isFine(column, row) {
+                        let fineStep = step / Double(fineDivisions)
+                        for r in 0..<fineDivisions {
+                            for c in 0..<fineDivisions {
+                                let fine = DioramaRect(minX: cell.minX + Double(c) * fineStep, minY: cell.minY + Double(r) * fineStep,
+                                                       maxX: cell.minX + Double(c + 1) * fineStep, maxY: cell.minY + Double(r + 1) * fineStep)
+                                let clipped = DioramaPolygon.counterClockwise(DioramaPolygon.clipPolygon(ring, to: fine))
+                                for piece in (water.rings.count > 1 ? holes.subtract(from: clipped) : [clipped]) { emit(piece, fan: false) }
                             }
                         }
+                        continue
                     }
-                    x += step
+                    // Coarse cell: insert the neighbouring fine cells' edge vertices so edges match exactly.
+                    var outline: [DV2] = []
+                    let corners = [DV2(cell.minX, cell.minY), DV2(cell.maxX, cell.minY), DV2(cell.maxX, cell.maxY), DV2(cell.minX, cell.maxY)]
+                    let neighbours = [(column, row - 1), (column + 1, row), (column, row + 1), (column - 1, row)]
+                    for side in 0..<4 {
+                        let a = corners[side], b = corners[(side + 1) % 4]
+                        outline.append(a)
+                        if isFine(neighbours[side].0, neighbours[side].1) {
+                            for k in 1..<fineDivisions { outline.append(a + (b - a) * (Double(k) / Double(fineDivisions))) }
+                        }
+                    }
+                    emit(outline, fan: true)
                 }
-                y += step
             }
         }
     }
@@ -190,12 +223,4 @@ nonisolated struct DioramaGroundGenerator {
     private func isWater(_ p: DV2) -> Bool {
         data.water.contains { DioramaPolygon.contains(polygon: $0.rings, p) }
     }
-
-    /// Flat-coloured polygon whose vertices follow the terrain, subdivided so large plots bend with it.
-    private func draped(_ ring: [DV2], lift: Double, _ s: DioramaSwatch, into mesh: inout DioramaMesh) {
-        for piece in cutouts.subtract(from: ring) {
-            terrain.drape(piece, lift: lift, swatch: s, into: &mesh)
-        }
-    }
-
 }

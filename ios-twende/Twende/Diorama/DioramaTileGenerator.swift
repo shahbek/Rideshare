@@ -1,32 +1,84 @@
 import Foundation
 import simd
 
+/// One GPU instance: xyz translation + rotation about z, then xyz scale + bounding radius.
+/// Layout mirrors `DioramaInstance` in the Metal source.
+nonisolated struct DioramaInstanceData: Sendable {
+    var placement: SIMD4<Float>
+    var scale: SIMD4<Float>
+
+    static let identity = DioramaInstanceData(placement: SIMD4(0, 0, 0, 0), scale: SIMD4(1, 1, 1, 0))
+
+    var centre: SIMD3<Float> { SIMD3(placement.x, placement.y, placement.z) }
+    var radius: Float { scale.w }
+}
+
+/// All placements of one prototype inside one category, with the prototype's full and light index
+/// ranges in the shared index buffer and the world bounds of every placement.
+nonisolated struct DioramaInstanceGroup: Sendable {
+    let category: DioramaCategory
+    let fullStart: Int
+    let fullCount: Int
+    let lightStart: Int
+    let lightCount: Int
+    /// The prototype contains thin open surfaces and is drawn without back-face culling.
+    let doubleSided: Bool
+    let instances: [DioramaInstanceData]
+    /// Offset of this group's first instance in the artifacts' flat instance list.
+    let firstInstance: Int
+    let minimum: SIMD3<Float>
+    let maximum: SIMD3<Float>
+}
+
 /// Everything the renderer needs for one generated tile: one interleaved vertex buffer, one index
-/// buffer, and the index range each category occupies so categories can be toggled per frame.
+/// buffer, the index range each category occupies so categories can be toggled per frame, and the
+/// instanced prototypes with their placements.
 nonisolated struct DioramaTileArtifacts: Sendable {
     nonisolated struct Part: Sendable {
         let category: DioramaCategory
         let triangles: Int
+        let instances: Int
     }
 
     let tile: DioramaTileID
     let vertices: [BuildingRenderVertex]
     let indices: [UInt32]
     let ranges: [DioramaRenderLayer.Range]
+    let groups: [DioramaInstanceGroup]
+    /// Every instance of every group, contiguous in group order (the shadow pass draws them all).
+    let allInstances: [DioramaInstanceData]
     let parts: [Part]
     let lights: [DioramaLight]
     let lightGrid: DioramaLightGrid
     let waterHeight: Double
     let shorelineReport: [String]
     let generationSeconds: Double
+    /// Top-down painted ground (roads, lawns, paving, sand) sampled by the terrain skin.
+    let groundImage: DioramaGroundImage?
 
+    /// Unique triangles in the buffers (each prototype counted once, not per placement).
     var totalTriangles: Int { indices.count / 3 }
-    var totalBytes: Int { vertices.count * MemoryLayout<BuildingRenderVertex>.stride + indices.count * MemoryLayout<UInt32>.stride }
+    var totalInstances: Int { allInstances.count }
+    /// Triangles the GPU would process with every placement drawn at full detail (close-up worst case).
+    var drawnTriangles: Int {
+        ranges.reduce(0) { $0 + $1.count / 3 } + groups.reduce(0) { $0 + $1.instances.count * ($1.fullCount / 3) }
+    }
+    /// Triangles with every placement at light detail: the whole-tile view, where everything is
+    /// beyond the LOD distance. The typical view lies between this and `drawnTriangles`.
+    var lightDrawnTriangles: Int {
+        ranges.reduce(0) { $0 + $1.count / 3 } + groups.reduce(0) { $0 + $1.instances.count * (($1.lightCount > 0 ? $1.lightCount : $1.fullCount) / 3) }
+    }
+    var totalBytes: Int {
+        vertices.count * MemoryLayout<BuildingRenderVertex>.stride + indices.count * MemoryLayout<UInt32>.stride
+            + allInstances.count * MemoryLayout<DioramaInstanceData>.stride + (groundImage?.rgba.count ?? 0)
+    }
 }
 
 /// Runs the whole pipeline for one tile off the main thread. Output stays in memory and goes straight
 /// into Metal buffers through `DioramaRenderLayer`; there is no file format or model loader in between.
 nonisolated enum DioramaTileGenerator {
+    /// Side of the spatial batches triangles and instances are sorted into for frustum culling.
+    static let binSize: Double = 60
     private static let cacheLock = NSLock()
     nonisolated(unsafe) private static var cache: [String: DioramaTileArtifacts] = [:]
 
@@ -47,15 +99,16 @@ nonisolated enum DioramaTileGenerator {
     }
 
     /// Generates (or returns the in-memory copy of) one tile. Call from any thread.
-    static func generate(_ data: DioramaTileData, config: DioramaConfig, library: DioramaPropLibrary, reduced: Bool, sampledTerrain: DioramaTerrain? = nil) throws -> DioramaTileArtifacts {
-        if sampledTerrain == nil, let cached = cached(data.tile, config: config, reduced: reduced) { return cached }
+    static func generate(_ data: DioramaTileData, config: DioramaConfig, library: DioramaPropLibrary, reduced: Bool) throws -> DioramaTileArtifacts {
+        if let cached = cached(data.tile, config: config, reduced: reduced) { return cached }
         let started = Date()
 
         let roadIndex = DioramaRoadIndex(roads: data.roads, pavementWidth: config.pavementWidth)
-        var datum = sampledTerrain ?? DioramaTerrain.load(rect: data.rect, config: config)
-        datum.midTideDatum = config.waterLevel
-        let terrain = datum.resolvingSurfaces(in: data)
+        let terrain = DioramaTerrain.load(rect: data.rect, config: config).resolvingSurfaces(in: data)
         let streetLayout = DioramaStreetLayout(data: data, config: config)
+        guard let painter = DioramaGroundPainter(rect: data.rect, size: reduced ? config.reducedGroundImageSize : config.groundImageSize, config: config) else {
+            throw NSError(domain: "Diorama", code: 2, userInfo: [NSLocalizedDescriptionKey: "ground image could not be created"])
+        }
         var buildings = DioramaMesh()
         var windowGlow = DioramaMesh()
         var walls = DioramaMesh()
@@ -85,17 +138,22 @@ nonisolated enum DioramaTileGenerator {
         let wallGenerator = DioramaCompoundWallGenerator(config: config, roads: roadIndex, buildings: built, tileRect: data.rect, terrain: terrain, landuse: data.landuse)
         let compounds = wallGenerator.generate(into: &walls)
 
-        DioramaGroundGenerator(config: config, data: data, roads: roadIndex, terrain: terrain, cutouts: DioramaGroundCutouts(data: data, pavementWidth: config.pavementWidth, streetPolygons: streetLayout.corridor.polygons, additionalMasks: data.hotelCourtyardOutline.isEmpty ? [] : [data.hotelCourtyardOutline])).generate(compounds: compounds, into: &ground, water: &water)
-        DioramaRoadGenerator(config: config, data: data, roads: roadIndex, terrain: terrain, layout: streetLayout, compounds: compounds).generate(into: &roadsMesh)
+        // Paint order matters: base grass and lawns, then footways and hotel paving, then roads over
+        // everything, then the sea floor so coastal paint stops at the mapped water edge.
+        let groundGenerator = DioramaGroundGenerator(config: config, data: data, roads: roadIndex, terrain: terrain, painter: painter)
+        groundGenerator.generate(compounds: compounds, into: &ground, water: &water)
 
         DioramaShorelineGenerator(config: config, data: data, terrain: terrain, library: library)
             .generate(ground: &ground, props: &props, vegetation: &vegetation, debug: &shorelineDebug)
 
-        let amenities = DioramaAmenityGenerator(config: config, data: data, roads: roadIndex, library: library, buildings: built, terrain: terrain)
+        let amenities = DioramaAmenityGenerator(config: config, data: data, roads: roadIndex, library: library, buildings: built, terrain: terrain, painter: painter)
         amenities.generate(ground: &ground, props: &props, glow: &propGlow, lights: &lights)
 
-        DioramaHotelGrounds(data: data, terrain: terrain, library: library, roads: roadIndex, streetPolygons: streetLayout.corridor.polygons)
+        DioramaHotelGrounds(data: data, terrain: terrain, library: library, roads: roadIndex, streetPolygons: streetLayout.corridor.polygons, painter: painter)
             .generate(ground: &ground, props: &props, vegetation: &vegetation, glow: &propGlow, lights: &lights)
+
+        DioramaRoadGenerator(config: config, data: data, roads: roadIndex, terrain: terrain, layout: streetLayout, compounds: compounds, painter: painter).generate(into: &roadsMesh)
+        groundGenerator.paintWater()
 
         let placer = DioramaPropPlacer(config: config, data: data, roads: roadIndex, library: library, buildings: built, compounds: compounds, reduceDetail: reduced, terrain: terrain)
         placer.vegetation(into: &vegetation)
@@ -114,24 +172,27 @@ nonisolated enum DioramaTileGenerator {
         var indices: [UInt32] = []
         var ranges: [DioramaRenderLayer.Range] = []
         var parts: [DioramaTileArtifacts.Part] = []
+        var groups: [DioramaInstanceGroup] = []
+        var allInstances: [DioramaInstanceData] = []
         vertices.reserveCapacity(meshes.reduce(0) { $0 + $1.1.positions.count })
         indices.reserveCapacity(meshes.reduce(0) { $0 + $1.1.indices.count })
 
-        for (category, mesh) in meshes where !mesh.isEmpty {
-            let start = indices.count
+        /// Appends a mesh's vertices with the shader codes of `category`; returns the first vertex index.
+        func bake(_ mesh: DioramaMesh, category: DioramaCategory) -> Int {
             let base = vertices.count
-            let count = mesh.positions.count
             // Shader paths (appearance.w): 0 lit surface, 1 water, 4 emissive, 5 halo sprite.
             let baseCode: Float = category == .shorelineDebug ? 6 : (category.isEmissive ? 4 : (category == .water ? 1 : 0))
-            for i in 0..<count {
+            for i in 0..<mesh.positions.count {
                 let p = mesh.positions[i]
                 let n = mesh.normals[i]
                 let cell = DioramaAtlas.lookup(mesh.uvs[i])
                 let isHalo = category == .propGlow && cell?.swatch == .lampGlow && p.z > 0 && abs(n.z) > 1.5
                 // appearance.y picks a procedural surface texture: 1 grass, 2 sand, 3 asphalt, 4 paving,
-                // 5 pool water. appearance.z carries the mesh's free attribute (shore distance on water).
+                // 5 pool water, 9 painted ground image. appearance.z carries the mesh's free attribute
+                // (shore distance on water).
                 let texture: Float
                 switch cell?.swatch {
+                case .painted: texture = 9
                 case .grass, .lawn, .pitchGreen: texture = 1
                 case .earth, .wetSand, .seabed: texture = 2
                 case .asphalt: texture = 3
@@ -148,7 +209,11 @@ nonisolated enum DioramaTileGenerator {
                     vertices.append(BuildingRenderVertex(position: SIMD4(0, 0, 0, 1), normal: SIMD4(0, 0, 1, 0), color: SIMD4(1, 0, 1, 1), appearance: appearance))
                     continue
                 }
-                let color = cell.map { DioramaAtlas.color($0.swatch, dark: $0.dark, config: config) } ?? SIMD4<Float>(1, 0, 1, 1)
+                var color = cell.map { DioramaAtlas.color($0.swatch, dark: $0.dark, config: config) } ?? SIMD4<Float>(1, 0, 1, 1)
+                if i < mesh.tints.count {
+                    let t = mesh.tints[i]
+                    color = SIMD4(min(color.x * t.x, 1), min(color.y * t.y, 1), min(color.z * t.z, 1), color.w)
+                }
                 var normal = SIMD4<Float>(Float(n.x), Float(n.y), Float(n.z), 0)
                 if !(normal.x.isFinite && normal.y.isFinite && normal.z.isFinite) { normal = SIMD4(0, 0, 1, 0) }
                 vertices.append(BuildingRenderVertex(
@@ -156,9 +221,36 @@ nonisolated enum DioramaTileGenerator {
                     normal: normal, color: color, appearance: appearance
                 ))
             }
-            // Sort triangles once into deterministic spatial batches. GPU buffers stay immutable;
-            // camera changes only select ranges, rather than redrawing all 304 buildings.
+            return base
+        }
+
+        /// Prototype meshes baked once per shader code, keyed by prototype id and emissiveness.
+        var bakedPrototypes: [Int: (fullStart: Int, fullCount: Int, lightStart: Int, lightCount: Int)] = [:]
+        func prototypeRanges(_ prototype: DioramaPrototype, category: DioramaCategory) -> (Int, Int, Int, Int) {
+            let key = prototype.id * 2 + (category.isEmissive ? 1 : 0)
+            if let found = bakedPrototypes[key] { return found }
+            func lay(_ mesh: DioramaMesh) -> (Int, Int) {
+                let base = bake(mesh, category: category)
+                let start = indices.count
+                indices.append(contentsOf: mesh.indices.map { UInt32(base) + $0 })
+                return (start, indices.count - start)
+            }
+            let full = lay(prototype.full)
+            let light = lay(prototype.light)
+            let result = (full.0, full.1, light.0, light.1)
+            bakedPrototypes[key] = result
+            return result
+        }
+
+        for (category, mesh) in meshes where !mesh.isEmpty {
+            let start = indices.count
+            let base = bake(mesh, category: category)
+            let count = mesh.positions.count
+            // Sort triangles once into deterministic 60 m spatial batches, double-sided ones apart.
+            // GPU buffers stay immutable; camera changes only select ranges, so off-screen parts of
+            // the tile are really skipped.
             var cells: [Int: [UInt32]] = [:]
+            let flags = mesh.doubleSidedTriangles
             for i in stride(from: 0, to: mesh.indices.count - 2, by: 3) {
                 let a = mesh.indices[i], b = mesh.indices[i + 1], c = mesh.indices[i + 2]
                 guard a < UInt32(count), b < UInt32(count), c < UInt32(count) else { continue }
@@ -167,7 +259,9 @@ nonisolated enum DioramaTileGenerator {
                     v.x.isFinite && v.y.isFinite && v.z.isFinite && abs(v.x) < 1_000_000 && abs(v.y) < 1_000_000 && abs(v.z) < 10_000
                 }
                 guard valid(p), valid(q), valid(r) else { continue }
-                let key = Int(floor((p.x + q.x + r.x) / 240)) + Int(floor((p.y + q.y + r.y) / 240)) * 10000
+                let triangle = i / 3
+                let twoSided = triangle < flags.count && flags[triangle]
+                let key = (Int(floor((p.x + q.x + r.x) / (3 * Self.binSize))) + Int(floor((p.y + q.y + r.y) / (3 * Self.binSize))) * 10000) * 2 + (twoSided ? 1 : 0)
                 cells[key, default: []].append(contentsOf: [UInt32(base) + a, UInt32(base) + b, UInt32(base) + c])
             }
             for key in cells.keys.sorted() {
@@ -181,11 +275,48 @@ nonisolated enum DioramaTileGenerator {
                 // Halo shader expands billboards from their centres; preserve a generous guard band.
                 let padding: Float = category == .propGlow ? 12 : 2
                 ranges.append(.init(category: category, start: indices.count, count: batch.count,
-                                    minimum: low - SIMD3(repeating: padding), maximum: high + SIMD3(repeating: padding)))
+                                    minimum: low - SIMD3(repeating: padding), maximum: high + SIMD3(repeating: padding),
+                                    doubleSided: key & 1 == 1 || category == .propGlow || category == .water))
                 indices.append(contentsOf: batch)
             }
             let indexCount = indices.count - start
-            parts.append(.init(category: category, triangles: indexCount / 3))
+
+            // Instances: one group per prototype, placements binned like triangles so distant groups cull.
+            var placements: [Int: [Int: [DioramaInstanceData]]] = [:]
+            for placement in mesh.instances {
+                guard placement.prototype < library.prototypes.count else { continue }
+                let t = placement.transform
+                guard t.translation.x.isFinite, t.translation.y.isFinite, t.translation.z.isFinite else { continue }
+                let prototype = library.prototypes[placement.prototype]
+                let radius = Float(prototype.radius * max(t.scale.x, max(t.scale.y, t.scale.z)))
+                let data = DioramaInstanceData(
+                    placement: SIMD4(Float(t.translation.x), Float(t.translation.y), Float(t.translation.z), Float(t.rotation)),
+                    scale: SIMD4(Float(t.scale.x), Float(t.scale.y), Float(t.scale.z), radius))
+                let bin = Int(floor(t.translation.x / Self.binSize)) + Int(floor(t.translation.y / Self.binSize)) * 10000
+                placements[placement.prototype, default: [:]][bin, default: []].append(data)
+            }
+            var instanceCount = 0
+            for prototypeID in placements.keys.sorted() {
+                let prototype = library.prototypes[prototypeID]
+                let (fullStart, fullCount, lightStart, lightCount) = prototypeRanges(prototype, category: category)
+                guard let bins = placements[prototypeID] else { continue }
+                for bin in bins.keys.sorted() {
+                    guard let list = bins[bin], !list.isEmpty else { continue }
+                    var low = SIMD3<Float>(repeating: .greatestFiniteMagnitude)
+                    var high = SIMD3<Float>(repeating: -.greatestFiniteMagnitude)
+                    for item in list {
+                        low = simd_min(low, item.centre - SIMD3(repeating: item.radius))
+                        high = simd_max(high, item.centre + SIMD3(repeating: item.radius))
+                    }
+                    groups.append(DioramaInstanceGroup(category: category, fullStart: fullStart, fullCount: fullCount,
+                                                       lightStart: lightStart, lightCount: lightCount,
+                                                       doubleSided: prototype.full.hasDoubleSidedTriangles, instances: list,
+                                                       firstInstance: allInstances.count, minimum: low, maximum: high))
+                    allInstances.append(contentsOf: list)
+                    instanceCount += list.count
+                }
+            }
+            parts.append(.init(category: category, triangles: indexCount / 3, instances: instanceCount))
         }
 
         guard !indices.isEmpty else {
@@ -193,14 +324,14 @@ nonisolated enum DioramaTileGenerator {
         }
 
         let artifacts = DioramaTileArtifacts(
-            tile: data.tile, vertices: vertices, indices: indices, ranges: ranges, parts: parts, lights: lights, lightGrid: lightGrid,
-            waterHeight: terrain.waterLevel, shorelineReport: DioramaShoreline.report(data.shorelines), generationSeconds: Date().timeIntervalSince(started)
+            tile: data.tile, vertices: vertices, indices: indices, ranges: ranges, groups: groups, allInstances: allInstances,
+            parts: parts, lights: lights, lightGrid: lightGrid,
+            waterHeight: terrain.waterLevel, shorelineReport: DioramaShoreline.report(data.shorelines), generationSeconds: Date().timeIntervalSince(started),
+            groundImage: painter.image()
         )
-        if sampledTerrain == nil {
-            cacheLock.lock()
-            cache[cacheKey(data.tile, config: config, reduced: reduced)] = artifacts
-            cacheLock.unlock()
-        }
+        cacheLock.lock()
+        cache[cacheKey(data.tile, config: config, reduced: reduced)] = artifacts
+        cacheLock.unlock()
         return artifacts
     }
 }

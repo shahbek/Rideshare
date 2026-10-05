@@ -1,14 +1,8 @@
 import Foundation
 
-/// Ordered finish offsets above the shared terrain mesh. Ownership masks remove incompatible
-/// overlaps; these offsets prevent depth fighting between legitimate stacked finishes.
-nonisolated enum DioramaSurfaceLevel: Double, Sendable {
-    case ground = 0
-    case lawn = 0.025
-    case footway = 0.08
-    case paving = 0.11
-    case road = 0.12
-    case roadPaint = 0.17
-
+/// Flat finishes (roads, pavements, lawns, paving, paint) are painted into the tile's ground image,
+/// so there is no stacked-finish ladder above the terrain any more. The only vertical clearance left
+/// is for paint laid on structural slabs (court lines, parking bays), which are real raised planes.
+nonisolated enum DioramaSurfaceLevel {
     static let structuralPaintClearance: Double = 0.04
 }

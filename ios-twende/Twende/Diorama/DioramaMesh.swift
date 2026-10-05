@@ -7,6 +7,29 @@ nonisolated struct DioramaTransform: Sendable {
     var translation: DV3 = DV3(0, 0, 0)
 }
 
+/// A small model built once at the origin (facing +x, standing on z = 0) and drawn many times as GPU
+/// instances. `light` is a cheaper tessellation of the same shape for distant placements.
+nonisolated struct DioramaPrototype: Sendable {
+    let id: Int
+    let full: DioramaMesh
+    let light: DioramaMesh
+    /// Bounding radius in prototype space, for per-instance frustum culling.
+    let radius: Double
+
+    init(id: Int, full: DioramaMesh, light: DioramaMesh? = nil) {
+        self.id = id
+        self.full = full
+        self.light = light ?? full
+        radius = full.positions.reduce(0) { max($0, $1.length) }
+    }
+}
+
+/// One placement of a prototype recorded while generating a category mesh.
+nonisolated struct DioramaInstancePlacement: Sendable {
+    let prototype: Int
+    let transform: DioramaTransform
+}
+
 /// Merged triangle mesh in local metres (x east, y north, z up). Every vertex points at a swatch of the
 /// palette atlas, so one material colours a whole category. Triangles are auto-wound to face their
 /// vertex normals, which keeps every helper free of winding bookkeeping.
@@ -27,12 +50,35 @@ nonisolated struct DioramaMesh: Sendable {
     private(set) var attributes: [Float] = []
     private(set) var indices: [UInt32] = []
     private(set) var chunks: [Chunk] = [Chunk(vertex: 0, index: 0)]
+    /// Prototype placements drawn as GPU instances rather than baked copies.
+    private(set) var instances: [DioramaInstancePlacement] = []
+    /// One flag per triangle: true for genuinely thin, open surfaces (fronds, sails, canopies) that
+    /// must be visible from both sides. Everything else is a closed shape drawn with back-face culling.
+    private(set) var doubleSidedTriangles: [Bool] = []
+    /// Set while adding thin surfaces so their triangles are flagged double-sided.
+    var doubleSided: Bool = false
+
+    var hasDoubleSidedTriangles: Bool { doubleSidedTriangles.contains(true) }
     /// Added to the z of every vertex appended while set, so generators can build a house at z = 0 and
     /// have it land on the terrain.
     var baseZ: Double = 0
+    /// While set, vertices with no explicit attribute record their height above `baseZ` (offset by
+    /// `heightAttributeOffset`), so the shader can grade walls lighter towards the top.
+    var recordsHeight: Bool = false
+    static let heightAttributeOffset: Float = 100
+    /// Per-vertex colour multiplier applied at pack time; a slight hue shift per building.
+    private(set) var tints: [SIMD3<Float>] = []
+    var tint: SIMD3<Float> = SIMD3(1, 1, 1)
 
-    var isEmpty: Bool { indices.isEmpty }
+    var isEmpty: Bool { indices.isEmpty && instances.isEmpty }
     var triangleCount: Int { indices.count / 3 }
+
+    /// Records one instance of a prototype; `baseZ` applies like it does to baked vertices.
+    mutating func instance(_ prototype: DioramaPrototype, _ t: DioramaTransform) {
+        var transform = t
+        transform.translation.z += baseZ
+        instances.append(DioramaInstancePlacement(prototype: prototype.id, transform: transform))
+    }
 
     /// Starts a new 16-bit chunk when the next shape would overflow the current one.
     mutating func reserve(_ count: Int) {
@@ -47,24 +93,40 @@ nonisolated struct DioramaMesh: Sendable {
         positions.append(baseZ == 0 ? p : DV3(p.x, p.y, p.z + baseZ))
         normals.append(n)
         uvs.append(uv)
-        attributes.append(attribute)
+        attributes.append(recordsHeight && attribute == 0 ? Float(p.z) + Self.heightAttributeOffset : attribute)
+        tints.append(tint)
         return UInt32(positions.count - 1)
     }
 
     /// Appends indices verbatim (no auto-winding); used for shader-built sprites with no geometry normal.
     mutating func rawTriangles(_ list: [UInt32]) {
         indices.append(contentsOf: list)
+        for _ in stride(from: 0, to: list.count, by: 3) { doubleSidedTriangles.append(true) }
     }
 
-    mutating func tri(_ a: UInt32, _ b: UInt32, _ c: UInt32) {
+    /// Triangle whose winding is already geometrically correct (counter-clockwise seen from outside).
+    /// Used by every primitive whose orientation is known from its own construction.
+    mutating func face(_ a: UInt32, _ b: UInt32, _ c: UInt32) {
+        indices.append(contentsOf: [a, b, c])
+        doubleSidedTriangles.append(doubleSided)
+    }
+
+    /// Triangle wound to face the direction `outward`, derived from the caller's geometry (a wall's
+    /// outward side, a cross-section normal), never from averaged vertex normals.
+    mutating func face(_ a: UInt32, _ b: UInt32, _ c: UInt32, outward: DV3) {
         let pa = positions[Int(a)], pb = positions[Int(b)], pc = positions[Int(c)]
-        let face = (pb - pa).cross(pc - pa)
-        let n = normals[Int(a)] + normals[Int(b)] + normals[Int(c)]
-        if face.dot(n) < 0 {
-            indices.append(contentsOf: [a, c, b])
+        if (pb - pa).cross(pc - pa).dot(outward) < 0 {
+            face(a, c, b)
         } else {
-            indices.append(contentsOf: [a, b, c])
+            face(a, b, c)
         }
+    }
+
+    /// Legacy helper for strips built from cross-sections: the shared vertex normals there are
+    /// computed from the section geometry itself, so they are a reliable outward reference.
+    mutating func tri(_ a: UInt32, _ b: UInt32, _ c: UInt32) {
+        let n = normals[Int(a)] + normals[Int(b)] + normals[Int(c)]
+        face(a, b, c, outward: n)
     }
 
     // MARK: Flat primitives
@@ -74,7 +136,7 @@ nonisolated struct DioramaMesh: Sendable {
         reserve(3)
         let uv = DioramaAtlas.uv(s, dark: dark)
         let i0 = vertex(a, n, uv), i1 = vertex(b, n, uv), i2 = vertex(c, n, uv)
-        tri(i0, i1, i2)
+        face(i0, i1, i2, outward: n)
     }
 
     mutating func quad(_ a: DV3, _ b: DV3, _ c: DV3, _ d: DV3, _ s: DioramaSwatch, dark: Bool = false, normal: DV3? = nil) {
@@ -83,11 +145,12 @@ nonisolated struct DioramaMesh: Sendable {
         reserve(4)
         let uv = DioramaAtlas.uv(s, dark: dark)
         let i0 = vertex(a, n, uv), i1 = vertex(b, n, uv), i2 = vertex(c, n, uv), i3 = vertex(d, n, uv)
-        tri(i0, i1, i2)
-        tri(i0, i2, i3)
+        face(i0, i1, i2, outward: n)
+        face(i0, i2, i3, outward: n)
     }
 
-    /// Flat horizontal polygon.
+    /// Flat horizontal polygon. Ear clipping of a counter-clockwise ring yields counter-clockwise
+    /// triangles, which face up; reversed when facing down.
     mutating func polygon(_ ring: [DV2], z: Double, _ s: DioramaSwatch, dark: Bool = false, facingUp: Bool = true, attribute: Float = 0) {
         let ccw = DioramaPolygon.counterClockwise(ring)
         guard ccw.count >= 3 else { return }
@@ -97,7 +160,11 @@ nonisolated struct DioramaMesh: Sendable {
         let base = positions.count
         for p in ccw { vertex(DV3(p, z), n, uv, attribute: attribute) }
         for (a, b, c) in DioramaPolygon.triangulate(ccw) {
-            tri(UInt32(base + a), UInt32(base + b), UInt32(base + c))
+            if facingUp {
+                face(UInt32(base + a), UInt32(base + b), UInt32(base + c))
+            } else {
+                face(UInt32(base + a), UInt32(base + c), UInt32(base + b))
+            }
         }
     }
 
@@ -129,7 +196,8 @@ nonisolated struct DioramaMesh: Sendable {
         let na = normal(i), nb = normal(j)
         let v0 = vertex(DV3(a, z0), na, uv), v1 = vertex(DV3(b, z0), nb, uv)
         let v2 = vertex(DV3(b, z1), nb, uv), v3 = vertex(DV3(a, z1), na, uv)
-        tri(v0, v1, v2); tri(v0, v2, v3)
+        let out = DV3(face, 0)
+        self.face(v0, v1, v2, outward: out); self.face(v0, v2, v3, outward: out)
     }
 
     /// Walls of a counter-clockwise ring, optionally skipping flagged edges, with an optional lid.
@@ -171,7 +239,11 @@ nonisolated struct DioramaMesh: Sendable {
             let a = Double(k) / Double(count) * 2 * Double.pi + rotate
             vertex(c + DV3(across * (cos(a) * radius), sin(a) * radius), n, uv)
         }
-        for k in 0..<count { tri(centre, UInt32(base + k), UInt32(base + (k + 1) % count)) }
+        // A sign face is a single sheet: readable from behind as well.
+        let wasDoubleSided = doubleSided
+        doubleSided = true
+        for k in 0..<count { face(centre, UInt32(base + k), UInt32(base + (k + 1) % count), outward: n) }
+        doubleSided = wasDoubleSided
     }
 
     /// Upright box with optional softly bevelled vertical corners and top edge.
@@ -234,12 +306,14 @@ nonisolated struct DioramaMesh: Sendable {
             vertex(p0 + radial * r0, radial, uv)
             vertex(p1 + radial * r1, radial, uv)
         }
+        // (u, v, axis) is right-handed, so increasing angle runs counter-clockwise about the axis and
+        // (a0, b0, b1) faces outward by construction.
         for k in 0..<count {
             let j = (k + 1) % count
             let a0 = UInt32(base + k * 2), a1 = UInt32(base + k * 2 + 1)
             let b0 = UInt32(base + j * 2), b1 = UInt32(base + j * 2 + 1)
-            tri(a0, b0, b1)
-            tri(a0, b1, a1)
+            face(a0, b0, b1)
+            face(a0, b1, a1)
         }
         guard cap else { return }
         let centre = vertex(p1, axis, uv)
@@ -249,7 +323,7 @@ nonisolated struct DioramaMesh: Sendable {
             vertex(p1 + (u * cos(a) + v * sin(a)) * r1, axis, uv)
         }
         for k in 0..<count {
-            tri(centre, UInt32(ringBase + k), UInt32(ringBase + (k + 1) % count))
+            face(centre, UInt32(ringBase + k), UInt32(ringBase + (k + 1) % count))
         }
     }
 
@@ -258,9 +332,10 @@ nonisolated struct DioramaMesh: Sendable {
         tube(from: DV3(centre, z0), to: DV3(centre, z1), r0: r0, r1: r1, sides: sides, s, cap: cap)
     }
 
-    /// Smooth ellipsoid: small details use 80 faces, visible rounded forms use 320 faces.
+    /// Smooth ellipsoid: distant stand-ins use 20 faces (detail -1), small details 80, visible
+    /// rounded forms 320.
     mutating func sphere(centre: DV3, radii: DV3, _ s: DioramaSwatch, detail: Int = 1) {
-        let shape = detail >= 1 ? DioramaIcosphere.level2 : DioramaIcosphere.level1
+        let shape = detail >= 1 ? DioramaIcosphere.level2 : (detail == 0 ? DioramaIcosphere.level1 : DioramaIcosphere.level0)
         reserve(shape.vertices.count)
         let uv = DioramaAtlas.uv(s, dark: false)
         let base = positions.count
@@ -269,8 +344,9 @@ nonisolated struct DioramaMesh: Sendable {
             let n = DV3(v.x / max(radii.x, 1e-6), v.y / max(radii.y, 1e-6), v.z / max(radii.z, 1e-6)).normalized
             vertex(p, n, uv)
         }
+        // Icosphere faces are counter-clockwise seen from outside; positive radii keep that.
         for f in shape.faces {
-            tri(UInt32(base) + f.x, UInt32(base) + f.y, UInt32(base) + f.z)
+            face(UInt32(base) + f.x, UInt32(base) + f.y, UInt32(base) + f.z)
         }
     }
 
@@ -279,8 +355,10 @@ nonisolated struct DioramaMesh: Sendable {
     /// uses `lower`, the sides `mid`, the sunlit crown `upper`; normals are recomputed from the displaced
     /// surface so the lumps shade softly.
     mutating func blob(centre: DV3, radii: DV3, seed: UInt64, amplitude: Double, frequency: Double,
-                       lower: DioramaSwatch, mid: DioramaSwatch, upper: DioramaSwatch, flattenBottom: Double = 0.3) {
-        let shape = DioramaIcosphere.level3
+                       lower: DioramaSwatch, mid: DioramaSwatch, upper: DioramaSwatch, flattenBottom: Double = 0.3, light: Bool = false) {
+        // 320 smooth-shaded faces read as one moulded crown from the map camera; the distant
+        // version keeps the silhouette with 80. Thousands of canopies are instanced per tile.
+        let shape = light ? DioramaIcosphere.level1 : DioramaIcosphere.level2
         var rng = DioramaRandom(seed: seed, salt: 91)
         var waves: [(dir: DV3, freq: Double, phase: Double, amp: Double)] = []
         for k in 0..<5 {
@@ -311,8 +389,9 @@ nonisolated struct DioramaMesh: Sendable {
             let swatch = z > 0.42 ? upper : (z < -0.28 ? lower : mid)
             vertex(centre + points[i], accumulated[i].normalized, DioramaAtlas.uv(swatch, dark: false))
         }
+        // Displacement is far below the radius, so the icosphere's outward winding survives.
         for f in shape.faces {
-            tri(UInt32(base) + f.x, UInt32(base) + f.y, UInt32(base) + f.z)
+            face(UInt32(base) + f.x, UInt32(base) + f.y, UInt32(base) + f.z)
         }
     }
 
@@ -331,8 +410,20 @@ nonisolated struct DioramaMesh: Sendable {
             normals.append(DV3(nx * c - ny * s, nx * s + ny * c, n.z / t.scale.z).normalized)
             uvs.append(other.uvs[i])
             attributes.append(other.attributes[i])
+            tints.append(i < other.tints.count ? other.tints[i] * tint : tint)
         }
         indices.append(contentsOf: other.indices.map { $0 + base })
+        doubleSidedTriangles.append(contentsOf: other.doubleSidedTriangles)
+        for placement in other.instances {
+            // Compose the nested placement with this append's transform.
+            let inner = placement.transform
+            let x = inner.translation.x * t.scale.x, y = inner.translation.y * t.scale.y
+            let composed = DioramaTransform(
+                rotation: inner.rotation + t.rotation,
+                scale: DV3(inner.scale.x * t.scale.x, inner.scale.y * t.scale.y, inner.scale.z * t.scale.z),
+                translation: DV3(x * c - y * s + t.translation.x, x * s + y * c + t.translation.y, inner.translation.z * t.scale.z + t.translation.z + baseZ))
+            instances.append(DioramaInstancePlacement(prototype: placement.prototype, transform: composed))
+        }
     }
 }
 
@@ -346,7 +437,7 @@ nonisolated enum DioramaIcosphere {
     static let level0: Shape = make(subdivisions: 0)
     static let level1: Shape = make(subdivisions: 1)
     static let level2: Shape = make(subdivisions: 2)
-    /// Cached 642-vertex surface preserves curved canopy silhouettes after displacement.
+    /// 642-vertex surface for close-up hero shapes; canopies use level 2 since they are instanced by the thousand.
     static let level3: Shape = make(subdivisions: 3)
 
     private static func make(subdivisions: Int) -> Shape {

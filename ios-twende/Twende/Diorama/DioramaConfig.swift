@@ -14,8 +14,8 @@ nonisolated enum DioramaSwatch: Int, CaseIterable, Sendable {
     case metalCharcoal, gateGreen, gateBlue
     // Roof furniture
     case tankBlack, tankBlue, dishWhite, solarNavy
-    // Ground, roads and water
-    case grass, courtyard, deck, earth, seabed, sea
+    // Ground, roads and water (`painted` samples the tile's ground image instead of a palette colour)
+    case grass, courtyard, deck, earth, seabed, sea, painted
     case wetSand, dampStone, algaeStone, rockWarm, rockGrey, rockPale, seaweed
     case asphalt, roadEarth, pavement, kerb, marking, crossing, parkEdge
     case stopRed, signPost
@@ -46,7 +46,7 @@ nonisolated enum DioramaSwatch: Int, CaseIterable, Sendable {
         .frame: 0xE9E4DA, .shutterGreen: 0x3E7A5A, .shutterBlue: 0x3C6E9E, .doorWood: 0x6B4126,
         .carvedWood: 0x4E2E1A, .metalCharcoal: 0x2E2F33, .gateGreen: 0x2F5E46, .gateBlue: 0x2D5785,
         .tankBlack: 0x232427, .tankBlue: 0x2B5FA8, .dishWhite: 0xECECEC, .solarNavy: 0x1F2E4E,
-        .grass: 0x74A848, .courtyard: 0xE7D9C6, .deck: 0xB98E62, .earth: 0xE3D3B2, .seabed: 0xB7A77F, .sea: 0x2E8FA3,
+        .grass: 0x74A848, .courtyard: 0xE7D9C6, .deck: 0xB98E62, .earth: 0xE3D3B2, .seabed: 0xB7A77F, .sea: 0x2E8FA3, .painted: 0xFFFFFF,
         .wetSand: 0xB7A77F, .dampStone: 0x817866, .algaeStone: 0x667B62,
         .rockWarm: 0xB6A485, .rockGrey: 0x8E9188, .rockPale: 0xC9C2B6, .seaweed: 0x6B7352,
         .asphalt: 0x5C4A58, .roadEarth: 0xC19466, .pavement: 0xEBDCD2, .kerb: 0xF6EFE8, .marking: 0xFAF4E8, .crossing: 0xFFFBF2, .parkEdge: 0xD9CBB4,
@@ -120,9 +120,17 @@ nonisolated struct DioramaBuildingOverride: Sendable {
 /// One place to tune the whole look without touching generation code.
 nonisolated struct DioramaConfig: Sendable {
     /// Bump to invalidate every cached tile.
-    var generatorVersion: Int = 24
-    /// Drape the plate/ground overlays over the shared DEM datum used by roads and foundations.
+    var generatorVersion: Int = 25
+    /// Drape the plate/ground overlays over the bundled height snapshot used by roads and foundations.
     var usesElevation: Bool = true
+    /// Vertical scale of the bundled snapshot (1 = real metres). The basemap's own terrain is switched
+    /// off while the diorama is shown, so this relief is the only landform on screen.
+    var terrainRelief: Double = 0.75
+    /// Band inside the tile edge over which land eases down to the flat basemap.
+    var terrainEdgeEase: Double = 36
+    /// Side of the painted ground image (pixels). 4096 over a ~600 m tile is about 15 cm per pixel.
+    var groundImageSize: Int = 4096
+    var reducedGroundImageSize: Int = 2048
 
     // MARK: Tile
     var tileZoom: Int = 16
@@ -148,18 +156,35 @@ nonisolated struct DioramaConfig: Sendable {
     /// Mapbox fills unknown heights with ~3 m; anything at or below this counts as missing.
     var placeholderHeight: Double = 3.1
     var bevel: Double = 0.22
-    /// Corner radius for the rounded footprint silhouette.
-    var cornerRadius: Double = 0.18
+    /// Corner radius for the rounded footprint silhouette. Toy-town rounding reads from the map
+    /// camera only at this scale; 0.18 m was invisible.
+    var cornerRadius: Double = 0.7
     /// Soft roof-edge bevel (metres) on flat roofs.
-    var roofBevel: Double = 0.16
+    var roofBevel: Double = 0.6
+    /// Scale exaggeration for designed details (windows, cornices, chimneys, rails) so they read from
+    /// the map camera. 1 is metric-accurate.
+    var detailExaggeration: Double = 1.35
+    /// Scale exaggeration for vegetation and street props.
+    var propExaggeration: Double = 1.2
     var aoBandHeight: Double = 0.55
-    var aoDarkening: Double = 0.7
+    /// Darker swatch copy for undersides; soft contact shadow now comes from screen-space occlusion.
+    var aoDarkening: Double = 0.86
+    /// Per-building hue shift amplitude applied to the wall tint.
+    var hueShift: Float = 0.035
+
+    // MARK: Post-processing
+    var ambientOcclusionStrength: Float = 0.8
+    var ambientOcclusionRadius: Float = 1.6
+    var bloomStrength: Float = 0.55
+    /// Fraction of the final colour pulled towards the warm-violet grade.
+    var gradeStrength: Float = 0.10
+    /// Haze per metre of distance from the eye (exponential).
+    var hazeDensity: Float = 0.00045
     var roofOverhang: Double = 0.9
     var roofPitchDegrees: Double = 24
     var hipRoofShare: Double = 0.85
-    /// A pitched roof only fits a footprint that nearly fills its bounding rectangle; anything more
-    /// irregular (L- and U-shapes) gets a flat roof so the roof always matches the walls below it.
-    var hipRoofMinimumFill: Double = 0.86
+    /// Maximum rise of a hip roof above its eave.
+    var hipRoofMaxRise: Double = 3.4
     /// Dar roofs are mostly terracotta tile and rust-red or green corrugated iron, so most pitched roofs
     /// are warm.
     var terracottaRoofShare: Double = 0.45
@@ -220,7 +245,8 @@ nonisolated struct DioramaConfig: Sendable {
     var dhowsPerTile: Int = 4
 
     // MARK: Shoreline (metres, illustrative mid-tide datum, not a tidal prediction)
-    var waterLevel: Double = 0.22
+    /// The sea surface is the flat basemap plane, so the bay continues seamlessly past the tile edge.
+    var waterLevel: Double = 0
     var beachWidth: Double = 12
     var beachSlope: Double = 0.12
     var seawallHeight: Double = 2.4

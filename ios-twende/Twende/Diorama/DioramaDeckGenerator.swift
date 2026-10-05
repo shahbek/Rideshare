@@ -51,7 +51,7 @@ nonisolated struct DioramaDeckGenerator {
             for x in stride(from: ceil(bounds.minX / step) * step, through: bounds.maxX, by: step) {
                 let p = DV2(x, y)
                 guard surface.contains(p) else { continue }
-                let bottom = min(terrain.height(p) - 0.25, top - thickness - 0.1)
+                let bottom = min(terrain.floorHeight(p) - 0.25, top - thickness - 0.1)
                 props.cylinder(centre: p, z0: bottom, z1: top - thickness, r0: 0.16, r1: 0.14, sides: 16, .palmTrunk)
                 // Visible bearer under each post; slim enough that the underside remains open.
                 props.box(centre: p, z0: top - thickness - 0.16, axis: axis, halfLength: min(step / 2, 1.4), halfWidth: 0.09, height: 0.16, .pierWood)

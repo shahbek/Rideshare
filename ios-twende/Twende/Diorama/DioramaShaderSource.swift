@@ -23,6 +23,21 @@ nonisolated struct DioramaShaderUniforms {
     var shoreline: SIMD4<Float>
     var waterDeep: SIMD4<Float>
     var waterShallow: SIMD4<Float>
+    /// x/y: ground image origin (local metres), z/w: 1 / image extent in metres.
+    var groundImage: SIMD4<Float>
+    /// x: ambient-occlusion strength (0 disables sampling), y: bloom strength, z: grade strength,
+    /// w: haze density per metre.
+    var post: SIMD4<Float>
+}
+
+/// Constants for the screen-space passes. Layout mirrors `DioramaPostUniforms` in the Metal source.
+nonisolated struct DioramaPostUniforms {
+    var matrix: simd_float4x4
+    var eye: SIMD4<Float>
+    /// x: occlusion radius (m), y: occlusion strength, z/w: target size in pixels.
+    var params: SIMD4<Float>
+    /// x/y: blur direction in texels, z: bloom strength, w: unused.
+    var blur: SIMD4<Float>
 }
 
 /// Lighting presets per time of day: a warm low sun and violet sky at dusk (the default), a cool
@@ -63,7 +78,9 @@ nonisolated enum DioramaLighting {
             shadowParams: .zero,
             shoreline: .zero,
             waterDeep: .zero,
-            waterShallow: .zero
+            waterShallow: .zero,
+            groundImage: .zero,
+            post: .zero
         )
     }
 }
@@ -101,11 +118,28 @@ nonisolated enum DioramaShaderSource {
         float4 shoreline;
         float4 waterDeep;
         float4 waterShallow;
+        float4 groundImage;
+        float4 post;
+    };
+
+    struct DioramaPostUniforms {
+        float4x4 matrix;
+        float4 eye;
+        float4 params;
+        float4 blur;
     };
 
     struct DioramaLight {
         float4 position;
         float4 color;
+    };
+
+    float3 dioramaGrade(float3 color, float3 worldPosition, constant DioramaUniforms &u);
+
+    /// One placement of a prototype: xyz translation + rotation about z, xyz scale + bounding radius.
+    struct DioramaInstance {
+        float4 placement;
+        float4 scale;
     };
 
     struct DioramaVarying {
@@ -117,14 +151,20 @@ nonisolated enum DioramaShaderSource {
         float clipHeight;
     };
 
-    vertex DioramaVarying dioramaVertex(uint id [[vertex_id]],
-                                        const device DioramaInput *vertices [[buffer(0)]],
-                                        constant float4x4 &matrix [[buffer(1)]],
-                                        constant DioramaUniforms &u [[buffer(2)]]) {
-        DioramaInput v = vertices[id];
+    float3 dioramaPlace(float3 p, DioramaInstance inst) {
+        float c = cos(inst.placement.w), s = sin(inst.placement.w);
+        float3 q = p * inst.scale.xyz;
+        return float3(q.x * c - q.y * s, q.x * s + q.y * c, q.z) + inst.placement.xyz;
+    }
+
+    float3 dioramaPlaceNormal(float3 n, DioramaInstance inst) {
+        float c = cos(inst.placement.w), s = sin(inst.placement.w);
+        float3 q = n / max(inst.scale.xyz, float3(0.0001));
+        return normalize(float3(q.x * c - q.y * s, q.x * s + q.y * c, q.z));
+    }
+
+    DioramaVarying dioramaShade(DioramaInput v, float3 world, float3 normal, float4x4 matrix, constant DioramaUniforms &u) {
         DioramaVarying out;
-        float3 world = v.position.xyz;
-        float3 normal = v.normal.xyz;
         bool mirrored = u.params.w > 0.5;
         float waterZ = u.water.x;
         if (v.appearance.w > 4.5) {
@@ -157,10 +197,36 @@ nonisolated enum DioramaShaderSource {
         return out;
     }
 
+    vertex DioramaVarying dioramaVertex(uint id [[vertex_id]],
+                                        const device DioramaInput *vertices [[buffer(0)]],
+                                        constant float4x4 &matrix [[buffer(1)]],
+                                        constant DioramaUniforms &u [[buffer(2)]]) {
+        DioramaInput v = vertices[id];
+        return dioramaShade(v, v.position.xyz, v.normal.xyz, matrix, u);
+    }
+
+    /// Prototype geometry placed by the instance table; the instance id includes the base instance.
+    vertex DioramaVarying dioramaInstancedVertex(uint id [[vertex_id]], uint instanceID [[instance_id]],
+                                                 const device DioramaInput *vertices [[buffer(0)]],
+                                                 constant float4x4 &matrix [[buffer(1)]],
+                                                 constant DioramaUniforms &u [[buffer(2)]],
+                                                 const device DioramaInstance *instances [[buffer(3)]]) {
+        DioramaInput v = vertices[id];
+        DioramaInstance inst = instances[instanceID];
+        return dioramaShade(v, dioramaPlace(v.position.xyz, inst), dioramaPlaceNormal(v.normal.xyz, inst), matrix, u);
+    }
+
     vertex float4 dioramaShadowVertex(uint id [[vertex_id]],
                                       const device DioramaInput *vertices [[buffer(0)]],
                                       constant float4x4 &matrix [[buffer(1)]]) {
         return matrix * vertices[id].position;
+    }
+
+    vertex float4 dioramaInstancedShadowVertex(uint id [[vertex_id]], uint instanceID [[instance_id]],
+                                               const device DioramaInput *vertices [[buffer(0)]],
+                                               constant float4x4 &matrix [[buffer(1)]],
+                                               const device DioramaInstance *instances [[buffer(3)]]) {
+        return matrix * float4(dioramaPlace(vertices[id].position.xyz, instances[instanceID]), 1.0);
     }
 
     float dioramaShadow(float3 p, float3 n, constant DioramaUniforms &u, depth2d<float> shadowMap) {
@@ -228,12 +294,15 @@ nonisolated enum DioramaShaderSource {
     }
 
     fragment float4 dioramaFragment(DioramaVarying in [[stage_in]],
+                                    bool isFront [[front_facing]],
                                     constant DioramaUniforms &u [[buffer(0)]],
                                     const device DioramaLight *lights [[buffer(1)]],
                                     const device uint2 *lightTable [[buffer(2)]],
                                     const device uint *lightIndices [[buffer(3)]],
                                     texture2d<float> reflection [[texture(0)]],
-                                    depth2d<float> shadowMap [[texture(1)]]) {
+                                    depth2d<float> shadowMap [[texture(1)]],
+                                    texture2d<float> groundImage [[texture(2)]],
+                                    texture2d<float> occlusion [[texture(3)]]) {
         float code = in.appearance.w;
         float glow = u.params.x;
         bool mirrored = u.params.w > 0.5;
@@ -257,13 +326,30 @@ nonisolated enum DioramaShaderSource {
         }
 
         float3 n = normalize(in.normal);
+        // Thin double-sided sheets (fronds, sails, canopies) light their back as a real surface.
+        if (!isFront) n = -n;
         float3 view = normalize(u.eye.xyz - in.worldPosition);
         float3 albedo = in.color.rgb;
+
+        // Walls grade lighter towards the top and darker at the base (height carried in appearance.z).
+        if (in.appearance.z > 50.0 && code < 0.5) {
+            float h = in.appearance.z - 100.0;
+            albedo *= mix(0.90, 1.07, saturate(h / 9.0));
+        }
 
         // Procedural ground textures (appearance.y), kept very quiet so the toy-town surfaces read as
         // smooth painted material with only a faint mottle: grass, sand, asphalt, paving.
         float tex = in.appearance.y;
         float2 wp = in.worldPosition.xy;
+        if (tex > 8.5 && tex < 9.5) {
+            // Painted ground: albedo from the tile image, grain code from its alpha (×32).
+            constexpr sampler groundSampler(coord::normalized, address::clamp_to_edge, filter::linear, mip_filter::linear);
+            float2 guv = (wp - u.groundImage.xy) * u.groundImage.zw;
+            guv.y = 1.0 - guv.y;
+            float4 painted = groundImage.sample(groundSampler, guv);
+            albedo = painted.rgb;
+            tex = floor(painted.a * 255.0 / 32.0 + 0.5);
+        }
         if (tex > 0.5 && tex < 1.5) {
             float mottle = dioramaNoise(wp * 0.09) * 0.7 + dioramaNoise(wp * 0.35) * 0.3;
             albedo *= 0.96 + 0.08 * (mottle - 0.5);
@@ -320,12 +406,19 @@ nonisolated enum DioramaShaderSource {
         if (mirrored) { litPos.z = 2.0 * u.water.x - litPos.z; litN.z = -litN.z; }
         float hemi = litN.z * 0.5 + 0.5;
         float3 ambient = mix(u.groundColor.rgb, u.skyColor.rgb, hemi);
+        // Screen-space contact shadow wherever surfaces meet: walls and ground, trees and grass.
+        float ao = 1.0;
+        if (u.post.x > 0.001 && !mirrored) {
+            constexpr sampler aoSampler(coord::normalized, address::clamp_to_edge, filter::linear);
+            float2 suv = in.position.xy / u.water.zw;
+            ao = 1.0 - u.post.x * (1.0 - occlusion.sample(aoSampler, suv).r);
+        }
         float ndl = dot(litN, u.sunDirection.xyz);
         float sun = max(ndl, 0.0);
         float visibility = dioramaShadow(litPos, litN, u, shadowMap);
-        float3 light = ambient * 0.78 + u.sunColor.rgb * sun * visibility;
+        float3 light = ambient * 0.78 * ao + u.sunColor.rgb * sun * visibility * (0.75 + 0.25 * ao);
         float3 pointLight = glow > 0.01 ? dioramaPointLights(litPos, litN, u, lights, lightTable, lightIndices) : float3(0.0);
-        light += pointLight * glow;
+        light += pointLight * glow * (0.6 + 0.4 * ao);
 
         float3 color = albedo * light;
         float time = u.params.y;
@@ -384,9 +477,155 @@ nonisolated enum DioramaShaderSource {
         }
         float rim = pow(1.0 - saturate(dot(n, view)), 4.0) * 0.035;
         color += u.skyColor.rgb * rim;
-        return float4(color, 1.0);
+        return float4(dioramaGrade(color, in.worldPosition, u), 1.0);
     }
     """
+
+    /// Shared colour grade: a unifying warm-violet tint plus light distance haze towards the sky colour.
+    static let gradeSource: String = """
+    float3 dioramaGrade(float3 color, float3 worldPosition, constant DioramaUniforms &u) {
+        float3 graded = color * float3(1.04, 0.975, 1.06) + float3(0.018, 0.004, 0.035);
+        color = mix(color, graded, u.post.z);
+        float d = length(u.eye.xyz - worldPosition);
+        float haze = 1.0 - exp(-d * u.post.w);
+        float3 hazeColor = mix(u.skyColor.rgb, float3(0.74, 0.62, 0.78), 0.45);
+        return mix(color, hazeColor, haze * 0.65);
+    }
+    """
+
+    /// Screen-space passes: half-resolution G-buffer, ambient occlusion with blur, bloom pyramid
+    /// and the additive bloom composite drawn into Mapbox's own pass.
+    static let postSource: String = """
+    struct DioramaGBuffer {
+        float4 position [[color(0)]];
+        float4 normal [[color(1)]];
+        float4 emissive [[color(2)]];
+    };
+
+    fragment DioramaGBuffer dioramaGBufferFragment(DioramaVarying in [[stage_in]], bool isFront [[front_facing]]) {
+        DioramaGBuffer out;
+        float3 n = normalize(in.normal);
+        if (!isFront) n = -n;
+        out.position = float4(in.worldPosition, 1.0);
+        out.normal = float4(n, 0.0);
+        out.emissive = float4(0.0);
+        return out;
+    }
+
+    fragment DioramaGBuffer dioramaEmissiveFragment(DioramaVarying in [[stage_in]], constant DioramaUniforms &u [[buffer(0)]]) {
+        DioramaGBuffer out;
+        float code = in.appearance.w;
+        float glow = u.params.x;
+        float3 c = in.color.rgb;
+        float a = 1.0;
+        if (code > 4.5) {
+            float r = length(in.normal.xy);
+            if (r > 1.0) discard_fragment();
+            a = pow(1.0 - r, 2.2) * 0.9;
+            c *= 1.2;
+        }
+        out.position = float4(0.0);
+        out.normal = float4(0.0);
+        out.emissive = float4(c * glow * a, 1.0);
+        return out;
+    }
+
+    struct DioramaScreen {
+        float4 position [[position]];
+        float2 uv;
+    };
+
+    vertex DioramaScreen dioramaFullscreenVertex(uint id [[vertex_id]]) {
+        DioramaScreen out;
+        float2 p = float2((id == 1) ? 3.0 : -1.0, (id == 2) ? 3.0 : -1.0);
+        out.position = float4(p, 0.0, 1.0);
+        out.uv = float2(p.x * 0.5 + 0.5, 0.5 - p.y * 0.5);
+        return out;
+    }
+
+    float dioramaScreenHash(float2 p) {
+        return fract(sin(dot(p, float2(12.9898, 78.233))) * 43758.5453);
+    }
+
+    /// Hemisphere occlusion in world space against the G-buffer positions. Range-checked so distant
+    /// occluders do not darken, and dithered per pixel so the blur resolves it smoothly.
+    fragment float4 dioramaSSAOFragment(DioramaScreen in [[stage_in]],
+                                        constant DioramaPostUniforms &p [[buffer(0)]],
+                                        texture2d<float> positions [[texture(0)]],
+                                        texture2d<float> normals [[texture(1)]]) {
+        constexpr sampler point(coord::normalized, address::clamp_to_edge, filter::nearest);
+        float4 P = positions.sample(point, in.uv);
+        if (P.w < 0.5) return float4(1.0);
+        float3 N = normalize(normals.sample(point, in.uv).xyz);
+        float3 eye = p.eye.xyz;
+        float radius = p.params.x;
+        float3 helper = abs(N.z) < 0.9 ? float3(0.0, 0.0, 1.0) : float3(1.0, 0.0, 0.0);
+        float3 t = normalize(cross(N, helper));
+        float3 b = cross(N, t);
+        float noise = dioramaScreenHash(in.position.xy) * 6.2831853;
+        const int K = 12;
+        float occlusion = 0.0;
+        float weight = 0.0;
+        for (int k = 0; k < K; k++) {
+            float angle = float(k) * 2.39996 + noise;
+            float r = radius * sqrt((float(k) + 0.5) / float(K));
+            float lift = radius * (0.15 + 0.55 * fract(float(k) * 0.618 + noise * 0.1));
+            float3 S = P.xyz + (t * cos(angle) + b * sin(angle)) * r + N * lift;
+            float4 clip = p.matrix * float4(S, 1.0);
+            if (clip.w <= 0.0001) continue;
+            float2 ndc = clip.xy / clip.w;
+            float2 suv = float2(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
+            if (any(suv < float2(0.0)) || any(suv > float2(1.0))) continue;
+            float4 Q = positions.sample(point, suv);
+            weight += 1.0;
+            if (Q.w < 0.5) continue;
+            float sampleDist = length(eye - S);
+            float sceneDist = length(eye - Q.xyz);
+            float delta = sampleDist - sceneDist;
+            if (delta > 0.04) {
+                float range = smoothstep(0.0, 1.0, radius / max(delta, 0.0001));
+                occlusion += range;
+            }
+        }
+        float ao = weight > 0.0 ? 1.0 - occlusion / weight : 1.0;
+        return float4(ao, ao, ao, 1.0);
+    }
+
+    /// Separable 9-tap gaussian along `blur.xy` texels.
+    fragment float4 dioramaBlurFragment(DioramaScreen in [[stage_in]],
+                                        constant DioramaPostUniforms &p [[buffer(0)]],
+                                        texture2d<float> source [[texture(0)]]) {
+        constexpr sampler linear(coord::normalized, address::clamp_to_edge, filter::linear);
+        float2 texel = p.blur.xy / p.params.zw;
+        const float w[5] = {0.2270270, 0.1945946, 0.1216216, 0.0540541, 0.0162162};
+        float4 sum = source.sample(linear, in.uv) * w[0];
+        for (int i = 1; i < 5; i++) {
+            float2 o = texel * float(i);
+            sum += source.sample(linear, in.uv + o) * w[i];
+            sum += source.sample(linear, in.uv - o) * w[i];
+        }
+        return sum;
+    }
+
+    /// Bilinear downsample (the sampler does the 2x2 box).
+    fragment float4 dioramaCopyFragment(DioramaScreen in [[stage_in]], texture2d<float> source [[texture(0)]]) {
+        constexpr sampler linear(coord::normalized, address::clamp_to_edge, filter::linear);
+        return source.sample(linear, in.uv);
+    }
+
+    /// Additive bloom over Mapbox's frame: glow bleeds into the sky and basemap around each lamp.
+    fragment float4 dioramaBloomComposite(DioramaScreen in [[stage_in]],
+                                          constant DioramaPostUniforms &p [[buffer(0)]],
+                                          texture2d<float> bloom [[texture(0)]]) {
+        constexpr sampler linear(coord::normalized, address::clamp_to_edge, filter::linear);
+        float3 c = bloom.sample(linear, in.uv).rgb * p.blur.z;
+        return float4(c, 1.0);
+    }
+    """
+
+    /// Everything compiled into the diorama library: main shaders (which forward-declare the grade
+    /// helper), the grade helper, then the screen-space passes.
+    static var fullSource: String { source + gradeSource + postSource }
 
     private static let lock = NSLock()
     nonisolated(unsafe) private static var cached: (device: ObjectIdentifier, library: MTLLibrary)?
@@ -397,7 +636,7 @@ nonisolated enum DioramaShaderSource {
         let key = ObjectIdentifier(device)
         if let cached, cached.device == key { return cached.library }
         do {
-            let library = try device.makeLibrary(source: source, options: nil)
+            let library = try device.makeLibrary(source: fullSource, options: nil)
             cached = (key, library)
             return library
         } catch {

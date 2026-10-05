@@ -128,7 +128,7 @@ final class DioramaShorelineTests: XCTestCase {
         }
         XCTAssertEqual(area, DioramaPolygon.area(ring), accuracy: 0.0001)
         XCTAssertTrue(mesh.normals.allSatisfy { $0.z == 1 })
-        XCTAssertTrue(mesh.positions.allSatisfy { abs($0.z - 0.71) < 0.0001 })
+        XCTAssertTrue(mesh.positions.allSatisfy { abs($0.z - (DioramaTerrain.lift + 0.11)) < 0.0001 })
     }
 
     @MainActor
@@ -137,6 +137,10 @@ final class DioramaShorelineTests: XCTestCase {
         let data = try XCTUnwrap(DioramaBundledTile.load(config: config))
         let artifacts = try DioramaTileGenerator.generate(data, config: config, library: DioramaPropLibrary(config: config), reduced: false)
         XCTAssertGreaterThan(artifacts.totalTriangles, 1000)
+        XCTAssertGreaterThan(artifacts.totalInstances, 100, "Props and vegetation are instanced, not baked copies")
+        XCTAssertLessThan(artifacts.lightDrawnTriangles, 350_000, "Whole-tile view (all instances at light detail) stays inside the performance budget")
+        XCTAssertLessThan(artifacts.generationSeconds, 1.5)
+        XCTAssertNotNil(artifacts.groundImage)
         XCTAssertTrue(artifacts.parts.contains { $0.category == .shorelineDebug && $0.triangles > 0 })
         XCTAssertTrue(artifacts.shorelineReport.contains { $0.contains("override") && $0.contains("beach") })
         var waterVertices: Set<UInt32> = []
@@ -150,7 +154,11 @@ final class DioramaShorelineTests: XCTestCase {
             XCTAssertEqual(vertex.appearance.w, 1)
             XCTAssertGreaterThanOrEqual(vertex.appearance.z, 0)
         }
-        print("[Shoreline integration] \(artifacts.totalTriangles) triangles, \(artifacts.totalBytes / 1024) KB, \(artifacts.generationSeconds) seconds")
+        for part in artifacts.parts {
+            let groupTriangles = artifacts.groups.filter { $0.category == part.category }.reduce(0) { $0 + $1.instances.count * (($1.lightCount > 0 ? $1.lightCount : $1.fullCount) / 3) }
+            print("[Shoreline budget] \(part.category.rawValue): \(part.triangles) baked, \(part.instances) instances, \(groupTriangles) instanced tris at light LOD")
+        }
+        print("[Shoreline integration] \(artifacts.totalTriangles) unique triangles, \(artifacts.lightDrawnTriangles) drawn at light LOD, \(artifacts.drawnTriangles) at full LOD, \(artifacts.totalInstances) instances, \(artifacts.totalBytes / 1024) KB, \(artifacts.generationSeconds) seconds")
     }
 
     @MainActor
@@ -180,8 +188,11 @@ final class DioramaShorelineTests: XCTestCase {
         XCTAssertEqual(terrain.pierLevel, terrain.waterLevel + 0.83, accuracy: 0.0001)
         XCTAssertEqual(terrain.seabedLevel, terrain.waterLevel - 1.22, accuracy: 0.0001)
         let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
-        let library = try device.makeLibrary(source: DioramaShaderSource.source, options: nil)
+        let library = try device.makeLibrary(source: DioramaShaderSource.fullSource, options: nil)
         XCTAssertNotNil(library.makeFunction(name: "dioramaFragment"))
         XCTAssertNotNil(library.makeFunction(name: "dioramaVertex"))
+        XCTAssertNotNil(library.makeFunction(name: "dioramaInstancedVertex"))
+        XCTAssertNotNil(library.makeFunction(name: "dioramaSSAOFragment"))
+        XCTAssertNotNil(library.makeFunction(name: "dioramaBloomComposite"))
     }
 }

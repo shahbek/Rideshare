@@ -40,6 +40,38 @@ nonisolated struct DioramaShorelineGenerator {
         }
     }
 
+    /// Plan footprint of every swept band, used to cut the land and seabed plates away underneath so
+    /// the profiles never intersect them. Extents match the profile functions below.
+    static func coverage(_ segments: [DioramaShorelineSegment], config: DioramaConfig, terrain: DioramaTerrain) -> [[DV2]] {
+        var result: [[DV2]] = []
+        for segment in segments where segment.points.count >= 2 {
+            for i in 0..<(segment.points.count - 1) {
+                let a = segment.points[i], b = segment.points[i + 1]
+                let (inlandA, seaA) = extents(segment, at: i, config: config, terrain: terrain)
+                let (inlandB, seaB) = extents(segment, at: i + 1, config: config, terrain: terrain)
+                let quad = [a - segment.outward[i] * inlandA, b - segment.outward[i + 1] * inlandB,
+                            b + segment.outward[i + 1] * seaB, a + segment.outward[i] * seaA]
+                if DioramaPolygon.area(quad) > 0.001 { result.append(DioramaPolygon.counterClockwise(quad)) }
+            }
+        }
+        return result
+    }
+
+    /// (inland, seaward) reach in metres of the band at station `i`.
+    static func extents(_ segment: DioramaShorelineSegment, at i: Int, config: DioramaConfig, terrain: DioramaTerrain) -> (Double, Double) {
+        switch segment.kind {
+        case .beach:
+            return (config.beachWidth * 0.65, config.beachWidth * 0.7)
+        case .natural, .revetment:
+            return (config.revetmentWidth * 0.5, config.revetmentWidth)
+        case .seawall, .deck:
+            let p = segment.points[i]
+            let land = terrain.height(p)
+            let toe = max(0, land - terrain.waterLevel + config.seawallSubmergedDepth) * config.seawallBatter
+            return (config.copingWidth / 2, toe + 0.3 + (segment.hasRevetment ? config.revetmentWidth : 0))
+        }
+    }
+
     /// Connected indexed strip. Normals are shared across stations and cross-section rows, not per face.
     func sweep(_ segment: DioramaShorelineSegment, profiles: [[DV2]], swatches: [DioramaSwatch], into mesh: inout DioramaMesh) {
         guard profiles.count == segment.points.count, let row = profiles.first, row.count >= 2,
@@ -74,10 +106,12 @@ nonisolated struct DioramaShorelineGenerator {
             let p = segment.points[i], out = segment.outward[i]
             let top = terrain.height(p - out * inland) + 0.04
             let sea = terrain.waterLevel
+            // The band meets the generated seabed exactly at its seaward edge.
+            let bed = terrain.seabed(p + out * underwater)
+            let mid = min(sea - underwater * 0.4 * config.beachSlope, sea - 0.02 + (bed - sea + 0.02) * 0.4)
             return [DV2(-inland, top), DV2(-inland * 0.65, sea + (top - sea) * 0.65),
                     DV2(-inland * 0.25, sea + (top - sea) * 0.25), DV2(0, sea - 0.015),
-                    DV2(underwater * 0.4, sea - underwater * 0.4 * config.beachSlope),
-                    DV2(underwater, max(terrain.seabedLevel + 0.02, sea - underwater * config.beachSlope))]
+                    DV2(underwater * 0.4, mid), DV2(underwater, bed)]
         }
         sweep(segment, profiles: rows, swatches: beach ? [.earth, .earth, .wetSand, .wetSand, .wetSand] : [.earth, .rockWarm, .dampStone, .dampStone, .dampStone], into: &ground)
     }
@@ -86,20 +120,25 @@ nonisolated struct DioramaShorelineGenerator {
         let sea = terrain.waterLevel
         let maxRise = segment.points.map { terrain.height($0) - sea }.max() ?? config.seawallHeight
         let courses = max(3, Int(ceil(max(maxRise, config.seawallHeight) / 0.45)))
-        let rows = segment.points.map { p -> [DV2] in
-            let land = terrain.height(p) + DioramaSurfaceLevel.paving.rawValue
+        let rows = segment.points.indices.map { i -> [DV2] in
+            let p = segment.points[i]
+            let land = terrain.height(p)
             var row: [DV2] = []
             for k in 0...courses {
                 let t = Double(k) / Double(courses)
                 let z = land + (sea + 0.18 - land) * t
                 row.append(DV2(max(0, land - z) * config.seawallBatter, z))
             }
+            let toe = max(0, land - sea + config.seawallSubmergedDepth) * config.seawallBatter
+            // The submerged toe lands on the generated seabed where the plate resumes.
+            let bed = terrain.seabed(p + segment.outward[i] * (toe + 0.3))
             row += [DV2(max(0, land - sea) * config.seawallBatter, sea - 0.08),
-                    DV2(max(0, land - sea + config.seawallSubmergedDepth) * config.seawallBatter, sea - config.seawallSubmergedDepth)]
+                    DV2(toe, min(sea - config.seawallSubmergedDepth, bed + 0.05)),
+                    DV2(toe + 0.3, bed)]
             return row
         }
         var colors = (0..<courses).map { $0 % 3 == 0 ? DioramaSwatch.rockPale : .coralStone }
-        colors += [.algaeStone, .dampStone]
+        colors += [.algaeStone, .dampStone, .wetSand]
         sweep(segment, profiles: rows, swatches: colors, into: &ground)
 
         let half = config.copingWidth / 2, radius = min(config.copingRadius, config.copingHeight / 2)
@@ -115,26 +154,20 @@ nonisolated struct DioramaShorelineGenerator {
             }
         }
         rounded.append(rounded[0])
-        let cap = segment.points.map { p in rounded.map { DV2($0.x, terrain.height(p) + DioramaSurfaceLevel.paving.rawValue + $0.y) } }
+        let cap = segment.points.map { p in rounded.map { DV2($0.x, terrain.height(p) + $0.y) } }
         sweep(segment, profiles: cap, swatches: [.concrete], into: &ground)
         details(segment, props: &props)
-    }
-
-    /// Cached 80-face smooth rocks; each placement varies rotation/scale, never regenerates a mesh.
-    private static let rocks: [DioramaMesh] = [DioramaSwatch.rockWarm, .rockGrey, .rockPale].enumerated().map { i, swatch in
-        var mesh = DioramaMesh()
-        mesh.sphere(centre: DV3(0, 0, 0), radii: DV3(0.5, 0.42 + Double(i) * 0.04, 0.36 + Double(i) * 0.035), swatch, detail: 0)
-        return mesh
     }
 
     private func rockBank(_ segment: DioramaShorelineSegment, standalone: Bool, ground: inout DioramaMesh, props: inout DioramaMesh) {
         let width = max(1, config.revetmentWidth), sea = terrain.waterLevel
         let start = standalone ? -width * 0.5 : 0.3
         let rows = segment.points.indices.map { i -> [DV2] in
-            let p = segment.points[i]
-            let top = standalone ? terrain.height(p + segment.outward[i] * start) + 0.04 : sea + 0.22
-            let toe = standalone ? 0 : max(0, terrain.height(p) + 0.11 - sea + config.seawallSubmergedDepth) * config.seawallBatter
-            return [DV2(toe + start, top), DV2(toe + width * 0.45, sea - 0.25), DV2(toe + width, sea - 0.9)]
+            let p = segment.points[i], out = segment.outward[i]
+            let top = standalone ? terrain.height(p + out * start) + 0.04 : sea + 0.22
+            let toe = standalone ? 0 : max(0, terrain.height(p) - sea + config.seawallSubmergedDepth) * config.seawallBatter
+            let bed = terrain.seabed(p + out * (toe + width))
+            return [DV2(toe + start, top), DV2(toe + width * 0.45, min(sea - 0.25, bed + 0.1)), DV2(toe + width, bed)]
         }
         sweep(segment, profiles: rows, swatches: [.dampStone, .dampStone], into: &ground)
         var rng = DioramaRandom(seed: segment.id, salt: 207)
@@ -150,7 +183,7 @@ nonisolated struct DioramaShorelineGenerator {
                 var offset = start + spacing * 0.4
                 while offset < width {
                     let o = min(width - 0.15, offset + rng.range(-0.14...0.14))
-                    let toe = standalone ? 0 : max(0, terrain.height(p) + 0.11 - sea + config.seawallSubmergedDepth) * config.seawallBatter
+                    let toe = standalone ? 0 : max(0, terrain.height(p) - sea + config.seawallSubmergedDepth) * config.seawallBatter
                     let q = p + out * (toe + o)
                     let top = standalone ? terrain.height(p + out * start) + 0.04 : sea + 0.22
                     let slope: Double
@@ -162,9 +195,9 @@ nonisolated struct DioramaShorelineGenerator {
                     }
                     let size = rng.range(config.rockSizeRange)
                     if data.rect.contains(q), !data.buildings.contains(where: { DioramaPolygon.contains($0.ring, q) }) {
-                        let variant = Self.rocks[Int(rng.next() % UInt64(Self.rocks.count))]
+                        let variant = library.rocks[Int(rng.next() % UInt64(library.rocks.count))]
                         // Lower quarter is embedded in the slope: no floating boulders.
-                        props.append(variant, DioramaTransform(rotation: rng.range(0...(2 * .pi)),
+                        props.instance(variant, DioramaTransform(rotation: rng.range(0...(2 * .pi)),
                             scale: DV3(size, size * rng.range(0.85...1.1), size), translation: DV3(q, slope + size * 0.24)))
                     }
                     offset += spacing
@@ -221,15 +254,15 @@ nonisolated struct DioramaShorelineGenerator {
                 let top = terrain.height(q) + 0.04
                 if !data.buildings.contains(where: { DioramaPolygon.distanceToRing($0.ring, q) < 4 }), data.rect.contains(q) {
                     if index % 4 == 0 {
-                        vegetation.append(library.palm, DioramaTransform(rotation: rng.range(0...6.28), scale: DV3(0.7, 0.7, 0.7), translation: DV3(q, top)))
+                        vegetation.instance(library.palm, DioramaTransform(rotation: rng.range(0...6.28), scale: DV3(0.7, 0.7, 0.7), translation: DV3(q, top)))
                     } else if index % 4 == 2 {
                         let mooring = p + out * 8
                         if data.water.contains(where: { DioramaPolygon.contains(polygon: $0.rings, mooring) }) {
-                            props.append(library.dhow, DioramaTransform(rotation: out.angle + 0.2, scale: DV3(0.4, 0.4, 0.4), translation: DV3(mooring, terrain.waterLevel)))
+                            props.instance(library.dhow, DioramaTransform(rotation: out.angle + 0.2, scale: DV3(0.4, 0.4, 0.4), translation: DV3(mooring, terrain.waterLevel)))
                         }
                     }
                 }
-                props.append(Self.rocks[index % 3], DioramaTransform(scale: DV3(0.5, 0.5, 0.5), translation: DV3(p - out * 0.5, terrain.waterLevel + 0.12)))
+                props.instance(library.rocks[index % 3], DioramaTransform(scale: DV3(0.5, 0.5, 0.5), translation: DV3(p - out * 0.5, terrain.waterLevel + 0.12)))
                 for k in 0..<5 {
                     let weed = p - out * 1.5 + out.right * (Double(k) * 0.4)
                     let height = terrain.waterLevel + (top - terrain.waterLevel) * 1.5 / max(0.1, config.beachWidth * 0.65)
@@ -245,7 +278,7 @@ nonisolated struct DioramaShorelineGenerator {
         for i in stride(from: 0, to: segment.points.count, by: 10) {
             let p = segment.points[i] - segment.outward[i] * (config.revetmentWidth * 0.5)
             guard data.rect.contains(p), !data.buildings.contains(where: { DioramaPolygon.distanceToRing($0.ring, p) < 3 }) else { continue }
-            vegetation.append(library.bushes[i % library.bushes.count], DioramaTransform(scale: DV3(0.45, 0.45, 0.45), translation: DV3(p, terrain.height(p))))
+            vegetation.instance(library.bushes[i % library.bushes.count], DioramaTransform(scale: DV3(0.45, 0.45, 0.45), translation: DV3(p, terrain.height(p))))
         }
     }
 }
