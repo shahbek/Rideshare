@@ -88,6 +88,7 @@ final class DioramaTileManager {
     private let mapboxSource = DioramaMapboxSource()
     private var sourceRequested: CFTimeInterval? = nil
     private var sourceSupplement = DioramaMapSupplement()
+    private var hasLimitedMapDetails: Bool = false
     private var generationRevision: Int = 0
     private var isHiding: Bool = false
     private var revealFraction: Double = 0
@@ -272,11 +273,17 @@ final class DioramaTileManager {
             let snapshot = mapboxSource.snapshot(tile: tile)
             if mapboxSource.isReady, !snapshot.buildings.isEmpty, !snapshot.roads.isEmpty {
                 sourceSupplement = snapshot
+                hasLimitedMapDetails = false
                 DioramaTileGenerator.clearCache(for: tile, config: config)
                 generate()
             } else if CACurrentMediaTime() - (sourceRequested ?? 0) > 8 {
-                // Keep the native map instead of silently presenting an incomplete replacement.
-                state.status = "Map details unavailable · basemap kept. Try Regenerate."
+                // Live Streets data enriches the bundled tile; it must not disable it.
+                // Keep every successfully queried feature and disclose the limited coverage.
+                print("[Diorama source] Deadline reached (\(mapboxSource.diagnostic)); generating bundled tile with available supplement")
+                sourceSupplement = snapshot
+                hasLimitedMapDetails = true
+                DioramaTileGenerator.clearCache(for: tile, config: config)
+                generate()
             } else {
                 state.status = "Loading Mapbox streets and place names…"
                 mapboxSource.request(on: map)
@@ -294,12 +301,13 @@ final class DioramaTileManager {
 
     private func updateEffectStatus() {
         guard shown else { return }
+        let detail = hasLimitedMapDetails ? " · extra map details unavailable; Regenerate to retry" : ""
         if thermalReduced {
-            state.status = "Slipway loaded · bloom/AO off (thermal)"
+            state.status = "Slipway loaded · bloom/AO off (thermal)" + detail
         } else if ProcessInfo.processInfo.isLowPowerModeEnabled {
-            state.status = "Slipway loaded · bloom/AO off (Low Power)"
+            state.status = "Slipway loaded · bloom/AO off (Low Power)" + detail
         } else {
-            state.status = "Slipway loaded · full effects"
+            state.status = "Slipway loaded · full effects" + detail
         }
     }
 
@@ -356,6 +364,8 @@ final class DioramaTileManager {
         hide(on: map)
         generationRevision += 1
         sourceRequested = nil
+        sourceSupplement = DioramaMapSupplement()
+        hasLimitedMapDetails = false
         mapboxSource.reset()
         status = .idle
         state.loadedTiles[tile] = nil

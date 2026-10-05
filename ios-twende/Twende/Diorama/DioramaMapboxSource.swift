@@ -10,40 +10,90 @@ final class DioramaMapboxSource {
     private var loaded: [String: [Feature]] = [:]
     private var pending: Set<String> = []
     private var revision: Int = 0
+    private var reportedFailures: Set<String> = []
     var onReady: (() -> Void)? = nil
 
     func install(on map: MapboxMap) throws {
-        guard !map.sourceExists(withId: sourceID) else { return }
-        var source = VectorSource(id: sourceID)
-        source.url = "mapbox://mapbox.mapbox-streets-v8"
-        source.maxzoom = 14
-        try map.addSource(source)
-        // Visible layout (not visibility:none) keeps source tiles available to source queries.
-        var probe = LineLayer(id: sourceID + "-probe", source: sourceID)
-        probe.sourceLayer = "road"
-        // A mathematically zero opacity can let the SDK skip loading the source entirely.
-        probe.lineOpacity = .constant(0.001)
-        probe.lineWidth = .constant(0.01)
-        probe.slot = .bottom
-        try map.addLayer(probe)
+        if !map.sourceExists(withId: sourceID) {
+            var source = VectorSource(id: sourceID)
+            source.url = "mapbox://mapbox.mapbox-streets-v8"
+            source.maxzoom = 14
+            try map.addSource(source)
+        }
+        // Register every queried source layer, not just roads. Source queries operate on
+        // loaded/parsed tiles; an unused source layer is not a reliable query surface.
+        for layer in layers {
+            let id = probeID(layer)
+            guard !map.layerExists(withId: id) else { continue }
+            switch layer {
+            case "building":
+                var probe = FillLayer(id: id, source: sourceID)
+                probe.sourceLayer = layer
+                probe.fillOpacity = .constant(0.001)
+                probe.slot = .bottom
+                try map.addLayer(probe)
+            case "road":
+                var probe = LineLayer(id: id, source: sourceID)
+                probe.sourceLayer = layer
+                probe.lineOpacity = .constant(0.001)
+                probe.lineWidth = .constant(0.01)
+                probe.slot = .bottom
+                try map.addLayer(probe)
+            default:
+                var probe = CircleLayer(id: id, source: sourceID)
+                probe.sourceLayer = layer
+                probe.circleOpacity = .constant(0.001)
+                probe.circleRadius = .constant(0.01)
+                probe.slot = .bottom
+                try map.addLayer(probe)
+            }
+        }
     }
 
-    func reset() { revision += 1; loaded = [:]; pending = [] }
+    private func probeID(_ layer: String) -> String { sourceID + "-probe-" + layer }
+
+    func reset() { revision += 1; loaded = [:]; pending = []; reportedFailures = [] }
+
+    var diagnostic: String {
+        layers.map { "\($0)=\(loaded[$0]?.count.description ?? "pending")" }.joined(separator: ", ")
+    }
 
     func remove(from map: MapboxMap) {
         reset()
-        if map.layerExists(withId: sourceID + "-probe") { try? map.removeLayer(withId: sourceID + "-probe") }
+        for id in layers.map({ probeID($0) }) + [sourceID + "-probe"] where map.layerExists(withId: id) {
+            try? map.removeLayer(withId: id)
+        }
         if map.sourceExists(withId: sourceID) { try? map.removeSource(withId: sourceID) }
     }
 
     func request(on map: MapboxMap) {
+        do { try install(on: map) } catch {
+            if reportedFailures.insert("installation").inserted {
+                print("[Diorama source] Source/probe installation failed; bundled fallback remains available")
+            }
+            return
+        }
         let version = revision
         for layer in layers where !pending.contains(layer) {
             pending.insert(layer)
             map.querySourceFeatures(for: sourceID, options: SourceQueryOptions(sourceLayerIds: [layer], filter: true)) { [weak self] result in
                 guard let self, self.revision == version else { return }
                 self.pending.remove(layer)
-                if case .success(let features) = result { self.loaded[layer] = features.map(\.queriedFeature.feature) }
+                switch result {
+                case .success(let features):
+                    let previous = self.loaded[layer]?.count
+                    // A transient empty result while camera tiles change must not discard data.
+                    if !features.isEmpty || self.loaded[layer] == nil {
+                        self.loaded[layer] = features.map(\.queriedFeature.feature)
+                    }
+                    if previous != self.loaded[layer]?.count {
+                        print("[Diorama source] \(layer): \(self.loaded[layer]?.count ?? 0) features")
+                    }
+                case .failure:
+                    if self.reportedFailures.insert(layer).inserted {
+                        print("[Diorama source] Query failed for \(layer); retrying within loading deadline")
+                    }
+                }
                 if self.isReady { self.onReady?() }
             }
         }
