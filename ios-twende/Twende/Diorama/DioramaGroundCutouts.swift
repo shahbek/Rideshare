@@ -5,7 +5,7 @@ import Foundation
 nonisolated struct DioramaGroundCutouts: Sendable {
     private let masks: [(ring: [DV2], bounds: DioramaRect)]
 
-    init(data: DioramaTileData, pavementWidth: Double) {
+    init(data: DioramaTileData, pavementWidth: Double, streetPolygons: [[DV2]]? = nil) {
         var polygons: [[DV2]] = data.buildings.map(\.ring)
         polygons += data.landuse.filter { ["pool", "pitch", "parking", "fuel", "terrace"].contains($0.kind) }.compactMap { $0.rings.first }
         var convex: [[DV2]] = []
@@ -13,12 +13,15 @@ nonisolated struct DioramaGroundCutouts: Sendable {
             let ring = DioramaPolygon.counterClockwise(polygon)
             for (a, b, c) in DioramaPolygon.triangulate(ring) { convex.append([ring[a], ring[b], ring[c]]) }
         }
-        for road in data.roads {
+        if let streetPolygons {
+            convex += streetPolygons
+        } else { for road in data.roads {
             let half = road.width / 2 + (road.isPaved ? pavementWidth : 1.0)
             for (a, b) in zip(road.line, road.line.dropFirst()) {
                 let n = (b - a).normalized.left * half
                 convex.append(DioramaPolygon.counterClockwise([a - n, b - n, b + n, a + n]))
             }
+        }
         }
         masks = convex.map { ($0, DioramaRect.bounding($0)) }
     }
@@ -39,7 +42,7 @@ nonisolated struct DioramaGroundCutouts: Sendable {
         return pieces
     }
 
-    private static func subtractConvex(_ mask: [DV2], from polygon: [DV2]) -> [[DV2]] {
+    static func subtractConvex(_ mask: [DV2], from polygon: [DV2]) -> [[DV2]] {
         var remainder = polygon
         var outside: [[DV2]] = []
         // Each edge peels off an exterior piece. Only the still-inside remainder meets the next edge;
@@ -54,7 +57,7 @@ nonisolated struct DioramaGroundCutouts: Sendable {
         return outside
     }
 
-    private static func halfPlane(_ ring: [DV2], a: DV2, b: DV2, inside: Bool) -> [DV2] {
+    static func halfPlane(_ ring: [DV2], a: DV2, b: DV2, inside: Bool) -> [DV2] {
         guard let last = ring.last else { return [] }
         let edge = b - a
         let sign = inside ? 1.0 : -1.0

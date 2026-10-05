@@ -1,225 +1,209 @@
 import Foundation
 
-/// Toy-town streets: a raised asphalt (or red-earth) carriageway ribbon draped over the terrain, pale
-/// pavements with a kerb step on paved streets, a dashed centre line, white edge lines, stop lines, zebra
-/// crossings and stop signs where streets meet. Pavement and kerb pieces that would fall inside another
-/// street's carriageway are dropped, so junctions stay open asphalt instead of a tangle of kerbs.
+/// Roads are one planar network. Pavements are its surrounding annulus, with a bevelled kerb
+/// following only exposed boundaries; paint and dropped crossings share the junction layout.
 nonisolated struct DioramaRoadGenerator {
     let config: DioramaConfig
     let data: DioramaTileData
     let roads: DioramaRoadIndex
     let terrain: DioramaTerrain
+    let layout: DioramaStreetLayout
+    let compounds: [DioramaCompound]
 
-    /// Height of the road surface above the terrain at a point on the centreline.
     static let surfaceLift: Double = 0.12
 
-    /// Fine subdivision so junction cut-outs are tight.
-    private let step: Double = 3
+    private struct Ramp {
+        let point: DV2
+        let along: DV2
+        let outward: DV2
+        let halfWidth: Double
+        let depth: Double
+        var driveway: Bool = false
+        var polygon: [DV2] {
+            [point - along * (halfWidth + 0.7) - outward * 0.2,
+             point + along * (halfWidth + 0.7) - outward * 0.2,
+             point + along * (halfWidth + 0.7) + outward * depth,
+             point - along * (halfWidth + 0.7) + outward * depth]
+        }
+        func factor(at p: DV2) -> Double {
+            let v = p - point
+            guard v.dot(outward) >= -0.3, v.dot(outward) <= depth + 0.1 else { return 1 }
+            let flank = max(0, min(1, (abs(v.dot(along)) - halfWidth) / 0.7))
+            let rise = driveway ? 0 : max(0, min(1, v.dot(outward) / depth))
+            return max(flank, rise)
+        }
+    }
 
     func generate(into mesh: inout DioramaMesh) {
-        // Pavements first, then carriageways on top so junctions read as continuous asphalt.
-        for road in data.roads where road.isPaved {
-            let line = DioramaPolygon.densify(road.line, maxStep: step)
-            let half = road.width / 2
-            let outer = half + config.pavementWidth
-            let top = Self.surfaceLift + config.kerbHeight
+        let ramps = accessRamps()
+        let occupied = data.buildings.map(\.ring) + data.water.compactMap { $0.rings.first }
+        let obstacles = DioramaStreetSurface(occupied.flatMap { ring in
+            let ccw = DioramaPolygon.counterClockwise(ring)
+            return DioramaPolygon.triangulate(ccw).map { [ccw[$0.0], ccw[$0.1], ccw[$0.2]] }
+        })
+        let kerbOuter = DioramaStreetSurface(layout.carriageway.polygons.compactMap { DioramaPolygon.offset($0, by: 0.24) })
+        let pavementMask = DioramaStreetSurface(kerbOuter.polygons + obstacles.polygons + ramps.map(\.polygon))
+        for piece in layout.carriageway.pieces(excluding: obstacles) {
+            let centre = DioramaPolygon.centroid(piece)
+            let swatch: DioramaSwatch = roads.nearest(to: centre, within: 20)?.road.isPaved == false ? .roadEarth : .asphalt
+            surface(piece, lift: Self.surfaceLift, swatch, into: &mesh)
+        }
+        for piece in layout.corridor.pieces(excluding: pavementMask) {
+            let centre = DioramaPolygon.centroid(piece)
+            let paved = roads.nearest(to: centre, within: 20)?.road.isPaved ?? false
+            surface(piece, lift: paved ? Self.surfaceLift + config.kerbHeight : 0.08, paved ? .pavement : .earth, into: &mesh)
+        }
+        // Kerb top: the same boolean annulus as the pavement, never a cap over asphalt.
+        let kerbMask = DioramaStreetSurface(layout.carriageway.polygons + obstacles.polygons + ramps.map(\.polygon))
+        for piece in kerbOuter.pieces(excluding: kerbMask) {
+            let paved = roads.nearest(to: DioramaPolygon.centroid(piece), within: 20)?.road.isPaved == true
+            surface(piece, lift: paved ? Self.surfaceLift + config.kerbHeight - 0.045 : 0.08, paved ? .kerb : .earth, into: &mesh)
+        }
+        for edge in layout.carriageway.boundary() {
+            let mid = (edge.a + edge.b) * 0.5
+            guard roads.nearest(to: mid, within: 20)?.road.isPaved == true else { continue }
+            let out = (edge.b - edge.a).normalized.right
+            for segment in obstacles.outsideSegments(edge.a, edge.b, within: data.rect.expanded(by: -0.3)) {
+            let line = DioramaPolygon.densify([segment.0, segment.1], maxStep: 0.4)
+            for (a, b) in zip(line, line.dropFirst()) {
+                let fa = rampFactor(a, ramps), fb = rampFactor(b, ramps)
+                let za = terrain.height(a) + Self.surfaceLift, zb = terrain.height(b) + Self.surfaceLift
+                let ha = config.kerbHeight * fa, hb = config.kerbHeight * fb
+                let faceA = fa < 0.999 ? ha : max(ha - 0.055, 0)
+                let faceB = fb < 0.999 ? hb : max(hb - 0.055, 0)
+                // Nose bevel leans toward the carriageway; all pieces meet on the shared top edge.
+                mesh.quad(DV3(a - out * 0.045, za), DV3(b - out * 0.045, zb),
+                          DV3(b - out * 0.045, zb + faceB), DV3(a - out * 0.045, za + faceA), .kerb, normal: DV3(-out, 0))
+                // Access patches replace the entire kerb profile; don't lay a bevel through a ramp.
+                if fa > 0.999, fb > 0.999 {
+                    mesh.quad(DV3(a - out * 0.045, za + max(ha - 0.055, 0)), DV3(b - out * 0.045, zb + max(hb - 0.055, 0)),
+                              DV3(b + out * 0.24, pavementHeight(b + out * 0.24, ramps)),
+                              DV3(a + out * 0.24, pavementHeight(a + out * 0.24, ramps)), .kerb, normal: DV3(-out * 0.3, 1).normalized)
+                }
+            }
+            }
+        }
+        for edge in layout.corridor.boundary() {
+            let mid = (edge.a + edge.b) * 0.5
+            guard roads.nearest(to: mid, within: 20)?.road.isPaved == true else { continue }
+            for segment in obstacles.outsideSegments(edge.a, edge.b, within: data.rect.expanded(by: -0.1)) {
+                let line = DioramaPolygon.densify([segment.0, segment.1], maxStep: 0.35)
+                for (a, b) in zip(line, line.dropFirst()) {
+                    mesh.quad(DV3(a, terrain.height(a)), DV3(b, terrain.height(b)),
+                              DV3(b, pavementHeight(b, ramps)), DV3(a, pavementHeight(a, ramps)), .pavement,
+                              normal: DV3((b - a).normalized.right, 0))
+                }
+            }
+        }
+        // Subdivide ramps separately so interpolation cannot flatten a whole pavement block.
+        let rampMask = DioramaStreetSurface(layout.carriageway.polygons + obstacles.polygons)
+        for ramp in ramps {
+            let width = ramp.halfWidth + 0.7
+            for x in stride(from: -width, to: width, by: 0.4) {
+                for y in stride(from: 0.0, to: ramp.depth, by: 0.4) {
+                    let a = ramp.point + ramp.along * x + ramp.outward * y
+                    let b = ramp.point + ramp.along * min(x + 0.4, width) + ramp.outward * y
+                    let c = ramp.point + ramp.along * min(x + 0.4, width) + ramp.outward * min(y + 0.4, ramp.depth)
+                    let d = ramp.point + ramp.along * x + ramp.outward * min(y + 0.4, ramp.depth)
+                    let clipped = DioramaPolygon.clipPolygon([a, b, c, d], to: data.rect)
+                    let tile = DioramaStreetSurface(layout.corridor.intersection(clipped))
+                    for piece in tile.pieces(excluding: rampMask) {
+                        let ccw = DioramaPolygon.counterClockwise(piece)
+                        for (i, j, k) in DioramaPolygon.triangulate(ccw) {
+                            let p = ccw[i], q = ccw[j], r = ccw[k]
+                            mesh.triangle(DV3(p, pavementHeight(p, ramps)), DV3(q, pavementHeight(q, ramps)), DV3(r, pavementHeight(r, ramps)), .pavement)
+                        }
+                    }
+                }
+            }
+        }
+        for road in data.roads where road.isPaved && road.width >= 6 { markings(road, into: &mesh) }
+        junctionPaint(into: &mesh)
+    }
+
+    private func accessRamps() -> [Ramp] {
+        var result: [Ramp] = []
+        for approach in layout.approaches where approach.crossing {
             for side in [-1.0, 1.0] {
-                ribbon(line, from: half * side, to: outer * side, lift: top, .pavement, exclude: road.id, into: &mesh)
-                // Kerb: the small vertical step between pavement and asphalt.
-                wallRibbon(line, offset: half * side, z0: Self.surfaceLift, z1: top, facingOut: side < 0, .kerb, exclude: road.id, into: &mesh)
-                // Outer face so the pavement reads as a raised slab against the grass.
-                wallRibbon(line, offset: outer * side, z0: 0, z1: top, facingOut: side > 0, .pavement, exclude: road.id, into: &mesh)
+                let out = approach.toward.right * side
+                result.append(Ramp(point: approach.point + out * (approach.width / 2), along: approach.toward,
+                                   outward: out, halfWidth: 1.25, depth: config.pavementWidth))
             }
         }
-
-        for road in data.roads {
-            let line = DioramaPolygon.densify(road.line, maxStep: step)
-            let half = road.width / 2
-            let surface: DioramaSwatch = road.isPaved ? .asphalt : .roadEarth
-            ribbon(line, from: -half, to: half, lift: Self.surfaceLift, surface, exclude: nil, into: &mesh)
-            if !road.isPaved {
-                for side in [-1.0, 1.0] {
-                    ribbon(line, from: half * side, to: (half + 1.0) * side, lift: Self.surfaceLift * 0.5, .earth, exclude: road.id, into: &mesh)
-                }
-            }
-            // Round caps at free ends hide the hard rectangular cut-off of each ribbon.
-            for end in [line[0], line[line.count - 1]] where data.rect.expanded(by: -0.5).contains(end) {
-                if !roads.isOnCarriageway(end, margin: -0.5, excluding: road.id) {
-                    disc(at: end, radius: half, lift: Self.surfaceLift, surface, into: &mesh)
-                }
-            }
+        for compound in compounds {
+            guard let gate = compound.gate, let road = roads.nearest(to: gate.point, within: 20), road.road.isPaved else { continue }
+            let out = (gate.point - road.point).normalized
+            let point = road.point + out * (road.road.width / 2)
+            guard layout.paintIsClear(point), !result.contains(where: { $0.point.distance(to: point) < 4 }) else { continue }
+            result.append(Ramp(point: point, along: road.direction, outward: out, halfWidth: config.gateWidth / 2, depth: config.pavementWidth, driveway: true))
         }
-
-        for road in data.roads where road.isPaved {
-            markings(road, into: &mesh)
-        }
-        junctions(into: &mesh)
+        return result
     }
 
-    // MARK: Ribbons
-
-    private func surfaceHeight(_ p: DV2, lift: Double) -> Double { terrain.height(p) + lift }
-
-    /// A piece of pavement/kerb is dropped when its midpoint lies on another street's carriageway.
-    private func blocked(_ a: DV2, _ b: DV2, exclude: UInt64?) -> Bool {
-        guard let exclude else { return false }
-        let mid = (a + b) * 0.5
-        return roads.isOnCarriageway(mid, margin: 0.35, excluding: exclude)
-            || roads.isOnCarriageway(a, margin: -0.2, excluding: exclude)
-            || roads.isOnCarriageway(b, margin: -0.2, excluding: exclude)
+    private func rampFactor(_ p: DV2, _ ramps: [Ramp]) -> Double {
+        ramps.reduce(1) { min($0, $1.factor(at: p)) }
     }
 
-    /// Horizontal strip between two signed offsets from the centreline (positive = right of travel).
-    private func ribbon(_ line: [DV2], from o0: Double, to o1: Double, lift: Double, _ s: DioramaSwatch, exclude: UInt64?, into mesh: inout DioramaMesh) {
-        let n = line.count
-        guard n >= 2 else { return }
-        let normals = mitredNormals(line)
-        for i in 0..<(n - 1) {
-            let a0 = line[i] + normals[i].vector * (o0 * normals[i].scale), a1 = line[i] + normals[i].vector * (o1 * normals[i].scale)
-            let b0 = line[i + 1] + normals[i + 1].vector * (o0 * normals[i + 1].scale), b1 = line[i + 1] + normals[i + 1].vector * (o1 * normals[i + 1].scale)
-            if blocked((a0 + a1) * 0.5, (b0 + b1) * 0.5, exclude: exclude) { continue }
-            mesh.quad(DV3(a0, surfaceHeight(a0, lift: lift)), DV3(b0, surfaceHeight(b0, lift: lift)),
-                      DV3(b1, surfaceHeight(b1, lift: lift)), DV3(a1, surfaceHeight(a1, lift: lift)), s, normal: .up)
+    private func pavementHeight(_ p: DV2, _ ramps: [Ramp]) -> Double {
+        terrain.height(p) + Self.surfaceLift + config.kerbHeight * rampFactor(p, ramps)
+    }
+
+    private func surface(_ polygon: [DV2], lift: Double, _ swatch: DioramaSwatch, into mesh: inout DioramaMesh) {
+        let ring = DioramaPolygon.counterClockwise(DioramaPolygon.clipPolygon(polygon, to: data.rect))
+        for (a, b, c) in DioramaPolygon.triangulate(ring) {
+            mesh.triangle(DV3(ring[a], terrain.height(ring[a]) + lift), DV3(ring[b], terrain.height(ring[b]) + lift), DV3(ring[c], terrain.height(ring[c]) + lift), swatch, normal: .up)
         }
     }
-
-    /// Vertical face along one offset of the centreline.
-    private func wallRibbon(_ line: [DV2], offset o: Double, z0: Double, z1: Double, facingOut: Bool, _ s: DioramaSwatch, exclude: UInt64?, into mesh: inout DioramaMesh) {
-        let n = line.count
-        guard n >= 2 else { return }
-        let normals = mitredNormals(line)
-        for i in 0..<(n - 1) {
-            let a = line[i] + normals[i].vector * (o * normals[i].scale)
-            let b = line[i + 1] + normals[i + 1].vector * (o * normals[i + 1].scale)
-            if blocked(a, b, exclude: exclude) { continue }
-            let ha = terrain.height(a), hb = terrain.height(b)
-            let out = DV3((b - a).normalized.right * (facingOut ? 1 : -1), 0)
-            mesh.quad(DV3(a, ha + z0), DV3(b, hb + z0), DV3(b, hb + z1), DV3(a, ha + z1), s, normal: out)
-        }
-    }
-
-    private func disc(at c: DV2, radius: Double, lift: Double, _ s: DioramaSwatch, into mesh: inout DioramaMesh) {
-        let z = surfaceHeight(c, lift: lift)
-        var ring: [DV2] = []
-        for k in 0..<10 {
-            let a = Double(k) / 10 * 2 * Double.pi
-            ring.append(c + DV2(cos(a), sin(a)) * radius)
-        }
-        mesh.polygon(ring, z: z, s)
-    }
-
-    /// Per-vertex right-hand normals, mitred at bends so ribbon edges stay parallel.
-    private func mitredNormals(_ line: [DV2]) -> [(vector: DV2, scale: Double)] {
-        let n = line.count
-        var out: [(DV2, Double)] = []
-        out.reserveCapacity(n)
-        for i in 0..<n {
-            let prev = i > 0 ? (line[i] - line[i - 1]).normalized.right : nil
-            let next = i < n - 1 ? (line[i + 1] - line[i]).normalized.right : nil
-            switch (prev, next) {
-            case let (p?, q?):
-                let m = (p + q).normalized
-                let cosHalf = max(m.dot(p), 0.5)
-                out.append((m, 1 / cosHalf))
-            case let (p?, nil): out.append((p, 1))
-            case let (nil, q?): out.append((q, 1))
-            default: out.append((DV2(0, 1), 1))
-            }
-        }
-        return out
-    }
-
-    // MARK: Markings
 
     private func markings(_ road: DioramaRoadFeature, into mesh: inout DioramaMesh) {
-        let line = road.line
-        let length = DioramaPolygon.length(line)
-        guard length > 8 else { return }
-        let half = road.width / 2
-        let z = Self.surfaceLift + 0.015
-        if road.width >= 6 {
-            var d = 1.5
-            while d + config.dashLength < length - 1.5 {
-                defer { d += config.dashLength + config.dashGap }
-                guard let s0 = DioramaPolygon.sample(line, at: d), let s1 = DioramaPolygon.sample(line, at: d + config.dashLength) else { break }
-                let mid = (s0.point + s1.point) * 0.5
-                guard !roads.isOnCarriageway(mid, margin: 0.5, excluding: road.id) else { continue }
-                strip(s0.point, s1.point, halfWidth: 0.09, lift: z, .marking, into: &mesh)
+        let length = DioramaPolygon.length(road.line)
+        let period = config.dashLength + config.dashGap
+        let station = layout.paintStations[road.id] ?? (offset: 0, direction: 1)
+        for distance in stride(from: 0.0, to: length - 0.4, by: 0.45) {
+            guard let a = DioramaPolygon.sample(road.line, at: distance),
+                  let b = DioramaPolygon.sample(road.line, at: min(distance + 0.45, length)) else { continue }
+            guard layout.paintIsClear(a.point), layout.paintIsClear(b.point) else { continue }
+            let arc = station.offset + distance * station.direction
+            let phase = (arc.truncatingRemainder(dividingBy: period) + period).truncatingRemainder(dividingBy: period)
+            if phase < config.dashLength {
+                strip(a.point, b.point, halfWidth: 0.09, .marking, into: &mesh)
             }
-        }
-        let dense = DioramaPolygon.densify(line, maxStep: step)
-        for side in [-1.0, 1.0] {
-            ribbon(dense, from: (half - 0.42) * side, to: (half - 0.28) * side, lift: z, .marking, exclude: road.id, into: &mesh)
+            // Quiet residential/service streets do not get motorway-style edge paint.
+            if road.isMain {
+                for side in [-1.0, 1.0] {
+                    let offset = (road.width / 2 - 0.38) * side
+                    strip(a.point + a.direction.right * offset, b.point + b.direction.right * offset, halfWidth: 0.07, .marking, into: &mesh)
+                }
+            }
         }
     }
 
-    private func strip(_ a: DV2, _ b: DV2, halfWidth: Double, lift: Double, _ s: DioramaSwatch, into mesh: inout DioramaMesh) {
+    private func junctionPaint(into mesh: inout DioramaMesh) {
+        for approach in layout.approaches {
+            let across = approach.toward.right
+            let half = approach.width / 2 - 0.4
+            if approach.crossing {
+                for x in stride(from: -half, to: half - 0.4, by: 0.95) {
+                    let c = approach.point + across * (x + 0.23)
+                    strip(c - approach.toward * 1.2, c + approach.toward * 1.2, halfWidth: 0.23, .crossing, into: &mesh)
+                }
+            }
+            // Inferred minor-road priority, not a claim of surveyed traffic-control signage.
+            if approach.yields {
+                let centre = approach.point - approach.toward * (approach.crossing ? 2.1 : 0)
+                for row in [0.0, 0.4] {
+                    for x in stride(from: -half, to: -0.3, by: 0.85) {
+                        let a = centre + across * x - approach.toward * row
+                        strip(a, a + across * 0.5, halfWidth: 0.09, .marking, into: &mesh)
+                    }
+                }
+            }
+        }
+    }
+
+    private func strip(_ a: DV2, _ b: DV2, halfWidth: Double, _ swatch: DioramaSwatch, into mesh: inout DioramaMesh) {
         let n = (b - a).normalized.right * halfWidth
-        let za = surfaceHeight(a, lift: lift), zb = surfaceHeight(b, lift: lift)
-        mesh.quad(DV3(a - n, za), DV3(b - n, zb), DV3(b + n, zb), DV3(a + n, za), s, normal: .up)
-    }
-
-    /// Where a paved street arrives at another paved street: zebra crossing, stop line and a stop sign on
-    /// the near-side pavement (traffic keeps left in Tanzania).
-    private func junctions(into mesh: inout DioramaMesh) {
-        var placed: [DV2] = []
-        for road in data.roads where road.isPaved && road.width >= 6 {
-            let line = road.line
-            let length = DioramaPolygon.length(line)
-            for isStart in [true, false] {
-                let end = isStart ? line[0] : line[line.count - 1]
-                guard data.rect.expanded(by: -6).contains(end) else { continue }
-                guard let other = roads.nearest(to: end, within: 2.5), other.road.id != road.id, other.road.isPaved else { continue }
-                let back = other.road.width / 2 + config.pavementWidth + 1.6
-                guard length > back + 6 else { continue }
-                guard let s = DioramaPolygon.sample(line, at: isStart ? back : length - back) else { continue }
-                guard !placed.contains(where: { $0.distance(to: s.point) < 6 }) else { continue }
-                placed.append(s.point)
-                // Direction of travel towards the junction.
-                let toward = isStart ? -s.direction : s.direction
-                let across = toward.right
-                let half = road.width / 2 - 0.5
-
-                // Zebra stripes across the full width.
-                let stripes = max(Int(road.width / 0.9), 4)
-                let stripeStep = (half * 2) / Double(stripes)
-                for k in stride(from: 0, to: stripes, by: 2) {
-                    let o0 = -half + Double(k) * stripeStep + 0.08, o1 = -half + Double(k + 1) * stripeStep - 0.08
-                    let c0 = s.point + across * o0, c1 = s.point + across * o1
-                    let z = Self.surfaceLift + 0.02
-                    let w = toward * 1.2
-                    let za = surfaceHeight(c0, lift: z), zb = surfaceHeight(c1, lift: z)
-                    mesh.quad(DV3(c0 - w, za), DV3(c1 - w, zb), DV3(c1 + w, zb), DV3(c0 + w, za), .crossing, normal: .up)
-                }
-
-                // Stop line across the approaching (left-hand) lane, just before the crossing.
-                let stopCentre = s.point - toward * 2.0
-                let laneOuter = stopCentre + across.left * 0 - across * half  // left kerb side
-                _ = laneOuter
-                let l0 = stopCentre + across * (-half), l1 = stopCentre + across * 0.15
-                let inward = isStart ? -1.0 : 1.0
-                _ = inward
-                // In left-hand traffic the approaching lane is to the LEFT of `toward`, i.e. negative `across`.
-                strip(l0, l1, halfWidth: 0.2, lift: Self.surfaceLift + 0.02, .marking, into: &mesh)
-
-                // Stop sign on the left pavement, facing approaching traffic.
-                let signSpot = stopCentre - across * (road.width / 2 + config.pavementWidth * 0.5)
-                if data.rect.expanded(by: -1).contains(signSpot), !roads.isOnCarriageway(signSpot, margin: 0.2) {
-                    stopSign(at: signSpot, facing: -toward, into: &mesh)
-                }
-            }
-        }
-    }
-
-    private func stopSign(at p: DV2, facing out: DV2, into mesh: inout DioramaMesh) {
-        let z = terrain.height(p) + Self.surfaceLift + config.kerbHeight
-        mesh.tube(from: DV3(p, z), to: DV3(p, z + 2.6), r0: 0.05, r1: 0.045, sides: 5, .signPost, cap: false)
-        let face = DV3(p + out * 0.06, z + 2.35)
-        mesh.verticalDisc(centre: face - DV3(out * 0.03, 0), radius: 0.46, sides: 8, facing: out, .trimWhite, rotate: Double.pi / 8)
-        mesh.verticalDisc(centre: face, radius: 0.38, sides: 8, facing: out, .stopRed, rotate: Double.pi / 8)
-        mesh.verticalDisc(centre: face - DV3(out * 0.08, 0), radius: 0.44, sides: 8, facing: -out, .signPost, rotate: Double.pi / 8)
-        // A pale "STOP" bar reads at toy scale.
-        let across = out.left
-        mesh.quad(face + DV3(across * -0.26, -0.06), face + DV3(across * 0.26, -0.06), face + DV3(across * 0.26, 0.06), face + DV3(across * -0.26, 0.06), .trimWhite, normal: DV3(out, 0))
+        guard [a - n, a + n, b - n, b + n].allSatisfy({ layout.carriageway.contains($0) && data.rect.contains($0) }) else { return }
+        surface([a - n, b - n, b + n, a + n], lift: Self.surfaceLift + 0.012, swatch, into: &mesh)
     }
 }

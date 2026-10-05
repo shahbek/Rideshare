@@ -578,11 +578,15 @@ nonisolated struct DioramaPropPlacer {
             let z = ground(compound.building.feature.centroid)
             let area = DioramaPolygon.area(compound.ring)
             let bounds = DioramaRect.bounding(compound.ring)
+            func blocksAccess(_ p: DV2, radius: Double) -> Bool {
+                guard let gate = compound.gate else { return false }
+                return DioramaPolygon.distanceToSegment(p, gate.point, compound.building.entrance) < config.gateWidth / 2 + radius
+            }
             let treeCount = max(Int(area / 1000 * config.treesPer1000m2), 1)
             for _ in 0..<treeCount {
                 let p = DV2(crng.range(between: bounds.minX, and: bounds.maxX), crng.range(between: bounds.minY, and: bounds.maxY))
                 guard DioramaPolygon.contains(compound.ring, p), DioramaPolygon.distanceToRing(compound.ring, p) > 1.4 else { continue }
-                guard !compound.building.box.expanded(by: 2.0).contains(p), tryPlace(p, spacing: 5) else { continue }
+                guard !blocksAccess(p, radius: 1.5), !compound.building.box.expanded(by: 2.0).contains(p), tryPlace(p, spacing: 5) else { continue }
                 let roll = crng.unit()
                 if roll < 0.2 {
                     mesh.append(crng.pick(library.palms), DioramaTransform(rotation: crng.range(0...6.28), scale: DV3(1, 1, crng.range(0.8...1.1)), translation: DV3(p, z)))
@@ -596,7 +600,7 @@ nonisolated struct DioramaPropPlacer {
             for _ in 0..<bushCount {
                 let p = DV2(crng.range(between: bounds.minX, and: bounds.maxX), crng.range(between: bounds.minY, and: bounds.maxY))
                 guard DioramaPolygon.contains(compound.ring, p), DioramaPolygon.distanceToRing(compound.ring, p) > 0.8 else { continue }
-                guard !compound.building.box.expanded(by: 0.6).contains(p), isFree(p, radius: 0.6), !isWater(p) else { continue }
+                guard !blocksAccess(p, radius: 0.6), !compound.building.box.expanded(by: 0.6).contains(p), isFree(p, radius: 0.6), !isWater(p) else { continue }
                 let model = crng.chance(0.4) ? crng.pick(library.flowerBushes) : crng.pick(library.bushes)
                 stamp(model, at: p, z: z, rotation: crng.range(0...6.28), scale: crng.range(0.7...1.1))
             }
@@ -606,6 +610,7 @@ nonisolated struct DioramaPropPlacer {
                 let length = a.distance(to: b)
                 let dir = (b - a).normalized
                 let inward = dir.left
+                guard !blocksAccess((a + b) * 0.5, radius: 0.7) else { continue }
                 if !compound.isHedge, crng.chance(config.hedgeChancePerStretch), length > 2.0 {
                     hedge(from: a + dir * 0.3 + inward * 0.7, to: b - dir * 0.3 + inward * 0.7, z: z, into: &mesh)
                 }

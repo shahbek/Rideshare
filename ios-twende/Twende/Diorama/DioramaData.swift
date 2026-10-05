@@ -140,7 +140,7 @@ nonisolated enum DioramaBundledTile {
             case "motorway", "trunk", "primary": width = 12
             case "secondary": width = 10
             case "tertiary": width = 8
-            case "street", "street_limited": width = 6
+            case "street", "street_limited", "residential", "unclassified": width = 6
             case "service": width = 4
             default: width = 5
             }

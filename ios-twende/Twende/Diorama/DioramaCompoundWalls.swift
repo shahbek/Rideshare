@@ -22,14 +22,16 @@ nonisolated struct DioramaCompoundWallGenerator {
     let buildings: [DioramaBuilt]
     let tileRect: DioramaRect
     let terrain: DioramaTerrain
+    let landuse: [DioramaAreaFeature]
     private let grid: DioramaGrid
 
-    init(config: DioramaConfig, roads: DioramaRoadIndex, buildings: [DioramaBuilt], tileRect: DioramaRect, terrain: DioramaTerrain) {
+    init(config: DioramaConfig, roads: DioramaRoadIndex, buildings: [DioramaBuilt], tileRect: DioramaRect, terrain: DioramaTerrain, landuse: [DioramaAreaFeature] = []) {
         self.config = config
         self.roads = roads
         self.buildings = buildings
         self.tileRect = tileRect
         self.terrain = terrain
+        self.landuse = landuse
         var grid = DioramaGrid(cell: 40)
         for (i, b) in buildings.enumerated() {
             grid.insert(i, rect: DioramaRect.bounding(b.feature.ring))
@@ -76,19 +78,50 @@ nonisolated struct DioramaCompoundWallGenerator {
             ring = ring.map { DV2(min(max($0.x, inner.minX), inner.maxX), min(max($0.y, inner.minY), inner.maxY)) }
             guard DioramaPolygon.area(ring) > built.feature.area * 1.15 else { continue }
 
-            // Subdivide each side so individual pieces can be dropped where they would cross something.
+            // Project the actual front door onto the plot boundary. Reserve a full-width gate
+            // BEFORE subdividing; the old 2.5 m pieces could never hold the configured 3.2 m gate.
+            var gateSide = -1
+            var gateCentre: DV2?
+            var gateDistance = Double.infinity
+            for i in ring.indices {
+                let a = ring[i], b = ring[(i + 1) % ring.count], edge = b - a
+                let ray = built.entranceOut
+                let cross = ray.cross(edge)
+                guard abs(cross) > 0.001, edge.length > config.gateWidth + 1 else { continue }
+                let t = (a - built.entrance).cross(edge) / cross
+                let u = (a - built.entrance).cross(ray) / cross
+                guard t > 0, t < gateDistance, u >= 0, u <= 1 else { continue }
+                let margin = (config.gateWidth / 2 + 0.4) / edge.length
+                gateCentre = a + edge * max(margin, min(1 - margin, u))
+                gateSide = i; gateDistance = t
+            }
             var points: [DV2] = []
-            for i in 0..<4 {
-                let a = ring[i], b = ring[(i + 1) % 4]
-                let steps = max(Int(a.distance(to: b) / 2.5), 1)
-                for s in 0..<steps { points.append(a + (b - a) * (Double(s) / Double(steps))) }
+            for i in ring.indices {
+                let a = ring[i], b = ring[(i + 1) % ring.count]
+                func appendSpan(_ p: DV2, _ q: DV2) {
+                    let steps = max(Int(ceil(p.distance(to: q) / 2.5)), 1)
+                    for s in 0..<steps { points.append(p + (q - p) * (Double(s) / Double(steps))) }
+                }
+                if i == gateSide, let centre = gateCentre {
+                    let dir = (b - a).normalized
+                    let l = centre - dir * (config.gateWidth / 2 + 0.3)
+                    let r = centre + dir * (config.gateWidth / 2 + 0.3)
+                    appendSpan(a, l)
+                    points.append(l)
+                    appendSpan(r, b)
+                } else { appendSpan(a, b) }
             }
             let n = points.count
             var gaps = [Bool](repeating: false, count: n)
             for i in 0..<n {
                 let a = points[i], b = points[(i + 1) % n]
                 let mid = (a + b) * 0.5
-                if roads.blocks(a, b, clearance: 1.0) { gaps[i] = true; continue }
+                if roads.blocks(a, b, clearance: config.pavementWidth + 0.3) { gaps[i] = true; continue }
+                if landuse.contains(where: { area in
+                    guard ["pool", "pitch", "parking", "fuel", "terrace"].contains(area.kind), let ring = area.rings.first else { return false }
+                    return DioramaPolygon.contains(ring, mid) || DioramaPolygon.contains(ring, a)
+                        || zip(ring, ring.dropFirst() + [ring[0]]).contains { DioramaPolygon.segmentsIntersect(a, b, $0.0, $0.1) }
+                }) { gaps[i] = true; continue }
                 if neighbours.contains(where: { buildings[$0].box.expanded(by: 0.9).contains(mid) || buildings[$0].box.expanded(by: 0.9).contains(a) }) {
                     gaps[i] = true
                     continue
@@ -108,18 +141,20 @@ nonisolated struct DioramaCompoundWallGenerator {
             let standing = gaps.filter { !$0 }.count
             guard standing >= n * 2 / 5 else { continue }
 
-            // Gate: the standing edge whose midpoint is closest to a road.
             var gate: (DV2, DV2)? = nil
             var gateEdge = -1
-            var bestDistance = Double.infinity
-            for i in 0..<n where !gaps[i] {
-                let mid = (points[i] + points[(i + 1) % n]) * 0.5
-                if let road = roads.nearest(to: mid, within: 25), road.distance < bestDistance {
-                    bestDistance = road.distance
-                    gateEdge = i
-                    gate = (mid, (points[(i + 1) % n] - points[i]).normalized)
+            if let gateCentre {
+                for i in 0..<n where !gaps[i] {
+                    let mid = (points[i] + points[(i + 1) % n]) * 0.5
+                    if mid.distance(to: gateCentre) < 0.05 {
+                        gateEdge = i
+                        gate = (mid, (points[(i + 1) % n] - points[i]).normalized)
+                        break
+                    }
                 }
             }
+            // Do not enclose a home with an inaccessible, gate-less generated boundary.
+            guard gate != nil else { continue }
 
             let isHedge = rng.chance(config.hedgeFenceShare)
             let wallColor: DioramaSwatch = rng.chance(0.5) ? built.wallColor : rng.pick([.whitewash, .cream, .paleYellow])

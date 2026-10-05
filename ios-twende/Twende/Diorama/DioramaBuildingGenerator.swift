@@ -13,6 +13,9 @@ nonisolated struct DioramaBuilt: Sendable {
     let box: DioramaOrientedRect
     let flatRoof: Bool
     let wallColor: DioramaSwatch
+    /// Shared by the gate, driveway and entrance steps. Never target the building centroid.
+    let entrance: DV2
+    let entranceOut: DV2
 }
 
 /// Footprint-led coastal Dar buildings. Residential massing stays low unless mapped height says
@@ -105,17 +108,26 @@ nonisolated struct DioramaBuildingGenerator {
         // Facades: regular window grid, entrance on the front, facade lights.
         let front = frontEdge(ring, flags: flags, centroid: f.centroid)
         let verandaDepth: Double
-        if kind == .villa, front >= 0, f.area / max(box.area, 1) > 0.95, box.halfWidth > 3,
-           ring[front].distance(to: ring[(front + 1) % ring.count]) > 6, rng.chance(config.verandaChance) {
+        if kind != .commercial, front >= 0, f.area / max(box.area, 1) > 0.82, box.halfWidth > 3,
+           ring[front].distance(to: ring[(front + 1) % ring.count]) > 6,
+           kind == .apartments || rng.chance(config.verandaChance) {
             let a = ring[front], b = ring[(front + 1) % ring.count]
-            let inset = (b - a).normalized.left * 1.8
-            let probes = [a * 0.9 + b * 0.1 + inset, a * 0.1 + b * 0.9 + inset, (a + b) * 0.5 + inset]
+            let inward = (b - a).normalized.left
+            let divisions = max(Int(ceil(a.distance(to: b))), 3)
+            let probes = (0...divisions).flatMap { k in
+                let t = 0.02 + 0.96 * Double(k) / Double(divisions)
+                return [0.6, 1.2, 1.8].map { a * (1 - t) + b * t + inward * $0 }
+            }
             verandaDepth = probes.allSatisfy { DioramaPolygon.contains(f.ring, $0) } ? 1.8 : 0
         } else {
             verandaDepth = 0
         }
         let n = ring.count
-        var windowBudget = config.maxWindowsPerBuilding * (kind == .villa ? 1 : 3)
+        let perimeter = zip(ring, ring.dropFirst() + [ring[0]]).reduce(0.0) { $0 + $1.0.distance(to: $1.1) }
+        let budget = config.maxWindowsPerBuilding * (kind == .villa ? 1 : 3)
+        let budgetSpacing = perimeter * Double(floors) / Double(max(budget, 1))
+        var entrance = f.centroid
+        var entranceOut = DV2(0, -1)
         for i in 0..<n where !flags[i] {
             let edgeA = ring[i], edgeB = ring[(i + 1) % n]
             let length = edgeA.distance(to: edgeB)
@@ -131,13 +143,17 @@ nonisolated struct DioramaBuildingGenerator {
                 mesh.wall(edgeA, a, z0: 0.5, z1: height, wallColor)
                 mesh.wall(b, edgeB, z0: 0.5, z1: height, wallColor)
             }
-            let spacing: Double = kind == .villa ? 2.9 : 2.6
-            let width: Double = kind == .villa ? 1.15 : 1.35
+            let spacing = max(kind == .commercial ? 4.6 : (kind == .villa ? 2.9 : 3.4), budgetSpacing)
+            let width: Double = kind == .villa ? 1.3 : 1.6
             let rawColumns = max(Int((length - 1.0) / spacing), 1)
-            let columns = recess > 0 && rawColumns.isMultiple(of: 2) ? rawColumns + 1 : rawColumns
+            let columns = isFront && rawColumns.isMultiple(of: 2) ? max(rawColumns - 1, 1) : rawColumns
             let pitch = length / Double(columns)
             var doorColumn = -1
-            if isFront { doorColumn = columns / 2 }
+            if isFront {
+                doorColumn = columns / 2
+                entrance = (edgeA + edgeB) * 0.5
+                entranceOut = out
+            }
             var litOnFacade = 0
             var litZ = 0.0
 
@@ -149,13 +165,14 @@ nonisolated struct DioramaBuildingGenerator {
                 let z1 = base + storeyHeight - 0.6
                 for c in 0..<columns {
                     let u = pitch * (Double(c) + 0.5)
-                    let isDoor = c == doorColumn && (floor == 0 || recess > 0)
-                    let openingWidth = min(isDoor ? (kind == .villa ? 1.25 : 1.7) : width, pitch - 0.7)
+                    let isShop = kind == .commercial && isFront && floor == 0
+                    let isDoor = isShop || (kind == .apartments && recess > 0) || (c == doorColumn && (floor == 0 || recess > 0))
+                    let openingWidth = isShop ? max(pitch - 0.65, 0.6) : min(isDoor ? (kind == .villa ? 1.25 : 1.7) : width, pitch - 0.7)
                     let lower = isDoor ? wallBottom : z0
                     let upper = isDoor ? base + min(2.65, storeyHeight - 0.35) : z1
                     let cellA = a + dir * (pitch * Double(c))
                     let cellB = cellA + dir * pitch
-                    guard isDoor || windowBudget > 0, openingWidth > 0.5, upper > lower else {
+                    guard openingWidth > 0.5, upper > lower else {
                         mesh.wall(cellA, cellB, z0: wallBottom, z1: wallTop, wallColor)
                         continue
                     }
@@ -167,21 +184,21 @@ nonisolated struct DioramaBuildingGenerator {
                     mesh.wall(left, right, z0: upper, z1: wallTop, wallColor)
                     if isDoor {
                         door(a: a, dir: dir, out: out, u: u, width: openingWidth, bottom: lower, top: upper,
-                             kind: kind, covered: recess > 0, into: &mesh)
+                             kind: kind, covered: recess > 0 || isShop, into: &mesh)
+                        if isShop {
+                            let sign = rng.pick(config.signColors)
+                            mesh.facadeBox(a: a, dir: dir, out: out, u: u, width: openingWidth,
+                                           z0: upper + 0.08, z1: min(upper + 0.38, wallTop - 0.05), depth: 0.12, sign)
+                            awning(a: a, dir: dir, out: out, u: u, width: openingWidth + 0.15,
+                                   z: upper + 0.04, color: rng.pick(config.canopyColors), into: &mesh)
+                        }
                     } else {
-                        windowBudget -= 1
                         let lit = lights && rng.chance(config.litWindowRatio)
                         if lit { litOnFacade += 1; litZ += (lower + upper) / 2 }
                         window(a: a, dir: dir, out: out, u: u, z0: lower, z1: upper,
                                width: openingWidth, hasGrille: kind == .villa, lit: lit, into: &mesh, glow: &glow)
                     }
                 }
-            }
-
-            // Shopfront band on commercial ground floors.
-            if kind == .commercial, isFront || length > 9 {
-                shopfront(a: a, b: b, out: out, rng: &rng, lights: lights, into: &mesh, glow: &glow)
-                litOnFacade += 2; litZ += 3.0
             }
 
             // One warm facade light per lit facade, placed in front of the wall at the mean lit height.
@@ -201,11 +218,11 @@ nonisolated struct DioramaBuildingGenerator {
         if verandaDepth > 0, front >= 0 {
             let a = ring[front], b = ring[(front + 1) % n]
             veranda(a: a, b: b, out: (b - a).normalized.right, depth: verandaDepth,
-                    storeyHeight: storeyHeight, floors: floors, into: &mesh)
+                    storeyHeight: storeyHeight, floors: floors, spacing: max(kind == .villa ? 2.9 : 3.4, budgetSpacing), into: &mesh)
         }
 
         roofFurniture(ring: ring, box: box, height: height, flatRoof: flatRoof, kind: kind, rng: &rng, into: &mesh)
-        return DioramaBuilt(feature: f, kind: kind, floors: floors, height: height, box: box, flatRoof: flatRoof, wallColor: wallColor)
+        return DioramaBuilt(feature: f, kind: kind, floors: floors, height: height, box: box, flatRoof: flatRoof, wallColor: wallColor, entrance: entrance, entranceOut: entranceOut)
     }
 
     private func roofColor(_ rng: inout DioramaRandom) -> DioramaSwatch {
@@ -239,7 +256,7 @@ nonisolated struct DioramaBuildingGenerator {
     }
 
     /// Flat roof with a soft rounded edge: a cream cornice at the top of the wall, then a bevel curving
-    /// inwards to a slate-blue deck, with a low parapet lip.
+    /// inwards to a neutral concrete deck, with a low parapet lip.
     private func softRoof(_ ring: [DV2], flags: [Bool], z: Double, color: DioramaSwatch, into mesh: inout DioramaMesh) {
         let b = config.roofBevel
         let n = ring.count
@@ -330,36 +347,25 @@ nonisolated struct DioramaBuildingGenerator {
         if lit {
             glow.facadeBox(a: a, dir: dir, out: out, u: u, width: width, z0: z0, z1: z1, depth: -0.18, .windowGlow, sides: false)
         }
-        mesh.facadeBox(a: a, dir: dir, out: out, u: u, width: 0.055, z0: z0, z1: z1, depth: -0.15, .frame, sides: false)
+        // Readable joinery rather than subpixel strips: jambs, lintel, mullion and a projecting sill.
+        for side in [-1.0, 1.0] {
+            mesh.facadeBox(a: a, dir: dir, out: out, u: u + side * (width / 2 + 0.045), width: 0.09,
+                           z0: z0 - 0.08, z1: z1 + 0.09, depth: 0.07, .frame)
+        }
+        mesh.facadeBox(a: a, dir: dir, out: out, u: u, width: width + 0.18,
+                       z0: z1, z1: z1 + 0.10, depth: 0.10, .frame)
+        mesh.facadeBox(a: a, dir: dir, out: out, u: u, width: 0.085, z0: z0, z1: z1, depth: -0.10, .frame, sides: false)
         if hasGrille {
             for fraction in [-0.3, 0.3] {
-                mesh.facadeBox(a: a, dir: dir, out: out, u: u + width * fraction, width: 0.025,
+                mesh.facadeBox(a: a, dir: dir, out: out, u: u + width * fraction, width: 0.05,
                                z0: z0, z1: z1, depth: -0.035, .metalCharcoal, sides: false)
             }
             mesh.facadeBox(a: a, dir: dir, out: out, u: u, width: width,
-                           z0: z0 + (z1 - z0) * 0.45, z1: z0 + (z1 - z0) * 0.45 + 0.025,
+                           z0: z0 + (z1 - z0) * 0.45, z1: z0 + (z1 - z0) * 0.45 + 0.05,
                            depth: -0.03, .metalCharcoal, sides: false)
         }
         mesh.facadeBox(a: a, dir: dir, out: out, u: u, width: width + 0.16,
                        z0: z0 - 0.1, z1: z0, depth: 0.14, .trimWhite)
-    }
-
-    private func shopfront(a: DV2, b: DV2, out: DV2, rng: inout DioramaRandom, lights: Bool, into mesh: inout DioramaMesh, glow: inout DioramaMesh) {
-        let dir = (b - a).normalized
-        let length = a.distance(to: b)
-        let units = max(Int(length / 5.0), 1)
-        let unitWidth = length / Double(units)
-        for k in 0..<units {
-            let u = unitWidth * (Double(k) + 0.5)
-            let sign = rng.pick(config.signColors)
-            mesh.facadeBox(a: a, dir: dir, out: out, u: u, width: unitWidth - 0.4, z0: 2.7, z1: 3.25, depth: 0.12, sign)
-            let blocks = rng.int(2...4)
-            for j in 0..<blocks {
-                let bu = u - (unitWidth - 1.4) / 2 + (unitWidth - 1.4) * (Double(j) + 0.5) / Double(blocks)
-                mesh.facadeBox(a: a, dir: dir, out: out, u: bu, width: 0.45, z0: 2.85, z1: 3.1, depth: 0.14, .trimWhite, sides: false)
-            }
-            awning(a: a, dir: dir, out: out, u: u, width: unitWidth - 0.6, z: 2.6, color: rng.pick(config.canopyColors), into: &mesh)
-        }
     }
 
     private func awning(a: DV2, dir: DV2, out: DV2, u: Double, width: Double, z: Double, color: DioramaSwatch, into mesh: inout DioramaMesh) {
@@ -373,14 +379,14 @@ nonisolated struct DioramaBuildingGenerator {
 
     /// Recessed outdoor room inside the mapped envelope, not a second roof glued onto the facade.
     private func veranda(a: DV2, b: DV2, out: DV2, depth: Double, storeyHeight: Double,
-                         floors: Int, into mesh: inout DioramaMesh) {
+                         floors: Int, spacing: Double, into mesh: inout DioramaMesh) {
         let dir = (b - a).normalized
         let length = a.distance(to: b)
         let slab = DioramaPolygon.counterClockwise([a, b, b - out * depth, a - out * depth])
         let span = length - 0.4
         // An odd bay count leaves the central doorway in a clear span; match the facade grid.
-        let rawBays = max(Int((length - 1.0) / 2.9), 1)
-        let bays = rawBays.isMultiple(of: 2) ? rawBays + 1 : rawBays
+        let rawBays = max(Int((length - 1.0) / spacing), 1)
+        let bays = rawBays.isMultiple(of: 2) ? max(rawBays - 1, 1) : rawBays
         for floor in 0..<floors {
             let base = floor == 0 ? 0.5 : Double(floor) * storeyHeight
             let ceiling = Double(floor + 1) * storeyHeight
@@ -389,7 +395,8 @@ nonisolated struct DioramaBuildingGenerator {
             mesh.box(centre: (a + b) * 0.5 - out * 0.12, z0: ceiling - 0.34, axis: dir,
                      halfLength: length / 2, halfWidth: 0.15, height: 0.34, .trimWhite)
             for k in 0...bays {
-                let p = a + dir * (0.2 + span * Double(k) / Double(bays)) - out * 0.15
+                let position = k == 0 ? 0.15 : (k == bays ? length - 0.15 : length * Double(k) / Double(bays))
+                let p = a + dir * position - out * 0.15
                 mesh.box(centre: p, z0: base, axis: dir, halfLength: 0.15, halfWidth: 0.15,
                          height: ceiling - base - 0.34, .trimWhite)
             }

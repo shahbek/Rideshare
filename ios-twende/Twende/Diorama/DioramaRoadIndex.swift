@@ -44,11 +44,12 @@ nonisolated struct DioramaRoadIndex: Sendable {
     }
 
     /// Closest point on any road within `radius`, with the road's heading there.
-    func nearest(to p: DV2, within radius: Double) -> (point: DV2, direction: DV2, road: DioramaRoadFeature, distance: Double)? {
+    func nearest(to p: DV2, within radius: Double, excluding: UInt64? = nil) -> (point: DV2, direction: DV2, road: DioramaRoadFeature, distance: Double)? {
         var best: (DV2, DV2, DioramaRoadFeature, Double)? = nil
         let query = DioramaRect(minX: p.x - radius, minY: p.y - radius, maxX: p.x + radius, maxY: p.y + radius)
-        for index in grid.query(query) {
+        for index in grid.query(query).sorted() {
             let seg = segments[index]
+            if roads[seg.road].id == excluding { continue }
             let q = DioramaPolygon.closestPointOnSegment(p, seg.a, seg.b)
             let d = p.distance(to: q)
             if d < radius, d < (best?.3 ?? .infinity) {

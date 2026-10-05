@@ -51,6 +51,7 @@ nonisolated enum DioramaTileGenerator {
 
         let roadIndex = DioramaRoadIndex(roads: data.roads, pavementWidth: config.pavementWidth)
         let terrain = DioramaTerrain.load(rect: data.rect, config: config)
+        let streetLayout = DioramaStreetLayout(data: data, config: config)
         var buildings = DioramaMesh()
         var windowGlow = DioramaMesh()
         var walls = DioramaMesh()
@@ -70,11 +71,11 @@ nonisolated enum DioramaTileGenerator {
             built.append(builder.build(feature, into: &buildings, glow: &windowGlow, lights: true, pointLights: &porchLights))
         }
 
-        let wallGenerator = DioramaCompoundWallGenerator(config: config, roads: roadIndex, buildings: built, tileRect: data.rect, terrain: terrain)
+        let wallGenerator = DioramaCompoundWallGenerator(config: config, roads: roadIndex, buildings: built, tileRect: data.rect, terrain: terrain, landuse: data.landuse)
         let compounds = wallGenerator.generate(into: &walls)
 
-        DioramaGroundGenerator(config: config, data: data, roads: roadIndex, terrain: terrain, cutouts: DioramaGroundCutouts(data: data, pavementWidth: config.pavementWidth)).generate(compounds: compounds, into: &ground, water: &water)
-        DioramaRoadGenerator(config: config, data: data, roads: roadIndex, terrain: terrain).generate(into: &roadsMesh)
+        DioramaGroundGenerator(config: config, data: data, roads: roadIndex, terrain: terrain, cutouts: DioramaGroundCutouts(data: data, pavementWidth: config.pavementWidth, streetPolygons: streetLayout.corridor.polygons)).generate(compounds: compounds, into: &ground, water: &water)
+        DioramaRoadGenerator(config: config, data: data, roads: roadIndex, terrain: terrain, layout: streetLayout, compounds: compounds).generate(into: &roadsMesh)
 
         let amenities = DioramaAmenityGenerator(config: config, data: data, roads: roadIndex, library: library, buildings: built, terrain: terrain)
         amenities.generate(ground: &ground, props: &props, glow: &propGlow, lights: &lights)
@@ -119,6 +120,7 @@ nonisolated enum DioramaTileGenerator {
                 case .asphalt: texture = 3
                 case .paving, .pavement, .concrete: texture = 4
                 case .poolBlue: texture = 5
+                case .glass, .glassPale: texture = 6
                 default: texture = 0
                 }
                 let attribute = i < mesh.attributes.count ? mesh.attributes[i] : 0

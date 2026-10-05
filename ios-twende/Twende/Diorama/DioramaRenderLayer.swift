@@ -38,6 +38,7 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
     private var reflectionColor: MTLTexture?
     private var reflectionDepth: MTLTexture?
     private var blankReflection: MTLTexture?
+    private var shadowMap: DioramaShadowMap?
     private let lock = NSLock()
     private var visible: Set<DioramaCategory>
     private var timeOfDay: DioramaTimeOfDay
@@ -105,6 +106,7 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
         do {
             pipeline = try metalDevice.makeRenderPipelineState(descriptor: descriptor(color: colorFormat, depth: depthFormat, stencil: true))
             reflectionPipeline = try metalDevice.makeRenderPipelineState(descriptor: descriptor(color: .bgra8Unorm, depth: .depth32Float, stencil: false))
+            shadowMap = DioramaShadowMap(device: metalDevice, library: library, vertices: vertices)
             depthState = metalDevice.makeDepthStencilState(descriptor: depth)
             noWriteDepthState = metalDevice.makeDepthStencilState(descriptor: noWrite)
 
@@ -196,6 +198,12 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
         // Wrapped so the float stays precise however long the map is open; 1.7 s into the cycle when frozen.
         uniforms.params.y = animates ? Float((CACurrentMediaTime() - startTime).truncatingRemainder(dividingBy: 3600)) : 1.7
 
+        if let shadowMap, let shadowMatrix = shadowMap.update(command: mtlCommandBuffer, vertices: vertexBuffer, indices: indexBuffer, ranges: drawn,
+            sun: SIMD3(uniforms.sunDirection.x, uniforms.sunDirection.y, uniforms.sunDirection.z), preset: timeOfDay) {
+            uniforms.shadowMatrix = shadowMatrix
+            uniforms.shadowParams = SIMD4(1, 1.0 / 2048.0, 0.00006, 0)
+        }
+
         let wantsReflection = visible.contains(.water) && ranges.contains { $0.category == .water && $0.count > 0 }
         var reflectionTexture: MTLTexture? = blankReflection
 
@@ -228,6 +236,7 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
                     encoder.setFragmentBuffer(lightTableBuffer, offset: 0, index: 2)
                     encoder.setFragmentBuffer(lightIndexBuffer, offset: 0, index: 3)
                     encoder.setFragmentTexture(blankReflection, index: 0)
+                    encoder.setFragmentTexture(shadowMap?.texture, index: 1)
                     for range in drawn where range.category != .water && range.category != .ground {
                         encoder.setDepthStencilState(range.category == .propGlow ? noWriteDepthState : depthState)
                         encoder.drawIndexedPrimitives(type: .triangle, indexCount: range.count, indexType: .uint32, indexBuffer: indexBuffer, indexBufferOffset: range.start * MemoryLayout<UInt32>.stride)
@@ -253,6 +262,7 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
         encoder.setFragmentBuffer(lightTableBuffer, offset: 0, index: 2)
         encoder.setFragmentBuffer(lightIndexBuffer, offset: 0, index: 3)
         encoder.setFragmentTexture(reflectionTexture, index: 0)
+        encoder.setFragmentTexture(shadowMap?.texture, index: 1)
         for range in drawn {
             encoder.setDepthStencilState(range.category == .propGlow ? noWriteDepthState : depthState)
             encoder.drawIndexedPrimitives(type: .triangle, indexCount: range.count, indexType: .uint32, indexBuffer: indexBuffer, indexBufferOffset: range.start * MemoryLayout<UInt32>.stride)
@@ -273,6 +283,7 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
         reflectionColor = nil
         reflectionDepth = nil
         blankReflection = nil
+        shadowMap = nil
     }
 
     private func setDiagnostic(_ text: String) {

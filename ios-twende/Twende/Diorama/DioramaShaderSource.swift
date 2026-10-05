@@ -16,6 +16,9 @@ nonisolated struct DioramaShaderUniforms {
     var lightGrid: SIMD4<Float>
     /// x: water surface height, y: clip plane enabled, z/w: reflection texture size.
     var water: SIMD4<Float>
+    var shadowMatrix: simd_float4x4
+    /// x: shadow enabled, y: texel size, z: depth bias.
+    var shadowParams: SIMD4<Float>
 }
 
 /// Lighting presets per time of day: a warm low sun and violet sky at dusk (the default), a cool
@@ -51,7 +54,9 @@ nonisolated enum DioramaLighting {
             groundColor: SIMD4<Float>(ground, 1),
             params: SIMD4<Float>(glow, 0, time.shaderIndex, 0),
             lightGrid: .zero,
-            water: .zero
+            water: .zero,
+            shadowMatrix: matrix_identity_float4x4,
+            shadowParams: .zero
         )
     }
 }
@@ -84,6 +89,8 @@ nonisolated enum DioramaShaderSource {
         float4 params;
         float4 lightGrid;
         float4 water;
+        float4x4 shadowMatrix;
+        float4 shadowParams;
     };
 
     struct DioramaLight {
@@ -138,6 +145,29 @@ nonisolated enum DioramaShaderSource {
         return out;
     }
 
+    vertex float4 dioramaShadowVertex(uint id [[vertex_id]],
+                                      const device DioramaInput *vertices [[buffer(0)]],
+                                      constant float4x4 &matrix [[buffer(1)]]) {
+        return matrix * vertices[id].position;
+    }
+
+    float dioramaShadow(float3 p, float3 n, constant DioramaUniforms &u, depth2d<float> shadowMap) {
+        if (u.shadowParams.x < 0.5) return 1.0;
+        float4 projected = u.shadowMatrix * float4(p + n * 0.025, 1.0);
+        float3 q = projected.xyz / projected.w;
+        float2 uv = float2(q.x * 0.5 + 0.5, 0.5 - q.y * 0.5);
+        if (any(uv < float2(0.002)) || any(uv > float2(0.998)) || q.z <= 0.0 || q.z >= 1.0) return 1.0;
+        constexpr sampler shadowSampler(coord::normalized, address::clamp_to_edge, filter::linear, compare_func::less_equal);
+        float bias = u.shadowParams.z * (1.0 + 2.0 * (1.0 - saturate(dot(n, u.sunDirection.xyz))));
+        float visibility = 0.0;
+        for (int y = -1; y <= 1; y++) {
+            for (int x = -1; x <= 1; x++) {
+                visibility += shadowMap.sample_compare(shadowSampler, uv + float2(x, y) * u.shadowParams.y, q.z - bias);
+            }
+        }
+        return visibility / 9.0;
+    }
+
     float dioramaHash(float2 p) {
         return fract(sin(dot(p, float2(127.1, 311.7))) * 43758.5453);
     }
@@ -178,7 +208,8 @@ nonisolated enum DioramaShaderSource {
                                     const device DioramaLight *lights [[buffer(1)]],
                                     const device uint2 *lightTable [[buffer(2)]],
                                     const device uint *lightIndices [[buffer(3)]],
-                                    texture2d<float> reflection [[texture(0)]]) {
+                                    texture2d<float> reflection [[texture(0)]],
+                                    depth2d<float> shadowMap [[texture(1)]]) {
         float code = in.appearance.w;
         float glow = u.params.x;
         bool mirrored = u.params.w > 0.5;
@@ -219,16 +250,16 @@ nonisolated enum DioramaShaderSource {
             albedo *= 0.98 + 0.04 * (dioramaNoise(wp * 0.6) - 0.5);
         }
 
-        float hemi = n.z * 0.5 + 0.5;
-        float3 ambient = mix(u.groundColor.rgb, u.skyColor.rgb, hemi);
-        float ndl = dot(n, u.sunDirection.xyz);
-        float sun = saturate(ndl * 0.7 + 0.3);
-        float3 light = ambient * 0.95 + u.sunColor.rgb * sun;
-
-        // Point lights use the un-mirrored world position so reflections are lit like the originals.
+        // Shadows and lighting always use the original scene, including in the reflection pass.
         float3 litPos = in.worldPosition;
         float3 litN = n;
         if (mirrored) { litPos.z = 2.0 * u.water.x - litPos.z; litN.z = -litN.z; }
+        float hemi = litN.z * 0.5 + 0.5;
+        float3 ambient = mix(u.groundColor.rgb, u.skyColor.rgb, hemi);
+        float ndl = dot(litN, u.sunDirection.xyz);
+        float sun = max(ndl, 0.0);
+        float visibility = dioramaShadow(litPos, litN, u, shadowMap);
+        float3 light = ambient * 0.78 + u.sunColor.rgb * sun * visibility;
         float3 pointLight = dioramaPointLights(litPos, litN, u, lights, lightTable, lightIndices);
         light += pointLight * glow;
 
@@ -294,7 +325,12 @@ nonisolated enum DioramaShaderSource {
             return float4(color, 1.0);
         }
 
-        float rim = pow(1.0 - saturate(dot(n, view)), 4.0) * 0.08;
+        if (tex > 5.5 && tex < 6.5) {
+            // Glass has a quiet sky reflection, unlike matte plaster; never a white plastic highlight.
+            float fresnel = 0.08 + 0.32 * pow(1.0 - saturate(dot(n, view)), 4.0);
+            color = mix(color, u.skyColor.rgb * 0.8, fresnel);
+        }
+        float rim = pow(1.0 - saturate(dot(n, view)), 4.0) * 0.035;
         color += u.skyColor.rgb * rim;
         return float4(color, 1.0);
     }

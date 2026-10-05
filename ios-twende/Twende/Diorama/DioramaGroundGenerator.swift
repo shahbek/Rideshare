@@ -99,19 +99,19 @@ nonisolated struct DioramaGroundGenerator {
 
     private func compoundGround(_ compounds: [DioramaCompound], into mesh: inout DioramaMesh) {
         for compound in compounds {
-            var rng = DioramaRandom(seed: compound.building.feature.id, salt: 11)
             let plot = DioramaPolygon.offset(compound.ring, by: -0.35) ?? compound.ring
             draped(plot, lift: 0.02, .lawn, into: &mesh)
             if let gate = compound.gate {
-                let house = compound.building.box
-                let toHouse = house.centre - gate.point
-                let length = max(toHouse.length - min(house.halfLength, house.halfWidth) * 0.5, 2)
-                let dir = toHouse.normalized
-                let across = dir.left
-                let width = rng.range(1.5...1.9)
-                let a = gate.point - across * width, b = gate.point + across * width
-                let c = gate.point + dir * length + across * width, d = gate.point + dir * length - across * width
-                draped([a, b, c, d], lift: 0.09, .paving, into: &mesh)
+                let entrance = compound.building.entrance + compound.building.entranceOut * 0.4
+                let dir = (entrance - gate.point).normalized
+                let across = dir.left * (config.gateWidth / 2 - 0.15)
+                draped([gate.point - across, gate.point + across, entrance + across, entrance - across], lift: 0.09, .paving, into: &mesh)
+                if let road = roads.nearest(to: gate.point, within: 25) {
+                    let out = (gate.point - road.point).normalized
+                    let kerb = road.point + out * roads.corridorHalfWidth(road.road)
+                    let side = road.direction * (config.gateWidth / 2)
+                    draped([kerb - side, kerb + side, gate.point + side, gate.point - side], lift: 0.09, .paving, into: &mesh)
+                }
             }
         }
     }
