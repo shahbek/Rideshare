@@ -142,15 +142,26 @@ nonisolated struct DioramaHotelGrounds {
         }
     }
 
-    /// Local aprons, not a hull across the waterfront. Disjoint union preserves existing amenities.
+    /// Local joined aprons, not a hull across the waterfront. Paint unions overlaps after exclusions.
     private func surroundings(ground: inout DioramaMesh, props: inout DioramaMesh, vegetation: inout DioramaMesh) {
         let landmarks = data.buildings.filter { Self.hasSlipwayApron($0.id) }
         var aprons: [[DV2]] = []
         for building in landmarks {
-            let ring = building.ring
-            for i in ring.indices {
-                let a = ring[i], b = ring[(i + 1) % ring.count], out = (b - a).normalized.right
-                aprons.append(DioramaPolygon.counterClockwise([a, b, b + out * 6, a + out * 6]))
+            let ring = DioramaPolygon.counterClockwise(building.ring)
+            if let outline = DioramaPolygon.offset(ring, by: 6) {
+                aprons.append(outline)
+            } else {
+                // Joined strips: fill the convex corner sector as well as each edge rectangle.
+                for i in ring.indices {
+                    let a = ring[i], b = ring[(i + 1) % ring.count]
+                    let previous = ring[(i + ring.count - 1) % ring.count]
+                    let out = (b - a).normalized.right
+                    let incoming = (a - previous).normalized.right
+                    aprons.append(DioramaPolygon.counterClockwise([a, b, b + out * 6, a + out * 6]))
+                    if (a - previous).cross(b - a) > 0 {
+                        aprons.append(DioramaPolygon.counterClockwise([a, a + incoming * 6, a + out * 6]))
+                    }
+                }
             }
         }
         let preserved = data.water.compactMap { $0.rings.first }
@@ -158,7 +169,9 @@ nonisolated struct DioramaHotelGrounds {
             + data.landuse.filter { ["pool", "pitch", "parking", "fuel", "terrace"].contains($0.kind) }.compactMap { $0.rings.first }
             + [data.hotelCourtyardOutline, data.hotelDiningOutline, Self.stairOutline(data: data)]
         let cutouts = DioramaGroundCutouts(data: data, pavementWidth: 1.2, streetPolygons: streetPolygons, additionalMasks: preserved)
-        let pieces = DioramaStreetSurface(aprons).pieces().flatMap { cutouts.subtract(from: $0) }
+        // Outward outlines can be concave; the street union accepts convex inputs only.
+        // The painter unions these independent pieces without expensive pairwise subtraction.
+        let pieces = aprons.flatMap { cutouts.subtract(from: $0) }
         pave(pieces)
         var planted: [DV2] = []
         for building in landmarks {
@@ -261,7 +274,7 @@ nonisolated struct DioramaHotelGrounds {
 
     /// Hotel paving is paint on the ground image; the boolean pieces still decide where furniture may go.
     private func pave(_ pieces: [[DV2]], swatch: DioramaSwatch = .tileClay) {
-        painter.fill(pieces, swatch)
+        painter.fillPieces(pieces, swatch)
     }
 
     private func flowerPlanter(at p: DV2, z: Double, props: inout DioramaMesh, vegetation: inout DioramaMesh) {

@@ -14,7 +14,7 @@ nonisolated struct DioramaGroundImage: Sendable {
 /// slivers; later fills simply cover earlier ones with anti-aliased edges.
 nonisolated final class DioramaGroundPainter {
     nonisolated enum Material: UInt8, Sendable {
-        case plain = 0, grass = 1, sand = 2, asphalt = 3, paving = 4
+        case plain = 0, grass = 1, sand = 2, asphalt = 3, paving = 4, clay = 7
         var shade: CGFloat { CGFloat(rawValue) * 32 / 255 }
     }
 
@@ -56,7 +56,8 @@ nonisolated final class DioramaGroundPainter {
         case .grass, .lawn, .pitchGreen, .hedge: .grass
         case .earth, .wetSand, .seabed, .soil: .sand
         case .asphalt, .roadEarth: .asphalt
-        case .paving, .pavement, .concrete, .tileClay, .courtyard, .kerb, .parkEdge: .paving
+        case .paving, .pavement, .concrete, .courtyard, .kerb, .parkEdge: .paving
+        case .tileClay: .clay
         default: .plain
         }
     }
@@ -98,6 +99,17 @@ nonisolated final class DioramaGroundPainter {
         for context in [color, material] {
             context.addPath(path)
             context.fillPath(using: .evenOdd)
+        }
+    }
+
+    /// Independent filled pieces are a union, not an even-odd polygon with holes. Nonzero winding
+    /// avoids cancellation and antialiased cracks along shared boolean-piece edges.
+    func fillPieces(_ pieces: [[DV2]], _ swatch: DioramaSwatch) {
+        guard let path = Self.path(pieces.map { DioramaPolygon.counterClockwise($0) }) else { return }
+        set(swatch, stroke: false)
+        for context in [color, material] {
+            context.addPath(path)
+            context.fillPath(using: .winding)
         }
     }
 

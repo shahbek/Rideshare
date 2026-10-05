@@ -24,38 +24,58 @@ nonisolated struct DioramaGroundGenerator {
     /// Paints the sea floor last so coastal paving and lawns stop exactly at the mapped water edge.
     func paintWater() {
         for area in data.water {
-            painter.fill(area.rings.map { DioramaPolygon.clipPolygon($0, to: data.rect) }, .seabed)
+            painter.fill(area.rings.map { DioramaPolygon.clipPolygon($0, to: data.rect) }, .grass)
         }
     }
 
     // MARK: Plate
 
-    /// Land and seabed are two drapes of the same lattice split exactly at the mapped water edge, the
-    /// one authoritative coastline. Both are cut away under the swept shoreline bands so the profiles
-    /// never intersect the plate. Vertices carry the `painted` swatch, so the shader looks their
-    /// colour and grain up in the ground image instead of the palette.
+    /// One indexed heightfield, without polygon subtraction, coastal holes or overlapping bank skins.
+    /// Shared normals and interpolated natural pigment join seabed → wet sand → dry sand → grass.
     private func plate(into mesh: inout DioramaMesh) {
-        let r = data.rect
-        let corners = [DV2(r.minX, r.minY), DV2(r.maxX, r.minY), DV2(r.maxX, r.maxY), DV2(r.minX, r.maxY)]
-        let bands = DioramaShorelineGenerator.coverage(data.shorelines, config: config, terrain: terrain)
-        let waterRings = data.water.compactMap { $0.rings.first }
-        let landCut = DioramaGroundCutouts(polygons: waterRings + bands)
-        for piece in landCut.subtract(from: corners) {
-            terrain.drape(piece, lift: 0, swatch: .painted, into: &mesh)
+        let columns = terrain.latticeColumns, rows = terrain.latticeRows
+        let base = UInt32(mesh.positions.count)
+        let uv = DioramaAtlas.uv(.painted, dark: false)
+        let savedTint = mesh.tint
+        func pigment(_ swatch: DioramaSwatch) -> SIMD3<Float> {
+            let c = DioramaAtlas.color(swatch, dark: false, config: config)
+            return SIMD3(c.x, c.y, c.z)
         }
-        let bandCut = DioramaGroundCutouts(polygons: bands)
-        for area in data.water {
-            guard let outer = area.rings.first else { continue }
-            let holes = DioramaGroundCutouts(polygons: Array(area.rings.dropFirst()))
-            for piece in holes.subtract(from: DioramaPolygon.clipPolygon(outer, to: r)) {
-                for part in bandCut.subtract(from: piece) {
-                    terrain.drape(part, lift: 0, swatch: .painted, surface: .sea, into: &mesh)
+        let dry = pigment(.earth), wet = pigment(.wetSand), bed = pigment(.seabed)
+        mesh.reserve(columns * rows)
+        for row in 0..<rows {
+            for column in 0..<columns {
+                let p = terrain.latticePoint(column: column, row: row)
+                let left = terrain.latticePoint(column: max(0, column - 1), row: row)
+                let right = terrain.latticePoint(column: min(columns - 1, column + 1), row: row)
+                let down = terrain.latticePoint(column: column, row: max(0, row - 1))
+                let up = terrain.latticePoint(column: column, row: min(rows - 1, row + 1))
+                let dx = (terrain.height(right) - terrain.height(left)) / max(right.x - left.x, 0.001)
+                let dy = (terrain.height(up) - terrain.height(down)) / max(up.y - down.y, 0.001)
+                let near = terrain.coast?.nearest(p, within: 30)
+                let isSea = terrain.coast?.isWater(p) == true
+                let distance = near?.distance ?? 30
+                let coverage: Float
+                if isSea {
+                    coverage = 1
+                    let t = Float(DioramaTerrain.smooth(distance / 24))
+                    mesh.tint = wet * (1 - t) + bed * t
+                } else {
+                    let width = near?.kind == .beach ? config.beachWidth * 0.65 : config.revetmentWidth * 0.5
+                    coverage = near?.kind.easesToWater == true ? Float(1 - DioramaTerrain.smooth(distance / width)) : 0
+                    let t = Float(DioramaTerrain.smooth(distance / 3))
+                    mesh.tint = wet * (1 - t) + dry * t
                 }
+                mesh.vertex(DV3(p, terrain.height(p)), DV3(-dx, -dy, 1).normalized, uv, attribute: coverage)
             }
-            for ring in area.rings.dropFirst() {
-                for part in bandCut.subtract(from: DioramaPolygon.clipPolygon(ring, to: r)) {
-                    terrain.drape(part, lift: 0, swatch: .painted, into: &mesh)
-                }
+        }
+        mesh.tint = savedTint
+        for row in 0..<(rows - 1) {
+            for column in 0..<(columns - 1) {
+                let a = base + UInt32(row * columns + column), b = a + 1
+                let d = a + UInt32(columns), c = d + 1
+                mesh.face(a, b, c)
+                mesh.face(a, c, d)
             }
         }
         painter.fillAll(.grass)

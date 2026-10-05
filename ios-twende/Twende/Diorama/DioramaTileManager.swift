@@ -56,7 +56,6 @@ final class DioramaTileManager {
     private var basemapTerrainSuppressed: Bool = false
     private let state: DioramaState
     private let styling: DioramaMapStyling
-    private let library: DioramaPropLibrary
     private weak var map: MapboxMap?
 
     private enum Status {
@@ -97,7 +96,6 @@ final class DioramaTileManager {
         self.state = state ?? .shared
         tile = DioramaTileID(latitude: config.seedLatitude, longitude: config.seedLongitude, zoom: config.tileZoom)
         styling = DioramaMapStyling(config: config)
-        library = DioramaPropLibrary(config: config)
         settingsObserver = NotificationCenter.default.addObserver(forName: DioramaState.renderSettingsChanged, object: self.state, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.scheduleUpdate(delay: 0) }
         }
@@ -108,6 +106,7 @@ final class DioramaTileManager {
                 guard reduced != self.thermalReduced else { return }
                 self.thermalReduced = reduced
                 self.renderLayer?.setReducedEffects(self.reducesEffects)
+                self.updateEffectStatus()
                 self.updateWaterClock()
                 self.map?.triggerRepaint()
             }
@@ -116,6 +115,7 @@ final class DioramaTileManager {
             MainActor.assumeIsolated {
                 guard let self else { return }
                 self.renderLayer?.setReducedEffects(self.reducesEffects)
+                self.updateEffectStatus()
                 self.updateWaterClock()
                 self.map?.triggerRepaint()
             }
@@ -246,6 +246,17 @@ final class DioramaTileManager {
         }
     }
 
+    private func updateEffectStatus() {
+        guard shown else { return }
+        if thermalReduced {
+            state.status = "Slipway loaded · bloom/AO off (thermal)"
+        } else if ProcessInfo.processInfo.isLowPowerModeEnabled {
+            state.status = "Slipway loaded · bloom/AO off (Low Power)"
+        } else {
+            state.status = "Slipway loaded · full effects"
+        }
+    }
+
     // MARK: Generation
 
     /// Builds the tile from bundled data only. Nothing is read from the live map, so the result is
@@ -254,12 +265,19 @@ final class DioramaTileManager {
         status = .generating
         state.status = "Generating Slipway…"
         let config = self.config
-        let library = self.library
         let reduced = thermalReduced
         Task.detached(priority: .userInitiated) {
             let artifacts: DioramaTileArtifacts?
-            if let data = DioramaBundledTile.load(config: config), !data.isEmpty {
+            let started = Date()
+            let tile = DioramaTileID(latitude: config.seedLatitude, longitude: config.seedLongitude, zoom: config.tileZoom)
+            if let cached = DioramaTileGenerator.cached(tile, config: config, reduced: reduced) {
+                artifacts = cached
+            } else if let data = DioramaBundledTile.load(config: config), !data.isEmpty {
                 do {
+                    // Prototype construction used to block the main thread at map-manager init,
+                    // even when the diorama was off. Build lazily here, after checking the cache.
+                    let library = DioramaPropLibrary(config: config)
+                    print("[Diorama timing] bundle + prototypes: \(String(format: "%.3f", Date().timeIntervalSince(started)))s")
                     artifacts = try DioramaTileGenerator.generate(data, config: config, library: library, reduced: reduced)
                 } catch {
                     print("[Diorama] generate failed: \(error)")
@@ -323,7 +341,7 @@ final class DioramaTileManager {
             host.setWireframe(state.showsWireframe)
             appliedWireframe = state.showsWireframe
             state.loadedTiles[tile] = artifacts
-            state.status = "Slipway loaded" + (thermalReduced ? " · reduced detail (thermal)" : "")
+            updateEffectStatus()
             updateWaterClock()
             map.triggerRepaint()
         } catch {

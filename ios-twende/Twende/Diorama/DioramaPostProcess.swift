@@ -259,8 +259,8 @@ nonisolated final class DioramaPostProcess {
         screenPass(quarterB, pipeline: blurColorPipeline, sources: [quarterA], post: post(for: quarterB, blur: SIMD2(1, 0)), label: "Diorama bloom blur 1H")
         screenPass(quarterA, pipeline: blurColorPipeline, sources: [quarterB], post: post(for: quarterA, blur: SIMD2(0, 1)), label: "Diorama bloom blur 1V")
         screenPass(eighthA, pipeline: copyPipeline, sources: [quarterA], post: post(for: eighthA), label: "Diorama bloom down 2")
-        screenPass(eighthB, pipeline: blurColorPipeline, sources: [eighthA], post: post(for: eighthB, blur: SIMD2(1.5, 0)), label: "Diorama bloom blur 2H")
-        screenPass(eighthA, pipeline: blurColorPipeline, sources: [eighthB], post: post(for: eighthA, blur: SIMD2(0, 1.5)), label: "Diorama bloom blur 2V")
+        screenPass(eighthB, pipeline: blurColorPipeline, sources: [eighthA], post: post(for: eighthB, blur: SIMD2(2.5, 0)), label: "Diorama bloom blur 2H")
+        screenPass(eighthA, pipeline: blurColorPipeline, sources: [eighthB], post: post(for: eighthA, blur: SIMD2(0, 2.5)), label: "Diorama bloom blur 2V")
         return [quarterA, eighthA]
     }
 

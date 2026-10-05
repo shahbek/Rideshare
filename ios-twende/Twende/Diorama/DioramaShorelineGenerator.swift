@@ -13,7 +13,6 @@ nonisolated struct DioramaShorelineGenerator {
         for segment in data.shorelines where segment.points.count >= 2 {
             switch segment.kind {
             case .beach:
-                bank(segment, beach: true, ground: &ground)
                 beachDetails(segment, props: &props, vegetation: &vegetation)
             case .seawall, .deck:
                 seawall(segment, ground: &ground, props: &props)
@@ -99,23 +98,6 @@ nonisolated struct DioramaShorelineGenerator {
         }
     }
 
-    private func bank(_ segment: DioramaShorelineSegment, beach: Bool, ground: inout DioramaMesh) {
-        let inland = beach ? config.beachWidth * 0.65 : config.revetmentWidth * 0.5
-        let underwater = beach ? config.beachWidth * 0.7 : config.revetmentWidth
-        let rows = segment.points.indices.map { i -> [DV2] in
-            let p = segment.points[i], out = segment.outward[i]
-            let top = terrain.height(p - out * inland) + 0.04
-            let sea = terrain.waterLevel
-            // The band meets the generated seabed exactly at its seaward edge.
-            let bed = terrain.seabed(p + out * underwater)
-            let mid = min(sea - underwater * 0.4 * config.beachSlope, sea - 0.02 + (bed - sea + 0.02) * 0.4)
-            return [DV2(-inland, top), DV2(-inland * 0.65, sea + (top - sea) * 0.65),
-                    DV2(-inland * 0.25, sea + (top - sea) * 0.25), DV2(0, sea - 0.015),
-                    DV2(underwater * 0.4, mid), DV2(underwater, bed)]
-        }
-        sweep(segment, profiles: rows, swatches: beach ? [.earth, .earth, .wetSand, .wetSand, .wetSand] : [.earth, .rockWarm, .dampStone, .dampStone, .dampStone], into: &ground)
-    }
-
     private func seawall(_ segment: DioramaShorelineSegment, ground: inout DioramaMesh, props: inout DioramaMesh) {
         let sea = terrain.waterLevel
         let maxRise = segment.points.map { terrain.height($0) - sea }.max() ?? config.seawallHeight
@@ -162,14 +144,7 @@ nonisolated struct DioramaShorelineGenerator {
     private func rockBank(_ segment: DioramaShorelineSegment, standalone: Bool, ground: inout DioramaMesh, props: inout DioramaMesh) {
         let width = max(1, config.revetmentWidth), sea = terrain.waterLevel
         let start = standalone ? -width * 0.5 : 0.3
-        let rows = segment.points.indices.map { i -> [DV2] in
-            let p = segment.points[i], out = segment.outward[i]
-            let top = standalone ? terrain.height(p + out * start) + 0.04 : sea + 0.22
-            let toe = standalone ? 0 : max(0, terrain.height(p) - sea + config.seawallSubmergedDepth) * config.seawallBatter
-            let bed = terrain.seabed(p + out * (toe + width))
-            return [DV2(toe + start, top), DV2(toe + width * 0.45, min(sea - 0.25, bed + 0.1)), DV2(toe + width, bed)]
-        }
-        sweep(segment, profiles: rows, swatches: [.dampStone, .dampStone], into: &ground)
+        // The bank is the shared terrain, not another skin. Only physical rocks are added here.
         var rng = DioramaRandom(seed: segment.id, salt: 207)
         let spacing = max(0.5, 1 / sqrt(max(0.2, config.rockDensity)))
         var along = 0.0
@@ -185,14 +160,7 @@ nonisolated struct DioramaShorelineGenerator {
                     let o = min(width - 0.15, offset + rng.range(-0.14...0.14))
                     let toe = standalone ? 0 : max(0, terrain.height(p) - sea + config.seawallSubmergedDepth) * config.seawallBatter
                     let q = p + out * (toe + o)
-                    let top = standalone ? terrain.height(p + out * start) + 0.04 : sea + 0.22
-                    let slope: Double
-                    if o < width * 0.45 {
-                        let t = (o - start) / max(0.01, width * 0.45 - start)
-                        slope = top + (sea - 0.25 - top) * t
-                    } else {
-                        slope = sea - 0.25 - 0.65 * (o - width * 0.45) / (width * 0.55)
-                    }
+                    let slope = terrain.floorHeight(q)
                     let size = rng.range(config.rockSizeRange)
                     if data.rect.contains(q), !data.buildings.contains(where: { DioramaPolygon.contains($0.ring, q) }) {
                         let variant = library.rocks[Int(rng.next() % UInt64(library.rocks.count))]

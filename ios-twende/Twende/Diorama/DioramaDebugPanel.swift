@@ -116,7 +116,9 @@ struct DioramaDebugPanel: View {
     private var summary: String {
         var lines = [state.status]
         for (tile, artifacts) in state.loadedTiles.sorted(by: { ($0.key.x, $0.key.y) < ($1.key.x, $1.key.y) }) {
-            lines.append("\(tile): \(artifacts.totalTriangles.formatted()) tris · \(artifacts.totalBytes / 1024) KB")
+            lines.append("v\(DioramaConfig.slipway.generatorVersion) · \(tile)")
+            lines.append("\(artifacts.totalTriangles.formatted()) unique tris · \(artifacts.totalInstances.formatted()) instances")
+            lines.append("\(artifacts.totalBytes / 1024) KB · geometry \(String(format: "%.2f", artifacts.generationSeconds))s")
         }
         return lines.joined(separator: "\n")
     }

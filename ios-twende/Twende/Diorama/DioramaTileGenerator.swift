@@ -102,6 +102,12 @@ nonisolated enum DioramaTileGenerator {
     static func generate(_ data: DioramaTileData, config: DioramaConfig, library: DioramaPropLibrary, reduced: Bool) throws -> DioramaTileArtifacts {
         if let cached = cached(data.tile, config: config, reduced: reduced) { return cached }
         let started = Date()
+        var checkpoint = started
+        func timing(_ stage: String) {
+            let now = Date()
+            print("[Diorama timing] \(stage): \(String(format: "%.3f", now.timeIntervalSince(checkpoint)))s")
+            checkpoint = now
+        }
 
         let roadIndex = DioramaRoadIndex(roads: data.roads, pavementWidth: config.pavementWidth)
         let terrain = DioramaTerrain.load(rect: data.rect, config: config).resolvingSurfaces(in: data)
@@ -109,6 +115,7 @@ nonisolated enum DioramaTileGenerator {
         guard let painter = DioramaGroundPainter(rect: data.rect, size: reduced ? config.reducedGroundImageSize : config.groundImageSize, config: config) else {
             throw NSError(domain: "Diorama", code: 2, userInfo: [NSLocalizedDescriptionKey: "ground image could not be created"])
         }
+        timing("terrain + street layout + painter")
         var buildings = DioramaMesh()
         var windowGlow = DioramaMesh()
         var walls = DioramaMesh()
@@ -135,25 +142,32 @@ nonisolated enum DioramaTileGenerator {
             }
         }
 
+        timing("buildings")
         let wallGenerator = DioramaCompoundWallGenerator(config: config, roads: roadIndex, buildings: built, tileRect: data.rect, terrain: terrain, landuse: data.landuse)
         let compounds = wallGenerator.generate(into: &walls)
+        timing("compounds")
 
         // Paint order matters: base grass and lawns, then footways and hotel paving, then roads over
         // everything, then the sea floor so coastal paint stops at the mapped water edge.
         let groundGenerator = DioramaGroundGenerator(config: config, data: data, roads: roadIndex, terrain: terrain, painter: painter)
         groundGenerator.generate(compounds: compounds, into: &ground, water: &water)
+        timing("connected ground + water + reef")
 
         DioramaShorelineGenerator(config: config, data: data, terrain: terrain, library: library)
             .generate(ground: &ground, props: &props, vegetation: &vegetation, debug: &shorelineDebug)
 
+        timing("shore structures")
         let amenities = DioramaAmenityGenerator(config: config, data: data, roads: roadIndex, library: library, buildings: built, terrain: terrain, painter: painter)
         amenities.generate(ground: &ground, props: &props, glow: &propGlow, lights: &lights)
 
+        timing("amenities")
         DioramaHotelGrounds(data: data, terrain: terrain, library: library, roads: roadIndex, streetPolygons: streetLayout.corridor.polygons, painter: painter)
             .generate(ground: &ground, props: &props, vegetation: &vegetation, glow: &propGlow, lights: &lights)
 
+        timing("hotel grounds")
         DioramaRoadGenerator(config: config, data: data, roads: roadIndex, terrain: terrain, layout: streetLayout, compounds: compounds, painter: painter).generate(into: &roadsMesh)
         groundGenerator.paintWater()
+        timing("roads + coastal paint")
 
         let placer = DioramaPropPlacer(config: config, data: data, roads: roadIndex, library: library, buildings: built, compounds: compounds, reduceDetail: reduced, terrain: terrain)
         placer.vegetation(into: &vegetation)
@@ -162,6 +176,7 @@ nonisolated enum DioramaTileGenerator {
         for light in porchLights where lights.count < config.maxLights { lights.append(light) }
         let lightGrid = DioramaLightGrid.build(lights, rect: data.rect, cells: config.lightGridCells, perCell: config.lightsPerCell)
 
+        timing("props + light grid")
         // Order matters: opaque categories first, translucent halos (propGlow) last.
         let meshes: [(DioramaCategory, DioramaMesh)] = [
             (.ground, ground), (.roads, roadsMesh), (.buildings, buildings), (.walls, walls), (.vegetation, vegetation),
@@ -323,11 +338,16 @@ nonisolated enum DioramaTileGenerator {
             throw NSError(domain: "Diorama", code: 1, userInfo: [NSLocalizedDescriptionKey: "tile produced no geometry"])
         }
 
+        let image = painter.image()
+        timing("packing + image export")
+        for (category, mesh) in meshes {
+            print("[Diorama geometry] \(category): \(mesh.triangleCount) baked triangles, \(mesh.instances.count) instances")
+        }
         let artifacts = DioramaTileArtifacts(
             tile: data.tile, vertices: vertices, indices: indices, ranges: ranges, groups: groups, allInstances: allInstances,
             parts: parts, lights: lights, lightGrid: lightGrid,
             waterHeight: terrain.waterLevel, shorelineReport: DioramaShoreline.report(data.shorelines), generationSeconds: Date().timeIntervalSince(started),
-            groundImage: painter.image()
+            groundImage: image
         )
         cacheLock.lock()
         cache[cacheKey(data.tile, config: config, reduced: reduced)] = artifacts

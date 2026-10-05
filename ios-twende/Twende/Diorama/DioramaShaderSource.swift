@@ -167,7 +167,7 @@ nonisolated enum DioramaShaderSource {
         DioramaVarying out;
         bool mirrored = u.params.w > 0.5;
         float waterZ = u.water.x;
-        if (v.appearance.w > 4.5) {
+        if (v.appearance.w > 4.5 && v.appearance.w < 5.5) {
             // Halo sprite: the normal carries the corner offset (x, y) and radius (z). Rebuild the quad
             // in world space facing the camera so it always reads as a round glow.
             float3 eye = u.eye.xyz;
@@ -313,7 +313,7 @@ nonisolated enum DioramaShaderSource {
             if (code > 0.5 && code < 1.5) discard_fragment();
         }
 
-        if (code > 4.5) {
+        if (code > 4.5 && code < 5.5) {
             float r = length(in.normal.xy);
             if (r > 1.0) discard_fragment();
             float a = pow(1.0 - r, 2.2) * 0.7 + pow(max(0.0, 1.0 - r * 3.0), 2.0) * 0.5;
@@ -349,6 +349,11 @@ nonisolated enum DioramaShaderSource {
             float4 painted = groundImage.sample(groundSampler, guv);
             albedo = painted.rgb;
             tex = floor(painted.a * 255.0 / 32.0 + 0.5);
+            if (tex > 0.5 && tex < 1.5) {
+                // Natural coast pigment is interpolated on the same mesh as the land and seabed.
+                // Hard finishes retain their painted color and never become a second surface.
+                albedo = mix(albedo, in.color.rgb, saturate(in.appearance.z));
+            }
         }
         if (tex > 0.5 && tex < 1.5) {
             float mottle = dioramaNoise(wp * 0.09) * 0.7 + dioramaNoise(wp * 0.35) * 0.3;
@@ -518,7 +523,7 @@ nonisolated enum DioramaShaderSource {
         float glow = u.params.x;
         float3 c = in.color.rgb;
         float a = 1.0;
-        if (code > 4.5) {
+        if (code > 4.5 && code < 5.5) {
             float r = length(in.normal.xy);
             if (r > 1.0) discard_fragment();
             a = pow(1.0 - r, 2.2) * 0.9;
@@ -526,7 +531,8 @@ nonisolated enum DioramaShaderSource {
         }
         out.position = float4(0.0);
         out.normal = float4(0.0);
-        out.emissive = float4(c * glow * a, 1.0);
+        // Preserve HDR radiance before the blur: display-range colors disappear when downsampled.
+        out.emissive = float4(c * glow * a * 3.0, 1.0);
         return out;
     }
 

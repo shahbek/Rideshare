@@ -32,6 +32,17 @@ nonisolated struct DioramaTerrain: Sendable {
     var edgeEase: Double = 0
     /// The mapped water edge, the one authoritative coastline. Set by `resolvingSurfaces(in:)`.
     var coast: DioramaCoast? = nil
+    /// Immutable shared samples; foundations and props never repeat coastal polygon queries.
+    private(set) var surfaceHeights: [Double] = []
+    var latticeMinX: Int { Int(floor(rect.minX / Self.surfaceStep)) }
+    var latticeMinY: Int { Int(floor(rect.minY / Self.surfaceStep)) }
+    var latticeColumns: Int { Int(ceil(rect.maxX / Self.surfaceStep)) - latticeMinX + 1 }
+    var latticeRows: Int { Int(ceil(rect.maxY / Self.surfaceStep)) - latticeMinY + 1 }
+
+    func latticePoint(column: Int, row: Int) -> DV2 {
+        DV2(min(max(Double(latticeMinX + column) * Self.surfaceStep, rect.minX), rect.maxX),
+            min(max(Double(latticeMinY + row) * Self.surfaceStep, rect.minY), rect.maxY))
+    }
 
     var midTideDatum: Double = DioramaConfig.slipway.waterLevel
     var waterLevel: Double { midTideDatum }
@@ -77,6 +88,14 @@ nonisolated struct DioramaTerrain: Sendable {
         var result = self
         let coast = DioramaCoast(data: data)
         result.coast = coast.isEmpty ? nil : coast
+        var samples: [Double] = []
+        samples.reserveCapacity(result.latticeColumns * result.latticeRows)
+        for row in 0..<result.latticeRows {
+            for column in 0..<result.latticeColumns {
+                samples.append(result.rawSurface(result.latticePoint(column: column, row: row)))
+            }
+        }
+        result.surfaceHeights = samples
         for area in data.landuse where area.kind == "terrace" {
             guard let ring = area.rings.first else { continue }
             result.attach(ring, reach: 4, data: data)
@@ -158,20 +177,26 @@ nonisolated struct DioramaTerrain: Sendable {
         max(pierLevel, line.first.map { height($0) + 0.1 } ?? pierLevel)
     }
 
-    /// Shared piecewise-planar land surface. Every clipped polygon and foundation lies on this mesh.
+    /// All support queries interpolate the exact same connected land–sea mesh.
     func height(_ p: DV2) -> Double {
-        planar(p, sample: rawHeight) + Self.lift
+        guard !surfaceHeights.isEmpty else { return planar(p, sample: rawSurface) }
+        let c = min(max(Int(floor(p.x / Self.surfaceStep)) - latticeMinX, 0), latticeColumns - 2)
+        let r = min(max(Int(floor(p.y / Self.surfaceStep)) - latticeMinY, 0), latticeRows - 2)
+        let a = latticePoint(column: c, row: r), b = latticePoint(column: c + 1, row: r + 1)
+        let tx = min(max((p.x - a.x) / max(b.x - a.x, 0.0001), 0), 1)
+        let ty = min(max((p.y - a.y) / max(b.y - a.y, 0.0001), 0), 1)
+        let i = r * latticeColumns + c
+        let h00 = surfaceHeights[i], h11 = surfaceHeights[i + latticeColumns + 1]
+        if ty <= tx { return h00 * (1 - tx) + surfaceHeights[i + 1] * (tx - ty) + h11 * ty }
+        return h00 * (1 - ty) + h11 * tx + surfaceHeights[i + latticeColumns] * (ty - tx)
     }
 
-    /// Piecewise-planar seabed on the same lattice, below the water plane everywhere.
-    func seabed(_ p: DV2) -> Double {
-        planar(p, sample: rawSeabed)
-    }
+    func seabed(_ p: DV2) -> Double { height(p) }
+    func floorHeight(_ p: DV2) -> Double { height(p) }
 
-    /// Land on land, seabed in the mapped water: the surface anything standing at `p` rests on.
-    func floorHeight(_ p: DV2) -> Double {
-        if let coast, coast.isWater(p) { return seabed(p) }
-        return height(p)
+    private func rawSurface(_ p: DV2) -> Double {
+        if coast?.isWater(p) == true { return rawSeabed(p) }
+        return rawHeight(p) + Self.lift
     }
 
     /// Depth of water over the seabed at `p` (negative on land).
