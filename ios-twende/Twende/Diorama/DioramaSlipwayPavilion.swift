@@ -11,13 +11,13 @@ nonisolated struct DioramaSlipwayPavilion {
     let terrain: DioramaTerrain
 
     func build(_ f: DioramaBuildingFeature, mesh: inout DioramaMesh) -> DioramaBuilt {
-        let base = terrain.foundationHeight(f.ring)
+        let base = terrain.buildingHeight(f)
         let floors = f.id == Self.buildingID ? 2 : 4
         let height = f.id == Self.buildingID ? 6.35 : (f.height ?? 12.8)
         let storey = height / Double(floors), eave = base + height
         let box = DioramaPolygon.minimumAreaRectangle(f.ring)
         let architecture = DioramaHotelGenerator(terrain: terrain)
-        mesh.extrude(f.ring, z0: terrain.footingHeight(f.ring), z1: base + 0.16, .coralStone, top: .paving)
+        mesh.extrude(f.ring, z0: base - 0.25, z1: base + 0.16, .coralStone, top: .paving)
         for floor in 1..<floors {
             let deck = base + Double(floor) * storey
             mesh.extrude(f.ring, z0: deck - 0.18, z1: deck, .trimWhite, top: .paving)

@@ -48,10 +48,10 @@ nonisolated struct DioramaBuildingGenerator {
         return (.villa, floors)
     }
 
-    /// Builds in local height above a level foundation sampled across the footprint.
+    /// Builds level rooms on a locally cut/fill graded site, not a highest-point raised plinth.
     @discardableResult
     func build(_ f: DioramaBuildingFeature, into mesh: inout DioramaMesh, glow: inout DioramaMesh, lights: Bool, pointLights: inout [DioramaLight]) -> DioramaBuilt {
-        let ground = terrain.foundationHeight(f.ring)
+        let ground = terrain.buildingHeight(f)
         let savedMesh = mesh.baseZ, savedGlow = glow.baseZ
         mesh.baseZ = ground
         glow.baseZ = ground
@@ -72,18 +72,17 @@ nonisolated struct DioramaBuildingGenerator {
         case .commercial: wallColor = rng.pick(config.commercialWallColors)
         }
         if let forced = override?.wallColor { wallColor = forced }
-        let trim: DioramaSwatch = .trimWhite
 
-        // Plinth down into the slope so no house floats where the terrain falls away, then a pale base band.
-        mesh.extrude(ring, z0: terrain.footingHeight(ring) - ground, z1: 0.02, .courtyard, skip: flags)
-        mesh.band(ring, flags: flags, offset: 0.12, z0: 0, z1: 0.5, trim)
+        // Continuous facade masonry meets the graded landscape. Only buried footings remain;
+        // no separate concrete/courtyard pedestal is exposed beneath the house.
+        mesh.extrude(ring, z0: -0.25, z1: 0.5, wallColor, skip: flags)
         // Facade masonry below is split at door/window openings, rather than solid walls behind panes.
 
         // String courses between floors on taller buildings.
         if floors >= 2, kind != .villa {
             for floor in 1..<floors {
                 let z = Double(floor) * storeyHeight
-                mesh.band(ring, flags: flags, offset: 0.08, z0: z - 0.16, z1: z, trim)
+                mesh.band(ring, flags: flags, offset: 0.08, z0: z - 0.16, z1: z, .trimWhite)
             }
         }
 

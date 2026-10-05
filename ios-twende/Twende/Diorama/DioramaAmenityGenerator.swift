@@ -584,7 +584,7 @@ nonisolated struct DioramaAmenityGenerator {
         if let host, host.feature.centroid.distance(to: p) < 30 {
             let corner = host.box.corners[0]
             spot = corner + (host.box.centre - corner).normalized * 1.6
-            baseZ = terrain.foundationHeight(host.feature.ring) + host.height + (host.flatRoof ? config.roofBevel : 0)
+            baseZ = terrain.buildingHeight(host.feature) + host.height + (host.flatRoof ? config.roofBevel : 0)
             // Green dome in the middle of the roof.
             props.cylinder(centre: host.box.centre, z0: baseZ, z1: baseZ + 1.0, r0: 2.6, r1: 2.6, sides: 12, .whitewash)
             props.sphere(centre: DV3(host.box.centre, baseZ + 1.0), radii: DV3(2.6, 2.6, 2.3), .domeGreen)

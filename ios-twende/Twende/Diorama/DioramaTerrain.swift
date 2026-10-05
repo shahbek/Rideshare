@@ -16,6 +16,8 @@ nonisolated struct DioramaTerrain: Sendable {
     /// Visual clearance shared by the whole tile, including sea, boats, lights and reflections.
     /// This is a rendering adjustment, not a surveyed sea-level measurement.
     var clearance: Double = 0
+    var gradedNodes: [SIMD2<Int>: Double] = [:]
+    var buildingLevels: [UInt64: Double] = [:]
 
     var waterLevel: Double { Self.waterSurface + clearance }
     var pierLevel: Double { waterLevel + 0.83 }
@@ -71,7 +73,65 @@ nonisolated struct DioramaTerrain: Sendable {
         return result
     }
 
-    /// Level structure above the entire footprint, including interior hills and perimeter samples.
+    /// Cut/fill the actual landscape at each mapped building, then blend back into the surrounding
+    /// slope. Floors remain horizontal; houses are not perched on highest-point concrete pedestals.
+    func gradingBuildingSites(in data: DioramaTileData, roads: DioramaRoadIndex) -> DioramaTerrain {
+        var result = self
+        var grid = DioramaGrid(cell: 32)
+        let buildings = data.buildings.sorted { $0.id < $1.id }
+        for (i, building) in buildings.enumerated() {
+            guard let first = building.ring.first else { continue }
+            let samples = DioramaPolygon.densify(building.ring + [first], maxStep: 1).map { rawHeight($0) }.sorted()
+            guard !samples.isEmpty else { continue }
+            result.buildingLevels[building.id] = samples[samples.count / 2]
+            grid.insert(i, rect: DioramaRect.bounding(building.ring).expanded(by: 12))
+        }
+        let step = Self.surfaceStep
+        var deepestCut = 0.0
+        for y in stride(from: floor(rect.minY / step) * step, through: ceil(rect.maxY / step) * step, by: step) {
+            for x in stride(from: floor(rect.minX / step) * step, through: ceil(rect.maxX / step) * step, by: step) {
+                let p = DV2(x, y), original = rawHeight(p)
+                var nearest = Double.infinity
+                var target = original
+                for i in grid.query(DioramaRect.bounding([p])).sorted() {
+                    let building = buildings[i]
+                    guard let level = result.buildingLevels[building.id] else { continue }
+                    let inside = DioramaPolygon.contains(building.ring, p)
+                    let distance = inside ? 0 : DioramaPolygon.distanceToRing(building.ring, p)
+                    guard distance < 12, distance < nearest else { continue }
+                    // A full terrain cell beyond the walls prevents interpolation cutting through rooms.
+                    let t = min(max((distance - 4) / 8, 0), 1)
+                    var weight = 1 - t * t * (3 - 2 * t)
+                    if distance > 4, let road = roads.nearest(to: p, within: 20) {
+                        let roadDistance = p.distance(to: road.point) - roads.corridorHalfWidth(road.road)
+                        weight *= min(max(roadDistance / 4, 0), 1)
+                    }
+                    target = original + (level - original) * weight
+                    nearest = distance
+                }
+                if nearest.isFinite {
+                    result.gradedNodes[SIMD2(Int(round(x / step)), Int(round(y / step)))] = target
+                    deepestCut = max(deepestCut, original - target)
+                }
+            }
+        }
+        // Mapbox's ungraded DEM is still underneath. Keep the cut surface above it, moving all
+        // scene categories together instead of lifting individual houses back onto pedestals.
+        result.clearance += deepestCut
+        return result
+    }
+
+    func buildingHeight(_ feature: DioramaBuildingFeature) -> Double {
+        guard let level = buildingLevels[feature.id] else { return foundationHeight(feature.ring) }
+        return level + Self.lift + clearance + 0.04
+    }
+
+    private func surfaceNode(_ p: DV2) -> Double {
+        let key = SIMD2(Int(round(p.x / Self.surfaceStep)), Int(round(p.y / Self.surfaceStep)))
+        return gradedNodes[key] ?? rawHeight(p)
+    }
+
+    /// Level amenity slab above its footprint; buildings use graded site levels instead.
     func foundationHeight(_ ring: [DV2]) -> Double {
         guard let first = ring.first else { return Self.lift + clearance }
         let bounds = DioramaRect.bounding(ring)
@@ -101,13 +161,13 @@ nonisolated struct DioramaTerrain: Sendable {
         let step = Self.surfaceStep
         let x = floor(p.x / step) * step, y = floor(p.y / step) * step
         let tx = (p.x - x) / step, ty = (p.y - y) / step
-        let h00 = rawHeight(DV2(x, y)), h11 = rawHeight(DV2(x + step, y + step))
+        let h00 = surfaceNode(DV2(x, y)), h11 = surfaceNode(DV2(x + step, y + step))
         let h: Double
         if ty <= tx {
-            let h10 = rawHeight(DV2(x + step, y))
+            let h10 = surfaceNode(DV2(x + step, y))
             h = h00 * (1 - tx) + h10 * (tx - ty) + h11 * ty
         } else {
-            let h01 = rawHeight(DV2(x, y + step))
+            let h01 = surfaceNode(DV2(x, y + step))
             h = h00 * (1 - ty) + h11 * tx + h01 * (ty - tx)
         }
         return h + Self.lift + clearance

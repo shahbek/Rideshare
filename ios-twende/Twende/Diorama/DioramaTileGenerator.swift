@@ -53,6 +53,7 @@ nonisolated enum DioramaTileGenerator {
 
         let roadIndex = DioramaRoadIndex(roads: data.roads, pavementWidth: config.pavementWidth)
         let terrain = (sampledTerrain ?? DioramaTerrain.load(rect: data.rect, config: config)).resolvingSurfaces(in: data)
+            .gradingBuildingSites(in: data, roads: roadIndex)
         let streetLayout = DioramaStreetLayout(data: data, config: config)
         var buildings = DioramaMesh()
         var windowGlow = DioramaMesh()
@@ -173,7 +174,7 @@ nonisolated enum DioramaTileGenerator {
                     low = simd_min(low, SIMD3(p.x, p.y, p.z)); high = simd_max(high, SIMD3(p.x, p.y, p.z))
                 }
                 // Halo shader expands billboards from their centres; preserve a generous guard band.
-                let padding: Float = category == .propGlow ? 12 : 0.1
+                let padding: Float = category == .propGlow ? 12 : 2
                 ranges.append(.init(category: category, start: indices.count, count: batch.count,
                                     minimum: low - SIMD3(repeating: padding), maximum: high + SIMD3(repeating: padding)))
                 indices.append(contentsOf: batch)

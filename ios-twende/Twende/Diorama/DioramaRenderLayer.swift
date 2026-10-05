@@ -24,6 +24,8 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
             for x in [minimum.x, maximum.x] { for y in [minimum.y, maximum.y] { for z in [minimum.z, maximum.z] {
                 let height = mirrorHeight.map { 2 * $0 - z } ?? z
                 let p = matrix * SIMD4(x, y, height, 1)
+                // Near-camera boxes and non-finite projections cannot safely be CPU-rejected.
+                guard p.x.isFinite, p.y.isFinite, p.w.isFinite, p.w > 0.00001 else { return true }
                 // Mapbox owns depth-range mapping; only reject lateral/behind-camera planes.
                 let planes = [p.x < -p.w, p.x > p.w, p.y < -p.w, p.y > p.w, p.w <= 0, false]
                 for i in 0..<6 { outside[i] = outside[i] && planes[i] }

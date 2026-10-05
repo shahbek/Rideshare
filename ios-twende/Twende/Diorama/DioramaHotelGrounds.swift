@@ -339,32 +339,52 @@ nonisolated struct DioramaHotelGrounds {
         let north = data.projection.local(longitude: 39.272, latitude: -6.75192).y
         let west = data.projection.local(longitude: 39.2714, latitude: -6.7525).x
         let east = data.projection.local(longitude: 39.2728, latitude: -6.7525).x
+        let extent = DioramaRect(minX: west, minY: south, maxX: east, maxY: north)
+        let faceUV = DioramaAtlas.uv(.coralStone, dark: false)
+        let capUV = DioramaAtlas.uv(.paving, dark: false)
         for water in data.water {
             guard let ring = water.rings.first, ring.count > 2 else { continue }
-            let inner = DioramaCoastline.offset(ring, by: 0.62)
-            let faceUV = DioramaAtlas.uv(.coralStone, dark: false)
-            let capUV = DioramaAtlas.uv(.paving, dark: false)
-            let base = ground.positions.count
-            // Six vertices per sample: separate normal groups for the two walls and coping.
-            // Neighbours share indices; there are no internal box ends or competing corner caps.
-            for i in ring.indices {
-                let before = (ring[i] - ring[(i + ring.count - 1) % ring.count]).normalized.right
-                let after = (ring[(i + 1) % ring.count] - ring[i]).normalized.right
-                let normal = DV3((before + after).normalized, 0)
-                let top = terrain.height(ring[i]) + 0.2
-                ground.vertex(DV3(ring[i], terrain.seabedLevel), normal * -1, faceUV)
-                ground.vertex(DV3(ring[i], top), normal * -1, faceUV)
-                ground.vertex(DV3(ring[i], top), .up, capUV)
-                ground.vertex(DV3(inner[i], top), .up, capUV)
-                ground.vertex(DV3(inner[i], top), normal, faceUV)
-                ground.vertex(DV3(inner[i], terrain.seabedLevel), normal, faceUV)
-            }
+            let inland = DioramaCoastline.offset(ring, by: 0.62)
             for i in ring.indices where !water.clipped[i] {
-                let j = (i + 1) % ring.count, mid = (ring[i] + ring[j]) * 0.5
-                guard mid.y > south, mid.y < north, mid.x > west, mid.x < east else { continue }
-                for k in [0, 2, 4] {
-                    let a = UInt32(base + i * 6 + k), b = UInt32(base + j * 6 + k)
-                    ground.tri(a, b, b + 1); ground.tri(a, b + 1, a + 1)
+                let j = (i + 1) % ring.count
+                // Clip the segment itself: midpoint rejection used to erase long shoreline sections.
+                for clipped in DioramaPolygon.clip([ring[i], ring[j]], to: extent) {
+                    let line = DioramaPolygon.densify(clipped, maxStep: 1)
+                    guard line.count >= 2 else { continue }
+                    let edge = ring[j] - ring[i]
+                    let normal = DV3(edge.normalized.right, 0)
+                    let base = ground.positions.count
+                    var backs: [DV2] = []
+                    var tops: [Double] = []
+                    for p in line {
+                        let t = min(max((p - ring[i]).dot(edge) / max(edge.dot(edge), 0.000001), 0), 1)
+                        let back = inland[i] * (1 - t) + inland[j] * t
+                        // Coping must clear the inland ground too, not just two distant coast endpoints.
+                        let top = max(terrain.height(p), terrain.height(back)) + 0.22
+                        backs.append(back); tops.append(top)
+                        ground.vertex(DV3(p, terrain.seabedLevel), normal * -1, faceUV)
+                        ground.vertex(DV3(p, top), normal * -1, faceUV)
+                        ground.vertex(DV3(p, top), .up, capUV)
+                        ground.vertex(DV3(back, top), .up, capUV)
+                        ground.vertex(DV3(back, top), normal, faceUV)
+                        ground.vertex(DV3(back, terrain.seabedLevel), normal, faceUV)
+                    }
+                    for sample in 0..<(line.count - 1) {
+                        for k in [0, 2, 4] {
+                            let a = UInt32(base + sample * 6 + k), b = a + 6
+                            ground.tri(a, b, b + 1); ground.tri(a, b + 1, a + 1)
+                        }
+                    }
+                    // Close real cropped ends, rather than leaving a wall that vanishes end-on.
+                    for sample in [0, line.count - 1] {
+                        let p = line[sample], back = backs[sample], top = tops[sample]
+                        let atBoundary = abs(p.x - west) < 0.001 || abs(p.x - east) < 0.001
+                            || abs(p.y - south) < 0.001 || abs(p.y - north) < 0.001
+                        if atBoundary {
+                            ground.quad(DV3(p, terrain.seabedLevel), DV3(back, terrain.seabedLevel),
+                                        DV3(back, top), DV3(p, top), .coralStone)
+                        }
+                    }
                 }
             }
         }

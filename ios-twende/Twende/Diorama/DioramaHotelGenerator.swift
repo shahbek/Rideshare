@@ -14,7 +14,7 @@ nonisolated struct DioramaHotelGenerator {
 
     func build(_ f: DioramaBuildingFeature, mesh: inout DioramaMesh, glow: inout DioramaMesh,
                lights: inout [DioramaLight]) -> DioramaBuilt {
-        let base = terrain.foundationHeight(f.ring)
+        let base = terrain.buildingHeight(f)
         let old = mesh.baseZ, oldGlow = glow.baseZ
         mesh.baseZ = base; glow.baseZ = base
         defer { mesh.baseZ = old; glow.baseZ = oldGlow }
@@ -27,7 +27,7 @@ nonisolated struct DioramaHotelGenerator {
         let box = DioramaPolygon.minimumAreaRectangle(f.ring)
         // Authored landmark plan shared by slabs, walls, roofs and ground masks.
         let ring = f.ring
-        mesh.extrude(ring, z0: terrain.footingHeight(ring) - base, z1: 0, .concrete)
+        mesh.extrude(ring, z0: -0.25, z1: 0, color)
         let balconyRing = isDelta ? scallopedOutline(f.ring) : ring
         for floor in 0...floors {
             let z = Double(floor) * pitch
