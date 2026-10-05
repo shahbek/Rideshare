@@ -337,14 +337,11 @@ extension TripMapView {
         static let demTilesetURL = "mapbox://mapbox.mapbox-terrain-dem-v1"
 
         /// Real elevation under Standard's 3D buildings. DEM tiles stop at z14 and are cached in the
-        /// shared TileStore (and included in offline areas). Low Power drops terrain to save GPU work.
+        /// shared TileStore (and included in offline areas). Keep the datum stable in Low Power;
+        /// the diorama instead reduces reflections and stops its animation clock.
         func applyTerrain() {
             guard let map = mapView?.mapboxMap else { return }
             do {
-                if ProcessInfo.processInfo.isLowPowerModeEnabled {
-                    map.removeTerrain()
-                    return
-                }
                 if !map.sourceExists(withId: Self.demSourceID) {
                     var dem = RasterDemSource(id: Self.demSourceID)
                     dem.url = Self.demTilesetURL

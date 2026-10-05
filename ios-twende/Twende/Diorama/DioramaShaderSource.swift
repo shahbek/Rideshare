@@ -278,8 +278,8 @@ nonisolated enum DioramaShaderSource {
 
         // Fish are pigment in the arched plaster, not raised discs/triangles casting tiny shadows.
         // Analytic coverage antialiases their outlines and fades detail below a pixel.
-        if (tex > 7.5 && tex < 8.5 && abs(n.z) < 0.3) {
-            float2 tangent = float2(-n.y, n.x);
+        if (tex > 7.5 && tex < 8.5 && abs(n.z) < 0.92) {
+            float2 tangent = normalize(float2(-n.y, n.x));
             float2 mural = float2(dot(wp, tangent), in.worldPosition.z) / float2(1.55, 0.86);
             mural.x += floor(mural.y) * 0.43;
             float2 cell = floor(mural);

@@ -137,6 +137,7 @@ nonisolated enum DioramaBundledTile {
             buildings[b.id] = DioramaBuildingFeature(id: b.id, ring: pts, clipped: flags, area: area, centroid: centroid, height: height, type: b.type)
         }
 
+        buildings = buildings.mapValues(DioramaFootprints.landmarkPlan)
         DioramaFootprints.carveStairGap(&buildings)
         buildings = buildings.mapValues(DioramaFootprints.softened)
 

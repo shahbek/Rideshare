@@ -35,6 +35,7 @@ nonisolated struct DioramaGroundGenerator {
         let r = data.rect
         let corners = [DV2(r.minX, r.minY), DV2(r.maxX, r.minY), DV2(r.maxX, r.maxY), DV2(r.minX, r.maxY)]
         let waterRings = (data.water + data.landuse.filter { $0.kind == "pool" }).compactMap { $0.rings.first }
+            + [DioramaHotelGrounds.stairOutline(data: data)]
         let land = DioramaGroundCutouts(polygons: waterRings)
         mesh.polygon(corners, z: DioramaTerrain.seabed, .seabed)
         let step = config.usesElevation ? plateStep : max(r.width, r.height)

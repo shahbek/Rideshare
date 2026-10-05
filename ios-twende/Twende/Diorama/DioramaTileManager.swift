@@ -69,6 +69,10 @@ final class DioramaTileManager {
     /// Low-rate clock for the gentle water drift. Runs only while the tile is shown, the app is
     /// active and effects are not reduced; Mapbox otherwise sleeps between camera changes.
     private var waterClock: Timer? = nil
+    private var sampledTerrain: DioramaTerrain? = nil
+    private var lastTerrainSample: Date = .distantPast
+    private var terrainRetryCount: Int = 0
+    private var terrainSampledCells: Set<Int> = []
 
     private var reducesEffects: Bool {
         thermalReduced || ProcessInfo.processInfo.isLowPowerModeEnabled
@@ -143,6 +147,10 @@ final class DioramaTileManager {
         shown = false
         updateWaterClock()
         renderLayer = nil
+        terrainSampledCells.removeAll()
+        sampledTerrain = nil
+        terrainRetryCount = 0
+        lastTerrainSample = .distantPast
         appliedCategories = []
         appliedTimeOfDay = nil
         appliedDebug = false
@@ -190,6 +198,9 @@ final class DioramaTileManager {
             return
         }
 
+        if case .loaded = status, refreshTerrain(on: map) {
+            status = .idle
+        }
         switch status {
         case .idle:
             generate()
@@ -204,7 +215,48 @@ final class DioramaTileManager {
 
     // MARK: Generation
 
+    /// Reads the already loaded DEM, never an extra elevation/network API. Missing off-screen
+    /// samples keep their previous height (or the explicitly estimated bundled fallback).
+    private func refreshTerrain(on map: MapboxMap) -> Bool {
+        guard Date().timeIntervalSince(lastTerrainSample) > 1 else { return false }
+        lastTerrainSample = Date()
+        let projection = DioramaProjection(origin: tile.centre)
+        let rect = projection.rect(of: tile)
+        let previous = sampledTerrain ?? DioramaTerrain.load(rect: rect, config: config)
+        let size = 65
+        var values: [Double] = []
+        var changed = sampledTerrain == nil
+        var available = 0
+        for row in 0..<size {
+            for column in 0..<size {
+                let p = DV2(rect.minX + rect.width * Double(column) / Double(size - 1),
+                            rect.minY + rect.height * Double(row) / Double(size - 1))
+                let c = projection.coordinate(p)
+                let old = previous.height(p) - DioramaTerrain.lift
+                let index = row * size + column
+                if terrainSampledCells.contains(index) {
+                    values.append(old)
+                    continue
+                }
+                let elevation = map.elevation(at: CLLocationCoordinate2D(latitude: c.latitude, longitude: c.longitude))
+                let h = elevation.flatMap { $0.isFinite ? $0 : nil } ?? old
+                if let elevation, elevation.isFinite {
+                    available += 1
+                    terrainSampledCells.insert(index)
+                    changed = true
+                }
+                if abs(h - old) > 0.15 { changed = true }
+                values.append(h)
+            }
+        }
+        guard available > 0 else { return false }
+        if changed { sampledTerrain = DioramaTerrain(rect: rect, columns: size, rows: size, values: values) }
+        return changed
+    }
+
     private func generate() {
+        if let map { _ = refreshTerrain(on: map) }
+        let sampledTerrain = self.sampledTerrain
         status = .generating
         state.status = "Generating Slipway…"
         let config = self.config
@@ -214,7 +266,7 @@ final class DioramaTileManager {
             let artifacts: DioramaTileArtifacts?
             if let data = DioramaBundledTile.load(config: config), !data.isEmpty {
                 do {
-                    artifacts = try DioramaTileGenerator.generate(data, config: config, library: library, reduced: reduced)
+                    artifacts = try DioramaTileGenerator.generate(data, config: config, library: library, reduced: reduced, sampledTerrain: sampledTerrain)
                 } catch {
                     print("[Diorama] generate failed: \(error)")
                     artifacts = nil
@@ -232,6 +284,13 @@ final class DioramaTileManager {
                 self.status = .loaded(artifacts)
                 print("[Diorama] \(artifacts.tile): \(artifacts.totalTriangles) tris, \(artifacts.totalBytes / 1024) KB in \(String(format: "%.2f", artifacts.generationSeconds))s")
                 self.scheduleUpdate(delay: 0.05)
+                if self.terrainRetryCount < 3 {
+                    self.terrainRetryCount += 1
+                    Task { @MainActor [weak self] in
+                        try? await Task.sleep(for: .seconds(2))
+                        self?.scheduleUpdate(delay: 0.05)
+                    }
+                }
             }
         }
     }

@@ -46,7 +46,11 @@ nonisolated struct DioramaAmenityGenerator {
             switch path.kind {
             case "pier": pier(path.line, props: &props)
             case "slipway": slipway(path.line, ground: &ground)
-            case "steps": steps(path.line, ground: &ground)
+            case "steps":
+                let stairRing = DioramaHotelGrounds.stairOutline(data: data)
+                if !path.line.contains(where: { DioramaPolygon.contains(stairRing, $0) || DioramaPolygon.distanceToRing(stairRing, $0) < 2 }) {
+                    steps(path.line, ground: &ground)
+                }
             default: break
             }
         }
@@ -394,7 +398,7 @@ nonisolated struct DioramaAmenityGenerator {
             DioramaStreetSurface.corridor(DioramaRoadFeature(id: path.id, line: path.line,
                 roadClass: "footway", isPaved: true, width: 1.6), extra: 0)
         }
-        let masks = data.water.compactMap { $0.rings.first } + [data.hotelCourtyardOutline]
+        let masks = data.water.compactMap { $0.rings.first } + [data.hotelCourtyardOutline, data.hotelDiningOutline, DioramaHotelGrounds.stairOutline(data: data)]
         let cutouts = DioramaGroundCutouts(data: data, pavementWidth: config.pavementWidth, additionalMasks: masks)
         let pieces = DioramaStreetSurface(patches).pieces().flatMap { cutouts.subtract(from: $0) }
         for piece in pieces {

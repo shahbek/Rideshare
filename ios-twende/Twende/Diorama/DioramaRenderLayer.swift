@@ -211,7 +211,9 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
         model[1, 1] = -metresToPixels
         model[3, 0] = point.x
         model[3, 1] = point.y
-        model[3, 2] = parameters.elevationData?.getElevationFor(origin)?.doubleValue ?? 0
+        // Vertex heights already include absolute DEM elevation and exaggeration.
+        // Adding the origin elevation again would lift the sea and double-count the terrain.
+        model[3, 2] = 0
         let transform = projection * model
         var matrix = simd_float4x4(columns: (
             SIMD4<Float>(transform.columns.0), SIMD4<Float>(transform.columns.1),

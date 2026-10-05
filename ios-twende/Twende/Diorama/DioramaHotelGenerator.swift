@@ -23,9 +23,9 @@ nonisolated struct DioramaHotelGenerator {
         let floors = isDelta ? 7 : (isTeal ? 4 : (isArcade ? 1 : (isHotel ? 5 : 6)))
         let height = f.height ?? Double(floors) * 3.2
         let pitch = height / Double(floors)
-        let color: DioramaSwatch = isYellow ? .paleYellow : (isTeal ? .hotelTeal : (isDelta ? .deltaStone : .whitewash))
+        let color: DioramaSwatch = isYellow ? .paleYellow : (isTeal ? .hotelTeal : (isDelta ? .deltaStone : (isHotel ? .slipwayBlue : .whitewash)))
         let box = DioramaPolygon.minimumAreaRectangle(f.ring)
-        // Slabs and walls use the identical survey ring; rounding only one creates corner slivers.
+        // Authored landmark plan shared by slabs, walls, roofs and ground masks.
         let ring = f.ring
         mesh.extrude(ring, z0: -1.5, z1: 0, .concrete)
         let balconyRing = isDelta ? scallopedOutline(f.ring) : ring
@@ -62,13 +62,13 @@ nonisolated struct DioramaHotelGenerator {
         for i in f.ring.indices where !f.clipped[i] {
             let a = f.ring[i], b = f.ring[(i + 1) % f.ring.count]
             let length = a.distance(to: b), dir = (b - a).normalized, out = dir.right
-            guard length > 2 else { mesh.wall(a, b, z0: 0.19, z1: height, color); continue }
+            guard length > 2 else { mesh.mouldedWall(ring, edge: i, z0: 0.19, z1: height, color); continue }
             let count = max(1, Int(length / (isDelta ? 4.2 : (isHotel && i == front ? 2.6 : 3.6))))
             let bay = length / Double(count)
             let galleryDepth = length > 8 ? (isDelta ? 1.45 : 1.25) : 0.22
             for floor in 0..<floors {
                 let z = Double(floor) * pitch + 0.19
-                let muralBay = isHotel && i == front && floor == floors - 1
+                let muralBay = false
                 let groundArch = isHotel && i == front && floor == 0
                 let archSpring = muralBay ? height - 1.0 : z + 1.65
                 for k in 0..<count {
@@ -134,11 +134,12 @@ nonisolated struct DioramaHotelGenerator {
                     }
                 }
             }
-            if !(isHotel && i == front) {
+            if !isHotel {
                 mesh.extrude([a, b, b - out * 0.22, a - out * 0.22], z0: height + 0.19, z1: height + 0.8, color, top: .trimWhite)
             }
         }
-        // The fish-painted parapet is the upper silhouette; do not cap it with a generic hip roof.
+        if isHotel { fishCornice(ring, height: height, mesh: &mesh) }
+        // The fish-painted curved cornice is the upper silhouette, not a west-only wall mural.
         if isDelta {
             let roofBox = DioramaOrientedRect(centre: box.centre, axis: box.axis, halfLength: box.halfLength * 0.43, halfWidth: box.halfWidth * 0.55)
             if roofBox.corners.allSatisfy({ DioramaPolygon.contains(f.ring, $0) }) {
@@ -155,6 +156,42 @@ nonisolated struct DioramaHotelGenerator {
             lights.append(DioramaLight(position: DV3(entrance + entranceOut * 3, base + 3.5), color: SIMD3<Float>(1, 0.83, 0.62), radius: 12, intensity: 1.1))
         }
         return DioramaBuilt(feature: f, kind: .apartments, floors: floors, height: height, box: box, flatRoof: true, wallColor: color, entrance: entrance, entranceOut: entranceOut)
+    }
+
+    /// Continuous cove/ogee profile swept around the full rounded plan, with smooth normals.
+    private func fishCornice(_ ring: [DV2], height: Double, mesh: inout DioramaMesh) {
+        let segments = 20
+        let start = mesh.positions.count
+        let uv = DioramaAtlas.uv(.muralBlue, dark: false)
+        let normals = ring.indices.map { i -> DV2 in
+            let before = (ring[i] - ring[(i + ring.count - 1) % ring.count]).normalized.right
+            let after = (ring[(i + 1) % ring.count] - ring[i]).normalized.right
+            return (before + after).normalized
+        }
+        for i in ring.indices {
+            for j in 0...segments {
+                let t = Double(j) / Double(segments)
+                let reach = 0.15 + 0.55 * sin(t * .pi)
+                let slope = 0.55 * .pi * cos(t * .pi) / 1.9
+                let n = DV3(normals[i], -slope).normalized
+                mesh.vertex(DV3(ring[i] + normals[i] * reach, height - 0.6 + 1.9 * t), n, uv)
+            }
+        }
+        for i in ring.indices {
+            let next = (i + 1) % ring.count
+            for j in 0..<segments {
+                let a = UInt32(start + i * (segments + 1) + j)
+                let b = UInt32(start + next * (segments + 1) + j)
+                mesh.tri(a, b, b + 1); mesh.tri(a, b + 1, a + 1)
+            }
+        }
+        let outer = DioramaCoastline.offset(ring, by: 0.15)
+        for i in ring.indices {
+            let j = (i + 1) % ring.count
+            mesh.quad(DV3(outer[i], height + 1.3), DV3(outer[j], height + 1.3),
+                      DV3(ring[j], height + 1.3), DV3(ring[i], height + 1.3), .muralBlue, normal: .up)
+            mesh.wall(ring[j], ring[i], z0: height + 0.19, z1: height + 1.3, .slipwayBlue)
+        }
     }
 
     func pitchedGalleryRoof(_ ring: [DV2], box: DioramaOrientedRect, z: Double, mesh: inout DioramaMesh, infillDepth: Double = 1.07) {

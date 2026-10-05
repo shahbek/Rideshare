@@ -1,10 +1,10 @@
 import Foundation
 
-/// Shared ground datum for every generator. Flat by default; the optional bundled SRTM grid is
-/// sampled only when elevation is explicitly enabled.
+/// Shared absolute, exaggerated metre datum for geometry, foundations, lights and shadows.
+/// Loaded Mapbox DEM samples replace the bundled SRTM fallback without shifting the sea plane.
 nonisolated struct DioramaTerrain: Sendable {
     /// Height added to all land so the diorama's floor always sits above the basemap's ground plane.
-    static let lift: Double = 0.3
+    static let lift: Double = 0.6
     /// Absolute height of the water surface and the seabed under it.
     static let waterSurface: Double = 0.22
     static let seabed: Double = -1.0
@@ -28,7 +28,7 @@ nonisolated struct DioramaTerrain: Sendable {
         DioramaTerrain(rect: rect, columns: 2, rows: 2, values: [0, 0, 0, 0])
     }
 
-    /// Flat plate at the basemap's ground level unless `config.usesElevation` asks for the SRTM grid.
+    /// Offline absolute SRTM estimate, replaced with available Mapbox DEM samples by the manager.
     static func load(rect: DioramaRect, config: DioramaConfig) -> DioramaTerrain {
         guard config.usesElevation else { return flat(rect) }
         guard let url = Bundle.main.url(forResource: resourceName, withExtension: "json"),
@@ -39,8 +39,7 @@ nonisolated struct DioramaTerrain: Sendable {
             print("[Diorama] terrain grid missing; using flat ground")
             return flat(rect)
         }
-        let floor = file.elevations.min() ?? 0
-        return DioramaTerrain(rect: rect, columns: file.columns, rows: file.rows, values: file.elevations.map { $0 - floor })
+        return DioramaTerrain(rect: rect, columns: file.columns, rows: file.rows, values: file.elevations.map { $0 * 1.6 })
     }
 
     /// Level foundation above the highest sampled ground along the footprint, not just its centroid.
@@ -58,8 +57,8 @@ nonisolated struct DioramaTerrain: Sendable {
         let fy = min(max((p.y - rect.minY) / rect.height, 0), 1) * Double(rows - 1)
         let x0 = min(Int(fx), columns - 2), y0 = min(Int(fy), rows - 2)
         let tx = fx - Double(x0), ty = fy - Double(y0)
-        // Smoothstep across each cell hides the creases a plain bilinear patch would show.
-        let sx = tx * tx * (3 - 2 * tx), sy = ty * ty * (3 - 2 * ty)
+        // Linear sampling retains the DEM slope instead of flattening it at every cell boundary.
+        let sx = tx, sy = ty
         let h00 = values[y0 * columns + x0], h10 = values[y0 * columns + x0 + 1]
         let h01 = values[(y0 + 1) * columns + x0], h11 = values[(y0 + 1) * columns + x0 + 1]
         let h = (h00 * (1 - sx) + h10 * sx) * (1 - sy) + (h01 * (1 - sx) + h11 * sx) * sy

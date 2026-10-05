@@ -114,12 +114,34 @@ nonisolated struct DioramaMesh: Sendable {
         }
     }
 
+    /// Smooth vertex normals on radiused ring segments; true angular corners retain hard edges.
+    mutating func mouldedWall(_ ring: [DV2], edge i: Int, z0: Double, z1: Double, _ s: DioramaSwatch) {
+        guard ring.count >= 3, z1 > z0 else { return }
+        let j = (i + 1) % ring.count
+        let a = ring[i], b = ring[j]
+        let face = (b - a).normalized.right
+        func normal(_ index: Int) -> DV3 {
+            let before = (ring[index] - ring[(index + ring.count - 1) % ring.count]).normalized.right
+            let after = (ring[(index + 1) % ring.count] - ring[index]).normalized.right
+            return DV3(before.dot(after) > 0.9 ? (before + after).normalized : face, 0)
+        }
+        let uv = DioramaAtlas.uv(s, dark: false)
+        let na = normal(i), nb = normal(j)
+        let v0 = vertex(DV3(a, z0), na, uv), v1 = vertex(DV3(b, z0), nb, uv)
+        let v2 = vertex(DV3(b, z1), nb, uv), v3 = vertex(DV3(a, z1), na, uv)
+        tri(v0, v1, v2); tri(v0, v2, v3)
+    }
+
     /// Walls of a counter-clockwise ring, optionally skipping flagged edges, with an optional lid.
     mutating func extrude(_ ring: [DV2], z0: Double, z1: Double, _ s: DioramaSwatch, ao: Double = 0, skip: [Bool]? = nil, top: DioramaSwatch? = nil) {
         let n = ring.count
         guard n >= 3 else { return }
         for i in 0..<n where !(skip?[i] ?? false) {
-            wall(ring[i], ring[(i + 1) % n], z0: z0, z1: z1, s, ao: ao)
+            if ao == 0, ring[i].distance(to: ring[(i + 1) % n]) < 2 {
+                mouldedWall(ring, edge: i, z0: z0, z1: z1, s)
+            } else {
+                wall(ring[i], ring[(i + 1) % n], z0: z0, z1: z1, s, ao: ao)
+            }
         }
         if let top { polygon(ring, z: z1, top) }
     }

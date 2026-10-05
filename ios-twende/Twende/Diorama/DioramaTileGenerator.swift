@@ -46,12 +46,12 @@ nonisolated enum DioramaTileGenerator {
     }
 
     /// Generates (or returns the in-memory copy of) one tile. Call from any thread.
-    static func generate(_ data: DioramaTileData, config: DioramaConfig, library: DioramaPropLibrary, reduced: Bool) throws -> DioramaTileArtifacts {
-        if let cached = cached(data.tile, config: config, reduced: reduced) { return cached }
+    static func generate(_ data: DioramaTileData, config: DioramaConfig, library: DioramaPropLibrary, reduced: Bool, sampledTerrain: DioramaTerrain? = nil) throws -> DioramaTileArtifacts {
+        if sampledTerrain == nil, let cached = cached(data.tile, config: config, reduced: reduced) { return cached }
         let started = Date()
 
         let roadIndex = DioramaRoadIndex(roads: data.roads, pavementWidth: config.pavementWidth)
-        let terrain = DioramaTerrain.load(rect: data.rect, config: config)
+        let terrain = sampledTerrain ?? DioramaTerrain.load(rect: data.rect, config: config)
         let streetLayout = DioramaStreetLayout(data: data, config: config)
         var buildings = DioramaMesh()
         var windowGlow = DioramaMesh()
@@ -189,9 +189,11 @@ nonisolated enum DioramaTileGenerator {
             tile: data.tile, vertices: vertices, indices: indices, ranges: ranges, parts: parts, lights: lights, lightGrid: lightGrid,
             generationSeconds: Date().timeIntervalSince(started)
         )
-        cacheLock.lock()
-        cache[cacheKey(data.tile, config: config, reduced: reduced)] = artifacts
-        cacheLock.unlock()
+        if sampledTerrain == nil {
+            cacheLock.lock()
+            cache[cacheKey(data.tile, config: config, reduced: reduced)] = artifacts
+            cacheLock.unlock()
+        }
         return artifacts
     }
 }

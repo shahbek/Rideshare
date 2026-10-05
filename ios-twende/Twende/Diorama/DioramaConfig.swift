@@ -117,10 +117,9 @@ nonisolated struct DioramaBuildingOverride: Sendable {
 /// One place to tune the whole look without touching generation code.
 nonisolated struct DioramaConfig: Sendable {
     /// Bump to invalidate every cached tile.
-    var generatorVersion: Int = 15
-    /// When false the diorama sits on a flat plate at the basemap's ground level (Mapbox Standard has no
-    /// terrain at this zoom, so a lumpy plate would float off the streets around it).
-    var usesElevation: Bool = false
+    var generatorVersion: Int = 16
+    /// Drape the plate/ground overlays over the shared DEM datum used by roads and foundations.
+    var usesElevation: Bool = true
 
     // MARK: Tile
     var tileZoom: Int = 16

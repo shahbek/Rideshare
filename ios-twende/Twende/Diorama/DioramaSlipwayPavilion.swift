@@ -1,7 +1,7 @@
 import Foundation
 
 /// Pale-roof western gallery and its northern return, identified separately in the mapped data.
-/// Roof/façade details are photo-led; mapped plans and the northern block's height remain intact.
+/// Photo-led authored rounded plans use OSM only for placement, scale and the northern height.
 nonisolated struct DioramaSlipwayPavilion {
     static let buildingID: UInt64 = 180_607_949
     /// The white pale-roof arcade block north of Hotel Slipway.
@@ -28,7 +28,7 @@ nonisolated struct DioramaSlipwayPavilion {
             let dir = (b - a).normalized, out = dir.right
             let count = max(1, Int(a.distance(to: b) / 4.8)), bay = a.distance(to: b) / Double(count)
             guard bay > 1.2 else {
-                mesh.wall(a, b, z0: base + 0.16, z1: eave, .whitewash)
+                mesh.mouldedWall(f.ring, edge: i, z0: base + 0.16, z1: eave, .whitewash)
                 continue
             }
             for floor in 0..<floors {
