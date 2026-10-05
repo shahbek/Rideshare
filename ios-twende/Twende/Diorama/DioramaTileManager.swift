@@ -65,8 +65,11 @@ final class DioramaTileManager {
     private var thermalReduced: Bool = ProcessInfo.processInfo.thermalState.rawValue >= ProcessInfo.ThermalState.serious.rawValue
     private var thermalObserver: NSObjectProtocol? = nil
     private var renderLayer: DioramaRenderLayer? = nil
-    /// Drives the water animation while the tile is on screen (30 Hz; off under Reduce Motion).
-    private var waveTimer: Timer? = nil
+    private var powerObserver: NSObjectProtocol? = nil
+
+    private var reducesEffects: Bool {
+        thermalReduced || ProcessInfo.processInfo.isLowPowerModeEnabled
+    }
 
     private var layerID: String { "zuri-diorama-\(tile.key)" }
     private var clipLayerID: String { "zuri-diorama-clip-\(tile.key)" }
@@ -84,7 +87,15 @@ final class DioramaTileManager {
                 let reduced = ProcessInfo.processInfo.thermalState.rawValue >= ProcessInfo.ThermalState.serious.rawValue
                 guard reduced != self.thermalReduced else { return }
                 self.thermalReduced = reduced
-                self.regenerate()
+                self.renderLayer?.setReducedEffects(self.reducesEffects)
+                self.map?.triggerRepaint()
+            }
+        }
+        powerObserver = NotificationCenter.default.addObserver(forName: .NSProcessInfoPowerStateDidChange, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.renderLayer?.setReducedEffects(self.reducesEffects)
+                self.map?.triggerRepaint()
             }
         }
     }
@@ -213,7 +224,8 @@ final class DioramaTileManager {
     private func show(_ artifacts: DioramaTileArtifacts, on map: MapboxMap) {
         do {
             hide(on: map)
-            let animates = !UIAccessibility.isReduceMotionEnabled && !thermalReduced
+            // Static water lets Mapbox sleep when the camera/content is idle. No repaint clock.
+            let animates = false
             let host = DioramaRenderLayer(
                 origin: tile.centre, vertices: artifacts.vertices, indices: artifacts.indices, ranges: artifacts.ranges,
                 lightGrid: artifacts.lightGrid, waterHeight: DioramaTerrain.waterSurface, visible: state.visibleCategories, timeOfDay: state.timeOfDay,
@@ -231,7 +243,7 @@ final class DioramaTileManager {
             try map.addLayer(clip)
             renderLayer = host
             shown = true
-            startWaves(animates)
+            host.setReducedEffects(reducesEffects)
             state.loadedTiles[tile] = artifacts
             state.status = "Slipway loaded" + (thermalReduced ? " · reduced detail (thermal)" : "")
             map.triggerRepaint()
@@ -247,19 +259,6 @@ final class DioramaTileManager {
         if map.sourceExists(withId: clipSourceID) { try? map.removeSource(withId: clipSourceID) }
         renderLayer = nil
         shown = false
-        startWaves(false)
-    }
-
-    private func startWaves(_ on: Bool) {
-        waveTimer?.invalidate()
-        waveTimer = nil
-        guard on else { return }
-        waveTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated {
-                guard let self, self.shown, self.state.visibleCategories.contains(.water) else { return }
-                self.map?.triggerRepaint()
-            }
-        }
     }
 
     // MARK: Style state

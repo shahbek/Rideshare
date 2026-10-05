@@ -1,7 +1,7 @@
 import Foundation
 
-/// Connected Slipway hardscape between the complex's buildings, with occupied areas subtracted.
-/// The mapped garden anchors the furniture; it no longer limits the extent of the paving.
+/// Bounded mapped Slipway court and a continuous coastal retaining wall.
+/// Independent restaurant decks keep ownership of their surfaces and furniture.
 nonisolated struct DioramaHotelGrounds {
     static let courtyardID: UInt64 = 1_128_180_504
     let data: DioramaTileData
@@ -199,41 +199,35 @@ nonisolated struct DioramaHotelGrounds {
     private func seawall(ground: inout DioramaMesh) {
         let south = data.projection.local(longitude: 39.272, latitude: -6.75294).y
         let north = data.projection.local(longitude: 39.272, latitude: -6.75192).y
-        let stairAnchor = data.projection.local(longitude: 39.27196, latitude: -6.75251)
-        var segments: [(DV2, DV2)] = []
+        let west = data.projection.local(longitude: 39.2714, latitude: -6.7525).x
+        let east = data.projection.local(longitude: 39.2728, latitude: -6.7525).x
         for water in data.water {
-            guard let ring = water.rings.first else { continue }
-            for i in ring.indices where !water.clipped[i] {
-                let a = ring[i], b = ring[(i + 1) % ring.count], mid = (a + b) * 0.5
-                if mid.y > south && mid.y < north && a.distance(to: b) > 0.5 { segments.append((a, b)) }
+            guard let ring = water.rings.first, ring.count > 2 else { continue }
+            let inner = DioramaCoastline.offset(ring, by: 0.62)
+            let faceUV = DioramaAtlas.uv(.coralStone, dark: false)
+            let capUV = DioramaAtlas.uv(.paving, dark: false)
+            let base = ground.positions.count
+            // Six vertices per sample: separate normal groups for the two walls and coping.
+            // Neighbours share indices; there are no internal box ends or competing corner caps.
+            for i in ring.indices {
+                let before = (ring[i] - ring[(i + ring.count - 1) % ring.count]).normalized.right
+                let after = (ring[(i + 1) % ring.count] - ring[i]).normalized.right
+                let normal = DV3((before + after).normalized, 0)
+                let top = terrain.height(ring[i]) + 0.2
+                ground.vertex(DV3(ring[i], -0.5), normal * -1, faceUV)
+                ground.vertex(DV3(ring[i], top), normal * -1, faceUV)
+                ground.vertex(DV3(ring[i], top), .up, capUV)
+                ground.vertex(DV3(inner[i], top), .up, capUV)
+                ground.vertex(DV3(inner[i], top), normal, faceUV)
+                ground.vertex(DV3(inner[i], -0.5), normal, faceUV)
             }
-        }
-        let stairIndex = segments.indices.min { DioramaPolygon.distanceToSegment(stairAnchor, segments[$0].0, segments[$0].1) < DioramaPolygon.distanceToSegment(stairAnchor, segments[$1].0, segments[$1].1) }
-        for (index, pair) in segments.enumerated() {
-            let (a, b) = pair, dir = (b - a).normalized, land = dir.right, length = a.distance(to: b)
-            let base = terrain.height((a + b) * 0.5), top = base + 0.11
-            let divisions = max(1, Int(ceil(length / 1.1)))
-            let stepWidth = length / Double(divisions)
-            for j in 0..<divisions {
-                let start = a + dir * (Double(j) * stepWidth), end = start + dir * stepWidth, mid = (start + end) * 0.5
-                let isStair = index == stairIndex && abs((mid - (a + b) * 0.5).dot(dir)) < min(4, length * 0.4)
-                if isStair {
-                    for k in 0..<6 {
-                        let h = top - Double(k) * 0.16
-                        ground.box(centre: mid - land * (Double(k) * 0.36 + 0.18), z0: -0.3, axis: dir, halfLength: stepWidth / 2, halfWidth: 0.185, height: h + 0.3, .coralStone, top: .paving)
-                    }
-                } else {
-                    ground.box(centre: mid + land * 0.23, z0: -0.5, axis: dir, halfLength: stepWidth / 2, halfWidth: 0.34, height: top + 0.5, .coralStone)
-                    for course in 0..<5 {
-                        let z = top - Double(course + 1) * 0.25
-                        ground.wall(start - land * 0.115, end - land * 0.115, z0: z, z1: z + 0.02, .earth)
-                        let seam = mid + dir * (course % 2 == 0 ? 0 : stepWidth * 0.35) - land * 0.12
-                        ground.wall(seam - dir * 0.012, seam + dir * 0.012, z0: z, z1: z + 0.24, .earth)
-                    }
-                    ground.box(centre: mid + land * 0.23, z0: top, axis: dir, halfLength: stepWidth / 2, halfWidth: 0.4, height: 0.09, .paving)
+            for i in ring.indices where !water.clipped[i] {
+                let j = (i + 1) % ring.count, mid = (ring[i] + ring[j]) * 0.5
+                guard mid.y > south, mid.y < north, mid.x > west, mid.x < east else { continue }
+                for k in [0, 2, 4] {
+                    let a = UInt32(base + i * 6 + k), b = UInt32(base + j * 6 + k)
+                    ground.tri(a, b, b + 1); ground.tri(a, b + 1, a + 1)
                 }
-                // The shared courtyard surface meets this edge at its actual datum. No independent
-                // sloped strips: their unjoined corners previously made overlapping fans along shore.
             }
         }
     }

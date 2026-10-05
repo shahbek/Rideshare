@@ -30,6 +30,17 @@ nonisolated struct DioramaGroundCutouts: Sendable {
         masks = convex.map { ($0, DioramaRect.bounding($0)) }
     }
 
+    /// Geometry-only subtraction for base land, coastline bands and disjoint path joins.
+    init(polygons: [[DV2]]) {
+        masks = polygons.flatMap { polygon in
+            let ring = DioramaPolygon.counterClockwise(polygon)
+            return DioramaPolygon.triangulate(ring).map { t in
+                let triangle = [ring[t.0], ring[t.1], ring[t.2]]
+                return (ring: triangle, bounds: DioramaRect.bounding(triangle))
+            }
+        }
+    }
+
     /// Returns convex pieces outside all occupied footprints, preserving real outline intersections.
     func subtract(from ring: [DV2]) -> [[DV2]] {
         let bounds = DioramaRect.bounding(ring)

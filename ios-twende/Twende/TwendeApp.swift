@@ -11,6 +11,9 @@ struct TwendeApp: App {
         TwendeFont.registerBundledFonts()
         // Public (pk.) Mapbox token provided by the project owner.
         MapboxOptions.accessToken = "pk.eyJ1Ijoic2hhaGJla21pcnUiLCJhIjoiY211YTBma2ZzMTloazJ3czdzeTQwZmxnZSJ9.-MJ4SGimPkMpq8itj76rVg"
+        // Rendering and explicit downloads must use the same persistent TileStore.
+        MapboxMapsOptions.tileStore = TileStore.default
+        MapboxMapsOptions.tileStoreUsageMode = .readOnly
         let environment = AppEnvironment()
         _environment = State(initialValue: environment)
         // Siri and Shortcuts launch the app in the background to run an intent; no scene is connected then,

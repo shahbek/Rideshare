@@ -70,6 +70,14 @@ struct SettingsView: View {
 
             RowDivider(leading: 0)
 
+            MenuRow(icon: .map, title: L(.offlineMaps), subtitle: L(.offlineBundled), horizontalPadding: 0) {
+                Haptics.tap()
+                navigation.path.append(.offlineMaps)
+            }
+            .accessibilityIdentifier("settings.offlineMaps")
+
+            RowDivider(leading: 0)
+
             Toggle(isOn: Bindable(DioramaState.shared).isEnabled) {
                 IconRow(icon: .house, title: "Slipway 3D diorama", subtitle: "Experimental toy-town view on the Home map") { EmptyView() }
             }

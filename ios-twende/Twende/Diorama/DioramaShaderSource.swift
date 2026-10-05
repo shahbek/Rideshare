@@ -276,6 +276,31 @@ nonisolated enum DioramaShaderSource {
             albedo = mix(albedo, albedo * 0.79, joint * 0.55);
         }
 
+        // Fish are pigment in the arched plaster, not raised discs/triangles casting tiny shadows.
+        // Analytic coverage antialiases their outlines and fades detail below a pixel.
+        if (tex > 7.5 && tex < 8.5 && abs(n.z) < 0.3) {
+            float2 tangent = float2(-n.y, n.x);
+            float2 mural = float2(dot(wp, tangent), in.worldPosition.z) / float2(1.55, 0.86);
+            mural.x += floor(mural.y) * 0.43;
+            float2 cell = floor(mural);
+            float2 p = fract(mural) - 0.5;
+            if (fmod(abs(cell.x + cell.y), 2.0) > 0.5) p.x = -p.x;
+            float seed = dioramaHash(cell);
+            float body = length(p / float2(0.32, 0.27)) - 1.0;
+            float tail = max(abs(p.y) - (-p.x - 0.22) * 1.4, max(p.x + 0.22, -0.47 - p.x));
+            float edge = max(fwidth(body), 0.02);
+            float mask = 1.0 - smoothstep(-edge, edge, min(body, tail * 4.0));
+            float stripe = smoothstep(-0.2, 0.2, sin((p.x + 0.08 * sin(p.y * 9.0)) * 37.0));
+            float3 ochre = float3(0.85, 0.64, 0.27);
+            float3 pale = float3(0.97, 0.94, 0.84);
+            float3 paint = mix(ochre, pale, step(0.5, seed));
+            paint = mix(float3(0.10, 0.18, 0.23), paint, stripe);
+            float eye = 1.0 - smoothstep(0.022, 0.022 + fwidth(p.x), length(p - float2(0.22, 0.065)));
+            paint = mix(paint, float3(0.03), eye);
+            float detail = 1.0 - smoothstep(0.2, 0.8, max(fwidth(mural.x), fwidth(mural.y)));
+            albedo = mix(albedo, paint, mask * detail);
+        }
+
         // Shadows and lighting always use the original scene, including in the reflection pass.
         float3 litPos = in.worldPosition;
         float3 litN = n;
@@ -286,7 +311,7 @@ nonisolated enum DioramaShaderSource {
         float sun = max(ndl, 0.0);
         float visibility = dioramaShadow(litPos, litN, u, shadowMap);
         float3 light = ambient * 0.78 + u.sunColor.rgb * sun * visibility;
-        float3 pointLight = dioramaPointLights(litPos, litN, u, lights, lightTable, lightIndices);
+        float3 pointLight = glow > 0.01 ? dioramaPointLights(litPos, litN, u, lights, lightTable, lightIndices) : float3(0.0);
         light += pointLight * glow;
 
         float3 color = albedo * light;
@@ -328,9 +353,9 @@ nonisolated enum DioramaShaderSource {
             // permanent fringe on the last couple of metres.
             float crest = smoothstep(0.78, 0.98, sin(phase + 0.3) * 0.5 + 0.5);
             float lace = dioramaNoise(wp * 1.4 + float2(time * 0.35, -time * 0.2));
-            float foamBand = crest * smoothstep(26.0, 4.0, shore) * smoothstep(0.35, 0.7, lace);
+            float foamBand = crest * (1.0 - smoothstep(4.0, 18.0, shore)) * smoothstep(0.45, 0.8, lace) * 0.18;
             float fringe = (1.0 - smoothstep(0.0, 2.6, shore)) * smoothstep(0.3, 0.6, lace + 0.15 * sin(time * 1.6 + shore * 2.0));
-            float foam = saturate(foamBand + fringe);
+            float foam = saturate(foamBand + fringe * 0.22);
 
             float2 uv = in.position.xy / u.water.zw;
             float2 ripple = float2(dioramaNoise(wp * 0.3 + float2(3.1 + time * 0.1, 7.7)),

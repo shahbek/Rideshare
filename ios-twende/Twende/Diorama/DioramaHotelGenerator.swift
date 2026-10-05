@@ -32,13 +32,14 @@ nonisolated struct DioramaHotelGenerator {
         for floor in 0...floors {
             let z = Double(floor) * pitch
             let outline = isHotel && floor == floors
-                ? (DioramaPolygon.offset(ring, by: -0.3) ?? ring)
+                ? (DioramaPolygon.offset(ring, by: -0.65) ?? ring)
                 : (isDelta && floor > 0 && floor < floors ? balconyRing : ring)
             mesh.extrude(outline, z0: z, z1: z + 0.19, .trimWhite, top: floor == floors ? .roofConcrete : .paving)
             mesh.polygon(outline, z: z, .trimWhite, facingUp: false)
         }
-        // Select a long facade on the known approach side, not a random nearest road.
-        let desired = isHotel ? ((courtyardCentre ?? (f.centroid + DV2(-1, -1))) - f.centroid).normalized : (isDelta ? DV2(1, 0) : (isTeal ? DV2(-1, 0) : DV2(1, 0)))
+        // The fish mural faces west into the pedestrian court in the photograph. Garden 1128180504
+        // is farther south: aiming at its centroid incorrectly selected the hotel's short end wall.
+        let desired = isHotel ? DV2(-1, -0.22).normalized : (isDelta ? DV2(1, 0) : (isTeal ? DV2(-1, 0) : DV2(1, 0)))
         let front = f.ring.indices.max { i, j in
             func score(_ k: Int) -> Double {
                 let e = f.ring[(k + 1) % f.ring.count] - f.ring[k]
@@ -59,7 +60,7 @@ nonisolated struct DioramaHotelGenerator {
                 let z = Double(floor) * pitch + 0.19
                 let muralBay = isHotel && i == front && floor == floors - 1
                 let groundArch = isHotel && i == front && floor == 0
-                let archSpring = muralBay ? height - 1.65 : z + 1.65
+                let archSpring = muralBay ? height - 1.0 : z + 1.65
                 for k in 0..<count {
                     let l = a + dir * (Double(k) * bay), r = l + dir * bay
                     let centre = (l + r) * 0.5
@@ -85,6 +86,10 @@ nonisolated struct DioramaHotelGenerator {
                     }
                     if recess > 0.5 {
                         mesh.box(centre: l + dir * 0.14 - out * (isDelta ? 0.76 : 0.14), z0: z, axis: dir, halfLength: 0.14, halfWidth: 0.14, height: muralBay || groundArch ? archSpring - z : pitch - 0.19, isDelta ? .deltaStone : .trimWhite)
+                        if k == count - 1 && (muralBay || groundArch) {
+                            mesh.box(centre: r - dir * 0.14 - out * 0.14, z0: z, axis: dir, halfLength: 0.14,
+                                     halfWidth: 0.14, height: archSpring - z, .trimWhite)
+                        }
                         if floor > 0 {
                             if isDelta {
                                 scallop(l: l, dir: dir, out: out, width: bay, z: z, mesh: &mesh)
@@ -110,20 +115,17 @@ nonisolated struct DioramaHotelGenerator {
                         mesh.box(centre: ac, z0: z + pitch - 0.7, axis: dir, halfLength: 0.4, halfWidth: 0.22, height: 0.42, .concrete)
                         mesh.verticalDisc(centre: DV3(ac + out * 0.23, z + pitch - 0.49), radius: 0.15, sides: 12, facing: out, .metalCharcoal)
                     }
-                    if isArcade { arch(a: l, dir: dir, out: out, width: bay, z: z + 1.75, rise: 1.0, mesh: &mesh) }
+                    if isArcade { archedSpandrel(a: l, dir: dir, out: out, width: bay, spring: z + 1.75, rise: 1, top: height, color: .whitewash, mesh: &mesh) }
                     if muralBay || groundArch {
                         archedSpandrel(a: l, dir: dir, out: out, width: bay,
-                                       spring: archSpring, rise: muralBay ? 1.05 : min(1.1, pitch - 1.85),
-                                       top: muralBay ? height + 0.95 : z + pitch - 0.19,
+                                       spring: archSpring, rise: muralBay ? 0.8 : min(1.1, pitch - 1.85),
+                                       top: muralBay ? height + 1.15 : z + pitch - 0.19,
                                        color: muralBay ? .muralBlue : .whitewash, mesh: &mesh, pointed: muralBay)
                     }
                 }
             }
             if !(isHotel && i == front) {
                 mesh.extrude([a, b, b - out * 0.22, a - out * 0.22], z0: height + 0.19, z1: height + 0.8, color, top: .trimWhite)
-            }
-            if isHotel && i == front {
-                mural(a: a, b: b, z: height + 0.05, mesh: &mesh)
             }
         }
         // The fish-painted parapet is the upper silhouette; do not cap it with a generic hip roof.
@@ -216,22 +218,42 @@ nonisolated struct DioramaHotelGenerator {
 
     func archedSpandrel(a: DV2, dir: DV2, out: DV2, width: Double, spring: Double, rise: Double,
                          top: Double, color: DioramaSwatch, mesh: inout DioramaMesh, pointed: Bool = false) {
-        let half = pointed ? width * 0.33 : max(0.1, width / 2 - 0.25)
+        let half = pointed ? width * 0.36 : max(0.1, width / 2 - 0.25)
         let centre = a + dir * (width / 2), pierWidth = width / 2 - half
-        // The photographed mural IS the arched wall: two circular lobes meet at a pointed crown.
-        // Its straight upper edge is not a separate rectangular fascia laid over an arch tube.
-        func lowerEdge(_ t: Double) -> Double {
-            let u = abs(t)
-            let profile = pointed ? sqrt(max(0, 4 - pow(1 + u, 2))) / sqrt(3) : sqrt(max(0, 1 - u * u))
-            return spring + rise * profile
+        // Angular samples resolve the steep jambs; uniform x samples made these look stepped.
+        // Indexed face/reveal ribbons share vertices, with smoothly interpolated soffit normals.
+        let steps = 40, start = mesh.positions.count
+        let faceUV = DioramaAtlas.uv(color, dark: false)
+        let backUV = DioramaAtlas.uv(.whitewash, dark: false)
+        for i in 0...steps {
+            let t = Double(i) / Double(steps)
+            let x: Double, h: Double, dx: Double, dz: Double
+            if pointed {
+                let left = t <= 0.5
+                let angle = (left ? t * 2 : (1 - t) * 2) * .pi / 3
+                x = (left ? -1 : 1) * half * (2 * cos(angle) - 1)
+                h = spring + rise * sin(angle) / sin(.pi / 3)
+                dx = 2 * half * sin(angle)
+                dz = (left ? 1 : -1) * rise * cos(angle) / sin(.pi / 3)
+            } else {
+                let angle = t * .pi
+                x = -half * cos(angle); h = spring + rise * sin(angle)
+                dx = half * sin(angle); dz = rise * cos(angle)
+            }
+            let p = centre + dir * x, rear = p - out * 0.24
+            let soffit = (DV3(dir * dz, -dx)).normalized
+            mesh.vertex(DV3(p, h), DV3(out, 0), faceUV)
+            mesh.vertex(DV3(p, top), DV3(out, 0), faceUV)
+            mesh.vertex(DV3(rear, h), DV3(-out, 0), backUV)
+            mesh.vertex(DV3(rear, top), DV3(-out, 0), backUV)
+            mesh.vertex(DV3(p, h), soffit, backUV)
+            mesh.vertex(DV3(rear, h), soffit, backUV)
         }
-        for i in 0..<32 {
-            let t0 = -1 + Double(i) / 16, t1 = -1 + Double(i + 1) / 16
-            let p = centre + dir * (t0 * half), q = centre + dir * (t1 * half)
-            let h0 = lowerEdge(t0), h1 = lowerEdge(t1)
-            mesh.quad(DV3(p, h0), DV3(q, h1), DV3(q, top), DV3(p, top), color, normal: DV3(out, 0))
-            mesh.quad(DV3(q - out * 0.24, h1), DV3(p - out * 0.24, h0), DV3(p - out * 0.24, top), DV3(q - out * 0.24, top), .whitewash, normal: DV3(-out, 0))
-            mesh.quad(DV3(q, h1), DV3(p, h0), DV3(p - out * 0.24, h0), DV3(q - out * 0.24, h1), pointed ? .muralBlue : .cream)
+        for i in 0..<steps {
+            for k in [0, 2, 4] {
+                let p = UInt32(start + i * 6 + k), q = p + 6
+                mesh.tri(p, q, q + 1); mesh.tri(p, q + 1, p + 1)
+            }
         }
         for p in [a + dir * (pierWidth / 2), a + dir * (width - pierWidth / 2)] {
             mesh.box(centre: p - out * 0.12, z0: spring, axis: dir, halfLength: pierWidth / 2, halfWidth: 0.12, height: top - spring, color)
@@ -265,28 +287,4 @@ nonisolated struct DioramaHotelGenerator {
         DioramaLettering.line(isDelta ? "DELTA HOTELS" : "HOTEL SLIPWAY", centre: DV3(fascia + out * 0.13, 3.91), up: .up, facing: DV3(out, 0), height: 0.57, swatch: .lampGlow, mesh: &glow)
     }
 
-    private func mural(a: DV2, b: DV2, z: Double, mesh: inout DioramaMesh) {
-        let dir = (b - a).normalized, out = dir.right
-        // Fish sit on the existing arched blue spandrel, not on a second overlapping fascia.
-        for (index, t) in stride(from: 0.9, to: a.distance(to: b) - 0.65, by: 1.55).enumerated() {
-            let c = DV3(a + dir * t + out * 0.018, z + 0.4)
-            let heading = dir * (index % 2 == 0 ? 1.0 : -1.0), normal = DV3(out, 0)
-            let body: DioramaSwatch = index % 3 == 0 ? .ochre : (index % 3 == 1 ? .trimWhite : .hotelTeal)
-            for j in 0..<20 {
-                let t0 = Double(j) * .pi / 10, t1 = Double(j + 1) * .pi / 10
-                let p = c + DV3(heading * (cos(t0) * 0.52), sin(t0) * 0.28)
-                let q = c + DV3(heading * (cos(t1) * 0.52), sin(t1) * 0.28)
-                mesh.triangle(c, p, q, body, normal: normal)
-            }
-            let tail = c - DV3(heading * 0.51, 0) - DV3(out * 0.004, 0)
-            mesh.triangle(tail, tail - DV3(heading * 0.33, -0.29), tail - DV3(heading * 0.33, 0.29), .ochre, normal: normal)
-            mesh.triangle(c + DV3(heading * 0.16 - out * 0.004, 0.22), c + DV3(-heading * 0.3 - out * 0.004, 0.42), c + DV3(-heading * 0.35 - out * 0.004, 0.15), .ochre, normal: normal)
-            for stripe in [-0.2, 0.04, 0.25] {
-                let p = c + DV3(heading * stripe + out * 0.012, 0)
-                let h = 0.27 * sqrt(max(0, 1 - pow(stripe / 0.52, 2)))
-                mesh.quad(p + DV3(-heading * 0.035, -h), p + DV3(heading * 0.035, -h), p + DV3(heading * 0.035, h), p + DV3(-heading * 0.035, h), .carvedWood, normal: normal)
-            }
-            mesh.verticalDisc(centre: c + DV3(heading * 0.36 + out * 0.025, 0.065), radius: 0.045, sides: 8, facing: out, .metalCharcoal)
-        }
-    }
 }

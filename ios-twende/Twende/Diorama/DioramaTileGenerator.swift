@@ -1,5 +1,6 @@
 import Foundation
 import simd
+import simd
 
 /// Everything the renderer needs for one generated tile: one interleaved vertex buffer, one index
 /// buffer, and the index range each category occupies so categories can be toggled per frame.
@@ -68,7 +69,7 @@ nonisolated enum DioramaTileGenerator {
         built.reserveCapacity(data.buildings.count)
         var porchLights: [DioramaLight] = []
         for feature in data.buildings {
-            if feature.id == DioramaSlipwayPavilion.buildingID {
+            if DioramaSlipwayPavilion.buildingIDs.contains(feature.id) {
                 built.append(DioramaSlipwayPavilion(data: data, terrain: terrain).build(feature, mesh: &buildings))
             } else if DioramaHotelGenerator.ids.contains(feature.id) {
                 built.append(DioramaHotelGenerator(terrain: terrain, courtyardCentre: data.landuse.first(where: { $0.id == DioramaHotelGrounds.courtyardID })?.rings.first.map { DioramaPolygon.centroid($0) }).build(feature, mesh: &buildings, glow: &windowGlow, lights: &porchLights))
@@ -131,6 +132,7 @@ nonisolated enum DioramaTileGenerator {
                 case .poolBlue: texture = 5
                 case .glass, .glassPale: texture = 6
                 case .tileClay: texture = 7
+                case .muralBlue: texture = 8
                 default: texture = 0
                 }
                 let attribute = i < mesh.attributes.count ? mesh.attributes[i] : 0
@@ -147,13 +149,35 @@ nonisolated enum DioramaTileGenerator {
                     normal: normal, color: color, appearance: appearance
                 ))
             }
-            let limit = UInt32(count)
-            for raw in mesh.indices {
-                // Never hand the GPU an index outside the buffer.
-                indices.append(UInt32(base) + (raw < limit ? raw : 0))
+            // Sort triangles once into deterministic spatial batches. GPU buffers stay immutable;
+            // camera changes only select ranges, rather than redrawing all 304 buildings.
+            var cells: [Int: [UInt32]] = [:]
+            for i in stride(from: 0, to: mesh.indices.count - 2, by: 3) {
+                let a = mesh.indices[i], b = mesh.indices[i + 1], c = mesh.indices[i + 2]
+                guard a < UInt32(count), b < UInt32(count), c < UInt32(count) else { continue }
+                let p = mesh.positions[Int(a)], q = mesh.positions[Int(b)], r = mesh.positions[Int(c)]
+                func valid(_ v: DV3) -> Bool {
+                    v.x.isFinite && v.y.isFinite && v.z.isFinite && abs(v.x) < 1_000_000 && abs(v.y) < 1_000_000 && abs(v.z) < 10_000
+                }
+                guard valid(p), valid(q), valid(r) else { continue }
+                let key = Int(floor((p.x + q.x + r.x) / 240)) + Int(floor((p.y + q.y + r.y) / 240)) * 10000
+                cells[key, default: []].append(contentsOf: [UInt32(base) + a, UInt32(base) + b, UInt32(base) + c])
+            }
+            for key in cells.keys.sorted() {
+                guard let batch = cells[key] else { continue }
+                var low = SIMD3<Float>(repeating: .greatestFiniteMagnitude)
+                var high = SIMD3<Float>(repeating: -.greatestFiniteMagnitude)
+                for index in batch {
+                    let p = vertices[Int(index)].position
+                    low = simd_min(low, SIMD3(p.x, p.y, p.z)); high = simd_max(high, SIMD3(p.x, p.y, p.z))
+                }
+                // Halo shader expands billboards from their centres; preserve a generous guard band.
+                let padding: Float = category == .propGlow ? 12 : 0.1
+                ranges.append(.init(category: category, start: indices.count, count: batch.count,
+                                    minimum: low - SIMD3(repeating: padding), maximum: high + SIMD3(repeating: padding)))
+                indices.append(contentsOf: batch)
             }
             let indexCount = indices.count - start
-            ranges.append(.init(category: category, start: start, count: indexCount))
             parts.append(.init(category: category, triangles: indexCount / 3))
         }
 

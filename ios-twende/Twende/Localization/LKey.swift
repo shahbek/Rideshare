@@ -3,6 +3,13 @@ import Foundation
 /// Every user-facing string. Both language tables must be exhaustive over this enum.
 /// Keys whose copy contains placeholders are formatted with `String(format:)`; a literal percent sign in those must be `%%`.
 nonisolated enum LKey: Hashable, Sendable {
+    // Offline maps
+    case offlineMaps, offlineMapsBody, offlineWiFiOnly, offlineDownloadedOnly, offlineOnlyBody
+    case offlineSlipway, offlineSlipwayDetail, offlinePeninsula, offlinePeninsulaDetail, offlineCentral, offlineCentralDetail
+    case offlineDownload, offlineUpdate, offlineReady, offlinePreparing, offlineDownloading, offlinePaused, offlineResume
+    case offlineFailed, offlineRemoveFailed, offlineRemoveTitle, offlineRemoveBody, offlineInventoryFailed
+    case offlineDisableOnly, offlineConnect, offlineNeedWiFi, offlineLimitations, offlineBundled, offlinePartial, offlineProgress
+
     // Common
     case back, close, cancel, continueAction, skip, change, remove, delete, clear, gotIt, verify
     case copy, copied, seeAll, saved, saveChanges, menu, recentre, request, notNow, tryAgain, backToHome

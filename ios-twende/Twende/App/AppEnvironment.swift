@@ -14,11 +14,13 @@ final class AppEnvironment {
     let chat: RideChatService = RideChatService()
     @ObservationIgnored private let accounts = AccountService()
     @ObservationIgnored private var backupTask: Task<Void, Never>?
+    let offlineMaps: OfflineMapService
     let payments: MobileMoneyCoordinator
     let trips: TripCoordinator
     let flow: BookingFlow
 
     init() {
+        offlineMaps = OfflineMapService(network: network)
         payments = MobileMoneyCoordinator(store: store)
         trips = TripCoordinator(drivers: drivers, store: store, network: network, payments: payments)
         flow = BookingFlow(drivers: drivers, store: store, location: location, trips: trips)
@@ -98,6 +100,7 @@ final class AppEnvironment {
 
     /// Suspends timer-driven simulation so no work runs after the system backgrounds the app.
     func enterBackground() {
+        offlineMaps.pause()
         drivers.pauseLiveUpdates()
     }
 

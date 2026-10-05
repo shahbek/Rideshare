@@ -16,7 +16,7 @@ nonisolated struct DioramaTileData: Sendable {
     var paths: [DioramaPathFeature] = []
     /// Point features worth a model: masts, playgrounds, artwork, the mosque.
     var pois: [DioramaPointFeature] = []
-    /// Shared inferred hardscape envelope, calculated once from the Slipway complex footprints.
+    /// Mapped courtyard with a bounded margin, shared by hardscape and furniture exclusions.
     var hotelCourtyardOutline: [DV2] = []
 
     var isEmpty: Bool { buildings.isEmpty && roads.isEmpty && water.isEmpty }
@@ -162,6 +162,7 @@ nonisolated enum DioramaBundledTile {
             if flags.count != outerLocal.count { flags = [Bool](repeating: false, count: outerLocal.count) }
             var (outer, fl) = DioramaPolygon.clean(outerLocal, flags: flags)
             (outer, fl) = DioramaPolygon.counterClockwise(outer, flags: fl)
+            if kind == "water" { (outer, fl) = DioramaCoastline.rounded(outer, flags: fl) }
             guard outer.count >= 3, DioramaRect.bounding(outer).intersects(bounds) else { return nil }
             var rings = [outer]
             for hole in a.rings.dropFirst() {

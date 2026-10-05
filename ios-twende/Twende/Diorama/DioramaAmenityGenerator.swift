@@ -41,12 +41,13 @@ nonisolated struct DioramaAmenityGenerator {
             default: break
             }
         }
+        footways(ground: &ground)
         for path in data.paths {
             switch path.kind {
             case "pier": pier(path.line, props: &props)
             case "slipway": slipway(path.line, ground: &ground)
             case "steps": steps(path.line, ground: &ground)
-            default: footway(path.line, ground: &ground)
+            default: break
             }
         }
         for poi in data.pois {
@@ -341,22 +342,19 @@ nonisolated struct DioramaAmenityGenerator {
         let pieces = cutouts.subtract(from: ring)
         for piece in pieces { ground.polygon(piece, z: top, .deckWood) }
         func onDeck(_ p: DV2) -> Bool { pieces.contains { DioramaPolygon.contains($0, p) } }
-        for i in ring.indices {
-            let a = ring[i], b = ring[(i + 1) % ring.count]
-            if !buildings.contains(where: { DioramaPolygon.contains($0.feature.ring, (a + b) * 0.5) }) {
-                ground.wall(a, b, z0: base - 0.4, z1: top, .pierWood)
-            }
+        let boundary = DioramaStreetSurface(pieces).boundary()
+        for edge in boundary {
+            ground.wall(edge.a, edge.b, z0: base - 0.4, z1: top, .pierWood)
         }
         // No bounding-box plank overlays: they extended beyond concave deck edges and fought
         // the deck surface at oblique angles. Keep a single clean timber surface.
         let box = DioramaPolygon.minimumAreaRectangle(ring)
         // Balustrade on the edges facing water or open ground.
-        let n = ring.count
-        for i in 0..<n {
-            let a = ring[i], b = ring[(i + 1) % n]
+        for edge in boundary {
+            let a = edge.a, b = edge.b
             let mid = (a + b) * 0.5
             let out = (b - a).normalized.right
-            guard !buildings.contains(where: { $0.box.expanded(by: 0.8).contains(mid + out * 0.6) }) else { continue }
+            guard a.distance(to: b) > 0.15, !buildings.contains(where: { $0.box.expanded(by: 0.8).contains(mid + out * 0.6) }) else { continue }
             let dir = (b - a).normalized
             let length = a.distance(to: b)
             var d = 0.0
@@ -390,23 +388,21 @@ nonisolated struct DioramaAmenityGenerator {
 
     // MARK: Paths, pier, slipway
 
-    private func footway(_ line: [DV2], ground: inout DioramaMesh) {
-        let dense = DioramaPolygon.densify(line, maxStep: 4)
-        let half = 0.8
-        for i in 0..<(dense.count - 1) {
-            let a = dense[i], b = dense[i + 1]
-            let mid = (a + b) * 0.5
-            guard !roads.isOnCarriageway(mid, margin: 0.2), !isWater(mid), !DioramaHotelGrounds.ownsCourtyard(mid, data: data) else { continue }
-            guard !buildings.contains(where: { $0.box.expanded(by: -0.2).contains(mid) }) else { continue }
-            let n = (b - a).normalized.right * half
-            let top = z(mid) + Self.pathLift
-            ground.quad(DV3(a - n, top), DV3(b - n, top), DV3(b + n, top), DV3(a + n, top), .paving, normal: .up)
-            // Kerb edges.
-            for s in [-1.0, 1.0] {
-                let e0 = a + n * s, e1 = b + n * s
-                let out = DV3((e1 - e0).normalized.right * s, 0)
-                ground.quad(DV3(e0, z(mid)), DV3(e1, z(mid)), DV3(e1, top), DV3(e0, top), .kerb, normal: out)
-            }
+    private func footways(ground: inout DioramaMesh) {
+        let paths = data.paths.filter { !["pier", "slipway", "steps"].contains($0.kind) }
+        let patches = paths.flatMap { path in
+            DioramaStreetSurface.corridor(DioramaRoadFeature(id: path.id, line: path.line,
+                roadClass: "footway", isPaved: true, width: 1.6), extra: 0)
+        }
+        let masks = data.water.compactMap { $0.rings.first } + [data.hotelCourtyardOutline]
+        let cutouts = DioramaGroundCutouts(data: data, pavementWidth: config.pavementWidth, additionalMasks: masks)
+        let pieces = DioramaStreetSurface(patches).pieces().flatMap { cutouts.subtract(from: $0) }
+        for piece in pieces {
+            ground.polygon(piece, z: z(DioramaPolygon.centroid(piece)) + Self.pathLift, .paving)
+        }
+        for edge in DioramaStreetSurface(pieces).boundary() {
+            let base = z((edge.a + edge.b) * 0.5)
+            ground.wall(edge.a, edge.b, z0: base, z1: base + Self.pathLift, .kerb)
         }
     }
 

@@ -63,6 +63,8 @@ struct TripMapView: UIViewRepresentable {
             styleURI: .standard
         )
         let mapView = MapView(frame: .zero, mapInitOptions: options)
+        mapView.mapboxMap.prefetchZoomDelta = 0
+        mapView.preferredFrameRateRange = CAFrameRateRange(minimum: 15, maximum: 30, preferred: 30)
         mapView.backgroundColor = UIColor(TwendeColor.mapCanvas)
         mapView.presentationTransactionMode = .sync
         mapView.ornaments.options.scaleBar.visibility = .hidden
@@ -161,6 +163,7 @@ extension TripMapView {
         private var routePoints: [GeoPoint] = []
         private var routeAppeared: Date? = nil
         private var frameTimer: Timer? = nil
+        private var routeMotionFinished: Bool = false
 
         private var pins: [MapPinKind: HostedMarker] = [:]
         private var banners: [MapPinKind: MapMarkerBanner] = [:]
@@ -619,6 +622,7 @@ extension TripMapView {
                 routeInstalled = map.layerExists(withId: Self.coreLayerID)
             }
 
+            routeMotionFinished = false
             tickRoute()
             ensureFrameTimer()
         }
@@ -649,21 +653,37 @@ extension TripMapView {
         }
 
         private func tickFrame() {
-            if routeInstalled { tickRoute() }
+            guard UIApplication.shared.applicationState == .active else {
+                finishRouteAppearance()
+                stopRoutePulse()
+                return
+            }
+            if routeInstalled && !routeMotionFinished { tickRoute() }
             if searchPulse.needsFrames, let map = mapView?.mapboxMap { searchPulse.tick(on: map) }
             let driverBusy = tickDriver()
-            if !routeInstalled && !driverBusy && !searchPulse.needsFrames {
+            if (!routeInstalled || routeMotionFinished) && !driverBusy && !searchPulse.needsFrames {
                 stopRoutePulse()
             }
         }
 
-        /// Re-times the route. Draw-on: `line-trim-offset` reveals pickup→destination over 0.9s
-        /// (ease-out cubic). Then a soft green→white light pulse (12% of the route) sweeps end to end
-        /// every 2.8s via the pulse layer's `line-gradient`.
+        private func finishRouteAppearance() {
+            guard routeInstalled, let map = mapView?.mapboxMap else { return }
+            try? map.setLayerProperty(for: Self.coreLayerID, property: "line-trim-offset", value: [0.0, 0.0])
+            try? map.setLayerProperty(for: Self.casingLayerID, property: "line-trim-offset", value: [0.0, 0.0])
+            try? map.setLayerProperty(for: Self.pulseLayerID, property: "line-gradient", value: Self.clearGradient)
+            routeMotionFinished = true
+        }
+
+        /// Reveal for 0.9s, then one 2.8s sweep. Static routes must not keep the GPU awake.
         private func tickRoute() {
             guard routeInstalled, let map = mapView?.mapboxMap else { return }
             let now = Date()
             let elapsed = routeAppeared.map { now.timeIntervalSince($0) } ?? 1
+            let reduced = parent.reduceMotion || ProcessInfo.processInfo.isLowPowerModeEnabled || ProcessInfo.processInfo.thermalState.rawValue >= ProcessInfo.ThermalState.serious.rawValue
+            if reduced || elapsed >= 3.7 {
+                finishRouteAppearance()
+                return
+            }
             let raw = min(max(elapsed / 0.9, 0), 1)
             let reveal = 1 - pow(1 - raw, 3)
 
@@ -677,7 +697,7 @@ extension TripMapView {
             try? map.setLayerProperty(for: Self.coreLayerID, property: "line-trim-offset", value: [0.0, 0.0])
             try? map.setLayerProperty(for: Self.casingLayerID, property: "line-trim-offset", value: [0.0, 0.0])
 
-            let cycle = now.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 2.8) / 2.8
+            let cycle = max(elapsed - 0.9, 0) / 2.8
             let tailLength = 0.12
             let head = min(max(cycle, 0.001), 0.999)
             let tail = max(head - tailLength, 0)
@@ -705,7 +725,7 @@ extension TripMapView {
 
         func updateSonar(_ point: GeoPoint?) {
             guard styleReady, let map = mapView?.mapboxMap else { return }
-            searchPulse.update(at: point, on: map, reduceMotion: parent.reduceMotion)
+            searchPulse.update(at: point, on: map, reduceMotion: parent.reduceMotion || ProcessInfo.processInfo.isLowPowerModeEnabled)
             if searchPulse.needsFrames { ensureFrameTimer() }
         }
 

@@ -117,7 +117,7 @@ nonisolated struct DioramaBuildingOverride: Sendable {
 /// One place to tune the whole look without touching generation code.
 nonisolated struct DioramaConfig: Sendable {
     /// Bump to invalidate every cached tile.
-    var generatorVersion: Int = 13
+    var generatorVersion: Int = 14
     /// When false the diorama sits on a flat plate at the basemap's ground level (Mapbox Standard has no
     /// terrain at this zoom, so a lumpy plate would float off the streets around it).
     var usesElevation: Bool = false
@@ -164,7 +164,7 @@ nonisolated struct DioramaConfig: Sendable {
     /// Secondary complex blocks only. The two hotels and courtyard galleries bypass this generic
     /// palette override entirely through DioramaHotelGenerator.
     var buildingOverrides: [UInt64: DioramaBuildingOverride] = [
-        142_262_992: DioramaBuildingOverride(wallColor: .whitewash, roofColor: .roofGreen, flatRoof: false),
+        142_262_992: DioramaBuildingOverride(wallColor: .whitewash, roofColor: .roofConcrete, flatRoof: false),
         688_369_154: DioramaBuildingOverride(wallColor: .whitewash, roofColor: .roofRust, flatRoof: false),
         180_607_949: DioramaBuildingOverride(wallColor: .cream, roofColor: .roofConcrete, flatRoof: true),
     ]
