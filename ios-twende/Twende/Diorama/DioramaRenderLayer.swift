@@ -36,6 +36,9 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
         }
     }
 
+    private let labels: [DioramaBuildingLabel]
+    private let displayScale: Float
+    private var labelRenderer: DioramaLabelRenderer?
     private let origin: CLLocationCoordinate2D
     private let vertices: [BuildingRenderVertex]
     private let indices: [UInt32]
@@ -76,9 +79,22 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
     private var visible: Set<DioramaCategory>
     private var timeOfDay: DioramaTimeOfDay
     private var diagnosticText: String = "not started"
+    private var reveal: SIMD4<Float> = .zero
+    private var labelsReady: Bool = false
 
-    init(origin: CLLocationCoordinate2D, vertices: [BuildingRenderVertex], indices: [UInt32], ranges: [Range], groups: [DioramaInstanceGroup] = [], instances: [DioramaInstanceData] = [], lightGrid: DioramaLightGrid, waterHeight: Double, groundImage: DioramaGroundImage?, groundRect: DioramaRect, visible: Set<DioramaCategory>, timeOfDay: DioramaTimeOfDay, animates: Bool, config: DioramaConfig = .slipway) {
+    var hasCustomLabels: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return labelsReady
+    }
+
+    func setReveal(_ value: SIMD4<Float>) {
+        lock.lock(); reveal = value; lock.unlock()
+    }
+
+    init(origin: CLLocationCoordinate2D, vertices: [BuildingRenderVertex], indices: [UInt32], ranges: [Range], groups: [DioramaInstanceGroup] = [], instances: [DioramaInstanceData] = [], lightGrid: DioramaLightGrid, waterHeight: Double, groundImage: DioramaGroundImage?, groundRect: DioramaRect, visible: Set<DioramaCategory>, timeOfDay: DioramaTimeOfDay, animates: Bool, config: DioramaConfig = .slipway, labels: [DioramaBuildingLabel] = [], displayScale: Float = 3) {
         self.origin = origin
+        self.labels = labels
+        self.displayScale = displayScale
         self.vertices = vertices
         self.indices = indices
         self.ranges = ranges
@@ -212,6 +228,8 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
                     }
                 }
             }
+            labelRenderer = DioramaLabelRenderer(device: metalDevice, labels: labels, scale: displayScale, color: colorFormat, depthFormat: depthFormat)
+            lock.lock(); labelsReady = labelRenderer != nil; lock.unlock()
             setDiagnostic("ready vertices=\(vertices.count) triangles=\(indices.count / 3) instances=\(instances.count) lights=\(lightGrid.lights.count)")
         } catch {
             setDiagnostic("pipeline creation failed")
@@ -229,6 +247,7 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
         let timeOfDay = self.timeOfDay
         let reducedEffects = self.reducedEffects
         let wireframe = self.wireframe
+        let reveal = self.reveal
         lock.unlock()
         let glowOn = timeOfDay.showsLights
         let drawn = ranges.filter { range in
@@ -269,6 +288,7 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
         guard eye.x.isFinite, eye.y.isFinite, eye.z.isFinite else { return }
 
         var uniforms = DioramaLighting.uniforms(for: timeOfDay, eye: eye)
+        uniforms.reveal = reveal
         uniforms.shoreline = shorelineSettings
         uniforms.shoreline.z = reducedEffects ? 1 : 0
         uniforms.waterDeep = waterDeepTint
@@ -289,7 +309,7 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
             viewLow = simd_min(viewLow, group.minimum); viewHigh = simd_max(viewHigh, group.maximum)
         }
         let castingGroups = groups.filter { !$0.instances.isEmpty && visible.contains($0.category) && !$0.category.isEmissive }
-        if let shadowMap, let shadowMatrix = shadowMap.update(command: mtlCommandBuffer, vertices: vertexBuffer, indices: indexBuffer, instances: instanceBuffer,
+        if reveal.w < 0.5, let shadowMap, let shadowMatrix = shadowMap.update(command: mtlCommandBuffer, vertices: vertexBuffer, indices: indexBuffer, instances: instanceBuffer,
             ranges: drawn, groups: castingGroups, focus: viewLow.x.isFinite && viewHigh.x > viewLow.x ? (viewLow, viewHigh) : nil,
             sun: SIMD3(uniforms.sunDirection.x, uniforms.sunDirection.y, uniforms.sunDirection.z), preset: timeOfDay) {
             uniforms.shadowMatrix = shadowMatrix
@@ -390,6 +410,9 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
             encoder.setTriangleFillMode(.fill)
             postProcess.composite(bloomLevels, into: encoder, strength: bloomStrength)
         }
+        if visible.contains(.buildings), !wireframe {
+            labelRenderer?.draw(encoder: encoder, matrix: matrix, width: texture.width, height: texture.height, zoom: parameters.zoom, reveal: reveal)
+        }
         encoder.endEncoding()
     }
 
@@ -411,6 +434,8 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
         groundTexture = nil
         shadowMap = nil
         postProcess = nil
+        labelRenderer = nil
+        lock.lock(); labelsReady = false; lock.unlock()
     }
 
     private func setDiagnostic(_ text: String) {

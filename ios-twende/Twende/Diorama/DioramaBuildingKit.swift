@@ -65,17 +65,29 @@ nonisolated struct DioramaBuildingKit {
     func roofEdge(_ ring: [DV2], flags: [Bool], z: Double, bevel: Double, deck: DioramaSwatch, into mesh: inout DioramaMesh) -> [DV2]? {
         let n = ring.count
         guard let inner = DioramaPolygon.offset(ring, by: -bevel), inner.count == n else { return nil }
-        // Three segments approximate a quarter round with smooth-looking normals.
-        let stops: [(t: Double, h: Double, nz: Double)] = [(0, 0, 0.25), (0.38, 0.62, 0.7), (0.72, 0.92, 1.4), (1, 1, 3)]
+        // A quarter-circle profile with analytic vertex normals, including the plan fillets.
+        let stops = (0...6).map { Double($0) / 6 * Double.pi / 2 }
+        func outward(_ index: Int) -> DV3 {
+            let before = (ring[index] - ring[(index + n - 1) % n]).normalized.right
+            let after = (ring[(index + 1) % n] - ring[index]).normalized.right
+            return DV3((before + after).normalized, 0)
+        }
+        let uv = DioramaAtlas.uv(.trimWhite, dark: false)
         for i in 0..<n where !flags[i] {
             let j = (i + 1) % n
             let out = DV3((ring[j] - ring[i]).normalized.right, 0)
             for k in 0..<(stops.count - 1) {
-                let s0 = stops[k], s1 = stops[k + 1]
-                let a0 = ring[i] * (1 - s0.t) + inner[i] * s0.t, a1 = ring[j] * (1 - s0.t) + inner[j] * s0.t
-                let b0 = ring[i] * (1 - s1.t) + inner[i] * s1.t, b1 = ring[j] * (1 - s1.t) + inner[j] * s1.t
-                let normal = (out + DV3.up * ((s0.nz + s1.nz) * 0.5)).normalized
-                mesh.quad(DV3(a0, z + bevel * s0.h), DV3(a1, z + bevel * s0.h), DV3(b1, z + bevel * s1.h), DV3(b0, z + bevel * s1.h), .trimWhite, normal: normal)
+                let a = stops[k], b = stops[k + 1]
+                func vertex(_ index: Int, _ angle: Double) -> UInt32 {
+                    let t = 1 - cos(angle)
+                    let p = ring[index] * (1 - t) + inner[index] * t
+                    return mesh.vertex(DV3(p, z + bevel * sin(angle)),
+                                       (outward(index) * cos(angle) + DV3.up * sin(angle)).normalized, uv)
+                }
+                mesh.reserve(4)
+                let v0 = vertex(i, a), v1 = vertex(j, a), v2 = vertex(j, b), v3 = vertex(i, b)
+                mesh.face(v0, v1, v2, outward: out + .up)
+                mesh.face(v0, v2, v3, outward: out + .up)
             }
         }
         mesh.polygon(inner, z: z + bevel, deck)

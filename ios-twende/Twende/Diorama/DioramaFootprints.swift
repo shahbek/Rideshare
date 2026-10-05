@@ -9,7 +9,7 @@ nonisolated enum DioramaFootprints {
         (pts, fl) = DioramaPolygon.counterClockwise(pts, flags: fl)
         guard pts.count >= 3, DioramaPolygon.area(pts) > 12 else { return nil }
         return DioramaBuildingFeature(id: f.id, ring: pts, clipped: fl, area: DioramaPolygon.area(pts),
-                                      centroid: DioramaPolygon.centroid(pts), height: f.height, type: f.type)
+                                      centroid: DioramaPolygon.centroid(pts), height: f.height, type: f.type, name: f.name)
     }
 
     /// OSM supplies only the landmark's location, orientation and approximate scale. The bespoke
@@ -50,8 +50,8 @@ nonisolated enum DioramaFootprints {
 
     static func softened(_ f: DioramaBuildingFeature) -> DioramaBuildingFeature {
         let landmark = DioramaHotelGenerator.ids.contains(f.id) || DioramaSlipwayPavilion.buildingIDs.contains(f.id)
-        let r = DioramaCoastline.rounded(f.ring, flags: f.clipped, maxReach: landmark ? 2.4 : 0.95,
-                                        fraction: 0.22, samples: landmark ? 16 : 6, minimumTurn: 0.35)
+        let r = DioramaCoastline.rounded(f.ring, flags: f.clipped, maxReach: landmark ? 2.4 : 1.5,
+                                        fraction: 0.22, samples: landmark ? 16 : 8, minimumTurn: 0.35)
         return make(f, ring: r.points, flags: r.flags) ?? f
     }
 }

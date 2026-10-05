@@ -93,6 +93,28 @@ nonisolated struct DioramaRoadGenerator {
             d = min(d + 0.5, length)
         }
         flush()
+        laneArrows(road)
+    }
+
+    /// Illustrative left-hand traffic paint, not routing instructions or inferred turn restrictions.
+    private func laneArrows(_ road: DioramaRoadFeature) {
+        guard road.width >= 6, road.roadClass != "service" else { return }
+        let length = DioramaPolygon.length(road.line)
+        for distance in stride(from: 18.0, to: length - 10, by: 42) {
+            guard let sample = DioramaPolygon.sample(road.line, at: distance),
+                  let before = DioramaPolygon.sample(road.line, at: distance - 5),
+                  let after = DioramaPolygon.sample(road.line, at: distance + 5),
+                  before.direction.dot(after.direction) > 0.96 else { continue }
+            for sign in [-1.0, 1.0] {
+                let forward = sample.direction * sign
+                let centre = sample.point + forward.left * (road.width * 0.25)
+                let outline: [DV2] = [DV2(-0.2, -2.2), DV2(0.2, -2.2), DV2(0.2, 0.45),
+                                     DV2(0.8, 0.1), DV2(0, 2.2), DV2(-0.8, 0.1), DV2(-0.2, 0.45)]
+                let ring = outline.map { centre + forward.right * $0.x + forward * $0.y }
+                guard ring.allSatisfy({ data.rect.contains($0) && layout.paintIsClear($0) && roads.isOnRoad($0, margin: 0) }) else { continue }
+                painter.fill(ring, .marking)
+            }
+        }
     }
 
     private func junctionPaint() {

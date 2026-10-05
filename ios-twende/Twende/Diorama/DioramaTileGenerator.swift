@@ -55,6 +55,7 @@ nonisolated struct DioramaTileArtifacts: Sendable {
     let generationSeconds: Double
     /// Top-down painted ground (roads, lawns, paving, sand) sampled by the terrain skin.
     let groundImage: DioramaGroundImage?
+    var buildingLabels: [DioramaBuildingLabel] = []
 
     /// Unique triangles in the buffers (each prototype counted once, not per placement).
     var totalTriangles: Int { indices.count / 3 }
@@ -132,8 +133,11 @@ nonisolated enum DioramaTileGenerator {
         var built: [DioramaBuilt] = []
         built.reserveCapacity(data.buildings.count)
         var porchLights: [DioramaLight] = []
+        let mosqueIDs = DioramaMosqueGenerator.buildingIDs(in: data)
         for feature in data.buildings {
-            if DioramaSlipwayPavilion.buildingIDs.contains(feature.id) {
+            if mosqueIDs.contains(feature.id) {
+                built.append(DioramaMosqueGenerator(config: config, terrain: terrain).build(feature, into: &buildings))
+            } else if DioramaSlipwayPavilion.buildingIDs.contains(feature.id) {
                 built.append(DioramaSlipwayPavilion(data: data, terrain: terrain).build(feature, mesh: &buildings))
             } else if DioramaHotelGenerator.ids.contains(feature.id) {
                 built.append(DioramaHotelGenerator(terrain: terrain, courtyardCentre: data.landuse.first(where: { $0.id == DioramaHotelGrounds.courtyardID })?.rings.first.map { DioramaPolygon.centroid($0) }).build(feature, mesh: &buildings, glow: &windowGlow, lights: &porchLights))
@@ -347,7 +351,8 @@ nonisolated enum DioramaTileGenerator {
             tile: data.tile, vertices: vertices, indices: indices, ranges: ranges, groups: groups, allInstances: allInstances,
             parts: parts, lights: lights, lightGrid: lightGrid,
             waterHeight: terrain.waterLevel, shorelineReport: DioramaShoreline.report(data.shorelines), generationSeconds: Date().timeIntervalSince(started),
-            groundImage: image
+            groundImage: image,
+            buildingLabels: built.map { DioramaBuildingLabel.make($0, terrain: terrain, config: config) }
         )
         cacheLock.lock()
         cache[cacheKey(data.tile, config: config, reduced: reduced)] = artifacts

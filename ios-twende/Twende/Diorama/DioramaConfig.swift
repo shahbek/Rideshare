@@ -120,7 +120,7 @@ nonisolated struct DioramaBuildingOverride: Sendable {
 /// One place to tune the whole look without touching generation code.
 nonisolated struct DioramaConfig: Sendable {
     /// Bump to invalidate every cached tile.
-    var generatorVersion: Int = 27
+    var generatorVersion: Int = 28
     /// Drape the plate/ground overlays over the bundled height snapshot used by roads and foundations.
     var usesElevation: Bool = true
     /// Vertical scale of the bundled snapshot (1 = real metres). The basemap's own terrain is switched
@@ -158,9 +158,9 @@ nonisolated struct DioramaConfig: Sendable {
     var bevel: Double = 0.22
     /// Corner radius for the rounded footprint silhouette. Toy-town rounding reads from the map
     /// camera only at this scale; 0.18 m was invisible.
-    var cornerRadius: Double = 0.7
+    var cornerRadius: Double = 1.0
     /// Soft roof-edge bevel (metres) on flat roofs.
-    var roofBevel: Double = 0.6
+    var roofBevel: Double = 0.8
     /// Scale exaggeration for designed details (windows, cornices, chimneys, rails) so they read from
     /// the map camera. 1 is metric-accurate.
     var detailExaggeration: Double = 1.35

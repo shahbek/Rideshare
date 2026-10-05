@@ -43,6 +43,7 @@ nonisolated struct DioramaPointFeature: Sendable {
     let point: DV2
     /// `tower`, `playground`, `artwork`, `mosque`.
     let kind: String
+    var name: String? = nil
 }
 
 nonisolated struct DioramaBuildingFeature: Sendable {
@@ -56,6 +57,7 @@ nonisolated struct DioramaBuildingFeature: Sendable {
     /// Height from the data, or nil when unknown (inferred from the footprint area instead).
     let height: Double?
     let type: String
+    var name: String? = nil
 }
 
 nonisolated struct DioramaRoadFeature: Sendable {
@@ -87,11 +89,11 @@ nonisolated struct DioramaAreaFeature: Sendable {
 nonisolated enum DioramaBundledTile {
     nonisolated struct File: Decodable, Sendable {
         nonisolated struct Tile: Decodable, Sendable { let z: Int; let x: Int; let y: Int }
-        nonisolated struct Building: Decodable, Sendable { let id: UInt64; let type: String; let height: Double?; let ring: [[Double]] }
+        nonisolated struct Building: Decodable, Sendable { let id: UInt64; let type: String; let height: Double?; let ring: [[Double]]; var name: String? = nil }
         nonisolated struct Road: Decodable, Sendable { let id: UInt64; let `class`: String; let paved: Bool; let line: [[Double]] }
         nonisolated struct Area: Decodable, Sendable { let id: UInt64; let kind: String?; let sport: String?; let rings: [[[Double]]]; let clipped: [Bool]?; let tags: [String: String]? }
         nonisolated struct Path: Decodable, Sendable { let id: UInt64; let kind: String; let lit: Bool?; let line: [[Double]]; let tags: [String: String]? }
-        nonisolated struct Point: Decodable, Sendable { let id: UInt64; let kind: String; let point: [Double] }
+        nonisolated struct Point: Decodable, Sendable { let id: UInt64; let kind: String; let point: [Double]; var name: String? = nil }
         let tile: Tile
         let buildings: [Building]
         let roads: [Road]
@@ -141,7 +143,7 @@ nonisolated enum DioramaBundledTile {
             // This is bundled OSM, not Mapbox's synthesized 3 m fallback: keep genuine low heights.
             let height = b.height.flatMap { $0.isFinite && $0 > 0 ? $0 : nil }
             if let existing = buildings[b.id], existing.area >= area { continue }
-            buildings[b.id] = DioramaBuildingFeature(id: b.id, ring: pts, clipped: flags, area: area, centroid: centroid, height: height, type: b.type)
+            buildings[b.id] = DioramaBuildingFeature(id: b.id, ring: pts, clipped: flags, area: area, centroid: centroid, height: height, type: b.type, name: b.name)
         }
 
         buildings = buildings.mapValues(DioramaFootprints.landmarkPlan)
@@ -203,7 +205,28 @@ nonisolated enum DioramaBundledTile {
 
         let pois: [DioramaPointFeature] = (file.pois ?? []).compactMap { poi in
             guard let p = local(poi.point), inner.contains(p) else { return nil }
-            return DioramaPointFeature(id: poi.id, point: p, kind: poi.kind)
+            return DioramaPointFeature(id: poi.id, point: p, kind: poi.kind, name: poi.name)
+        }
+
+        // The bundled Masjid 36 is a named point with no footprint (nearest house is 52 m away).
+        // Use a compact explicitly illustrative hall at its actual point, never relabel that house.
+        let roadIndex = DioramaRoadIndex(roads: Array(roads.values), pavementWidth: config.pavementWidth)
+        for poi in pois where poi.kind == "mosque" {
+            if let host = buildings.values.filter({ DioramaPolygon.contains($0.ring, poi.point) }).min(by: { $0.area < $1.area }) {
+                if buildings[host.id]?.name == nil { buildings[host.id]?.name = poi.name }
+                continue
+            }
+            let axis = roadIndex.nearest(to: poi.point, within: 60)?.direction ?? DV2(1, 0)
+            let ring = DioramaOrientedRect(centre: poi.point, axis: axis, halfLength: 7, halfWidth: 5).corners
+            let probes = DioramaPolygon.densify(ring + [ring[0]], maxStep: 1) + [poi.point]
+            guard probes.allSatisfy({ p in
+                inner.contains(p) && !roadIndex.isOnRoad(p, margin: 1)
+                    && !water.contains(where: { DioramaPolygon.contains(polygon: $0.rings, p) })
+                    && !buildings.values.contains(where: { DioramaPolygon.contains($0.ring, p) })
+            }) else { continue }
+            let hall = DioramaBuildingFeature(id: poi.id, ring: ring, clipped: [false, false, false, false],
+                area: 140, centroid: poi.point, height: 4.8, type: "mosque", name: poi.name)
+            buildings[poi.id] = DioramaFootprints.softened(hall)
         }
 
         var result = DioramaTileData(

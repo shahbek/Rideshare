@@ -539,7 +539,9 @@ nonisolated struct DioramaAmenityGenerator {
     /// Minaret and dome for the mosque: placed on the nearest building's roof corner when the mapped
     /// point falls on a building, else standing beside it.
     private func minaret(near p: DV2, props: inout DioramaMesh, glow: inout DioramaMesh, lights: inout [DioramaLight]) {
-        let host = buildings.min { $0.feature.centroid.distance(to: p) < $1.feature.centroid.distance(to: p) }
+        // Enclosing mosques are now complete footprint-led buildings, not rooftop add-ons.
+        if buildings.contains(where: { DioramaPolygon.contains($0.feature.ring, p) }) { return }
+        let host: DioramaBuilt? = nil
         var spot = p
         var baseZ = z(p)
         if let host, host.feature.centroid.distance(to: p) < 30 {

@@ -28,6 +28,8 @@ nonisolated struct DioramaShaderUniforms {
     /// x: ambient-occlusion strength (0 disables sampling), y: bloom strength, z: grade strength,
     /// w: haze density per metre.
     var post: SIMD4<Float>
+    /// xy: reveal centre, z: square half-extent in metres, w: active flag.
+    var reveal: SIMD4<Float>
 }
 
 /// Constants for the screen-space passes. Layout mirrors `DioramaPostUniforms` in the Metal source.
@@ -80,7 +82,8 @@ nonisolated enum DioramaLighting {
             waterDeep: .zero,
             waterShallow: .zero,
             groundImage: .zero,
-            post: .zero
+            post: .zero,
+            reveal: .zero
         )
     }
 }
@@ -120,6 +123,7 @@ nonisolated enum DioramaShaderSource {
         float4 waterShallow;
         float4 groundImage;
         float4 post;
+        float4 reveal;
     };
 
     struct DioramaPostUniforms {
@@ -135,6 +139,14 @@ nonisolated enum DioramaShaderSource {
     };
 
     float3 dioramaGrade(float3 color, float3 worldPosition, constant DioramaUniforms &u);
+
+    float dioramaRevealDistance(float3 p, constant DioramaUniforms &u) {
+        float2 delta = abs(p.xy - u.reveal.xy);
+        return max(delta.x, delta.y) - u.reveal.z;
+    }
+    void dioramaRevealClip(float3 p, constant DioramaUniforms &u) {
+        if (u.reveal.w > 0.5 && dioramaRevealDistance(p, u) > 0.0) discard_fragment();
+    }
 
     /// One placement of a prototype: xyz translation + rotation about z, xyz scale + bounding radius.
     struct DioramaInstance {
@@ -303,10 +315,18 @@ nonisolated enum DioramaShaderSource {
                                     depth2d<float> shadowMap [[texture(1)]],
                                     texture2d<float> groundImage [[texture(2)]],
                                     texture2d<float> occlusion [[texture(3)]]) {
+        dioramaRevealClip(in.worldPosition, u);
         float code = in.appearance.w;
         float glow = u.params.x;
         bool mirrored = u.params.w > 0.5;
 
+        if (u.reveal.w > 0.5) {
+            float edge = -dioramaRevealDistance(in.worldPosition, u);
+            if (edge < 1.4) {
+                float heat = 1.0 - smoothstep(0.0, 1.4, edge);
+                return float4(mix(in.color.rgb * 0.55, float3(1.0, 0.84, 0.52), heat), 1.0);
+            }
+        }
         // Reflection pass: only what is above the water surface reflects; never the water itself.
         if (mirrored) {
             if (in.clipHeight < -0.05) discard_fragment();
@@ -510,7 +530,8 @@ nonisolated enum DioramaShaderSource {
         float4 emissive [[color(2)]];
     };
 
-    fragment DioramaGBuffer dioramaGBufferFragment(DioramaVarying in [[stage_in]], bool isFront [[front_facing]]) {
+    fragment DioramaGBuffer dioramaGBufferFragment(DioramaVarying in [[stage_in]], bool isFront [[front_facing]], constant DioramaUniforms &u [[buffer(0)]]) {
+        dioramaRevealClip(in.worldPosition, u);
         DioramaGBuffer out;
         float3 n = normalize(in.normal);
         if (!isFront) n = -n;
@@ -522,6 +543,7 @@ nonisolated enum DioramaShaderSource {
 
     fragment DioramaGBuffer dioramaEmissiveFragment(DioramaVarying in [[stage_in]], constant DioramaUniforms &u [[buffer(0)]]) {
         DioramaGBuffer out;
+        dioramaRevealClip(in.worldPosition, u);
         float code = in.appearance.w;
         float glow = u.params.x;
         float3 c = in.color.rgb;
