@@ -62,7 +62,7 @@ nonisolated struct DioramaTerrain: Sendable {
     }
 
     /// The one fixed height snapshot of the tile. No live sampling: generation is deterministic
-    /// and instant, and the gentle Msasani landform is kept at `config.terrainRelief`.
+    /// across sessions, and the gentle Msasani landform is kept at `config.terrainRelief`.
     static func load(rect: DioramaRect, config: DioramaConfig) -> DioramaTerrain {
         guard config.usesElevation else {
             var result = flat(rect); result.midTideDatum = config.waterLevel

@@ -2,7 +2,7 @@ import Foundation
 
 /// Every colour the diorama may use. The palette atlas holds each swatch twice: the base colour and a
 /// darker "ambient occlusion" copy used on the lowest band of walls.
-nonisolated enum DioramaSwatch: Int, CaseIterable, Sendable {
+nonisolated enum DioramaSwatch: Int, CaseIterable, Codable, Sendable {
     // Plaster walls
     case whitewash, cream, ochre, sunflower, coral, skyBlue, mint, terracottaWall
     case brick, sage, dustyRose, slateWall, paleYellow, slipwayBlue
@@ -101,7 +101,7 @@ nonisolated enum DioramaTimeOfDay: String, CaseIterable, Identifiable, Sendable 
 }
 
 /// A real light source the shader evaluates per pixel: a lamp head, a lit kiosk, a doorway.
-nonisolated struct DioramaLight: Sendable {
+nonisolated struct DioramaLight: Codable, Sendable {
     var position: DV3
     var color: SIMD3<Float>
     var radius: Double
@@ -110,7 +110,7 @@ nonisolated struct DioramaLight: Sendable {
 
 /// Hand-tuned materials for secondary mapped buildings. Bespoke hotels bypass these generic rules.
 /// Keyed by OSM way id.
-nonisolated struct DioramaBuildingOverride: Sendable {
+nonisolated struct DioramaBuildingOverride: Codable, Sendable {
     var wallColor: DioramaSwatch? = nil
     var roofColor: DioramaSwatch? = nil
     /// nil keeps the generator's own choice.
@@ -118,7 +118,7 @@ nonisolated struct DioramaBuildingOverride: Sendable {
 }
 
 /// One place to tune the whole look without touching generation code.
-nonisolated struct DioramaConfig: Sendable {
+nonisolated struct DioramaConfig: Codable, Sendable {
     /// Bump to invalidate every cached tile.
     var generatorVersion: Int = 28
     /// Drape the plate/ground overlays over the bundled height snapshot used by roads and foundations.

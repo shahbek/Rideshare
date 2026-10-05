@@ -3,7 +3,7 @@ import simd
 
 /// One GPU instance: xyz translation + rotation about z, then xyz scale + bounding radius.
 /// Layout mirrors `DioramaInstance` in the Metal source.
-nonisolated struct DioramaInstanceData: Sendable {
+nonisolated struct DioramaInstanceData: Codable, Sendable {
     var placement: SIMD4<Float>
     var scale: SIMD4<Float>
 
@@ -15,7 +15,7 @@ nonisolated struct DioramaInstanceData: Sendable {
 
 /// All placements of one prototype inside one category, with the prototype's full and light index
 /// ranges in the shared index buffer and the world bounds of every placement.
-nonisolated struct DioramaInstanceGroup: Sendable {
+nonisolated struct DioramaInstanceGroup: Codable, Sendable {
     let category: DioramaCategory
     let fullStart: Int
     let fullCount: Int
@@ -34,7 +34,7 @@ nonisolated struct DioramaInstanceGroup: Sendable {
 /// buffer, the index range each category occupies so categories can be toggled per frame, and the
 /// instanced prototypes with their placements.
 nonisolated struct DioramaTileArtifacts: Sendable {
-    nonisolated struct Part: Sendable {
+    nonisolated struct Part: Codable, Sendable {
         let category: DioramaCategory
         let triangles: Int
         let instances: Int
@@ -75,8 +75,8 @@ nonisolated struct DioramaTileArtifacts: Sendable {
     }
 }
 
-/// Runs the whole pipeline for one tile off the main thread. Output stays in memory and goes straight
-/// into Metal buffers through `DioramaRenderLayer`; there is no file format or model loader in between.
+/// Runs the whole pipeline for one tile off the main thread. The runtime archive preserves this exact
+/// output across launches; Metal consumes the same buffers whether generated or restored.
 nonisolated enum DioramaTileGenerator {
     /// Side of the spatial batches triangles and instances are sorted into for frustum culling.
     static let binSize: Double = 60
@@ -84,13 +84,20 @@ nonisolated enum DioramaTileGenerator {
     nonisolated(unsafe) private static var cache: [String: DioramaTileArtifacts] = [:]
 
     private static func cacheKey(_ tile: DioramaTileID, config: DioramaConfig, reduced: Bool) -> String {
-        "v\(config.generatorVersion)/\(tile.key)\(reduced ? "-lite" : "")"
+        DioramaTileArchive.key(tile, config: config, reduced: reduced)
     }
 
     static func cached(_ tile: DioramaTileID, config: DioramaConfig, reduced: Bool) -> DioramaTileArtifacts? {
         cacheLock.lock()
         defer { cacheLock.unlock() }
         return cache[cacheKey(tile, config: config, reduced: reduced)]
+    }
+
+    static func remember(_ artifacts: DioramaTileArtifacts, config: DioramaConfig, reduced: Bool) {
+        let key = cacheKey(artifacts.tile, config: config, reduced: reduced)
+        cacheLock.lock()
+        cache[key] = artifacts
+        cacheLock.unlock()
     }
 
     static func clearCache(for tile: DioramaTileID, config: DioramaConfig) {

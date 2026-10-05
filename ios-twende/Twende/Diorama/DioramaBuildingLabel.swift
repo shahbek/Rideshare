@@ -2,7 +2,7 @@ import Foundation
 import simd
 
 /// Source-backed names (or honest building categories) anchored above the generated roof.
-nonisolated struct DioramaBuildingLabel: Sendable {
+nonisolated struct DioramaBuildingLabel: Codable, Sendable {
     let id: UInt64
     let title: String
     let anchor: SIMD3<Float>

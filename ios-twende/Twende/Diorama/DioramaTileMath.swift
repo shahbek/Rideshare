@@ -2,7 +2,7 @@ import CoreLocation
 import Foundation
 
 /// A Web Mercator (slippy map) tile.
-nonisolated struct DioramaTileID: Hashable, Sendable, CustomStringConvertible {
+nonisolated struct DioramaTileID: Hashable, Codable, Sendable, CustomStringConvertible {
     let z: Int
     let x: Int
     let y: Int
