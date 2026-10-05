@@ -82,6 +82,13 @@ nonisolated struct DioramaGroundGenerator {
 
     /// One disjoint inland band, with the sea and occupied hardscape subtracted before drawing.
     private func shoreline(into mesh: inout DioramaMesh) {
+        for piece in Self.beachPieces(data: data) {
+            draped(piece, lift: 0.04, .earth, into: &mesh)
+        }
+    }
+
+    /// Shared dry beach ownership: paving must not cover the existing sloped sand strip.
+    static func beachPieces(data: DioramaTileData) -> [[DV2]] {
         var patches: [[DV2]] = []
         for water in data.water {
             guard let ring = water.rings.first else { continue }
@@ -98,9 +105,7 @@ nonisolated struct DioramaGroundGenerator {
             }
         }
         let waterMask = DioramaGroundCutouts(polygons: data.water.compactMap { $0.rings.first })
-        for piece in DioramaStreetSurface(patches).pieces() {
-            for dry in waterMask.subtract(from: piece) { draped(dry, lift: 0.04, .earth, into: &mesh) }
-        }
+        return DioramaStreetSurface(patches).pieces().flatMap { waterMask.subtract(from: $0) }
     }
 
     // MARK: Water

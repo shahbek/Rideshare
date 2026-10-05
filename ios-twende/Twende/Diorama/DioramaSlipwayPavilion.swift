@@ -79,8 +79,10 @@ nonisolated struct DioramaSlipwayPavilion {
                                        halfLength: min(box.halfLength * 0.55, 6), halfWidth: min(box.halfWidth * 0.45, 3.2))
         let coping = pool.expanded(by: 0.35)
         let usable = coping.corners.allSatisfy { DioramaPolygon.contains(ring, $0) && DioramaPolygon.distanceToRing(ring, $0) > 0.6 }
+        let w = DioramaPolygon.rounded(pool.corners, flags: [false, false, false, false], radius: 0.6, segments: 12).points
+        let poolMask = DioramaPolygon.offset(w, by: 0.35) ?? w
         let ccw = DioramaPolygon.counterClockwise(ring)
-        let deckPieces = usable ? DioramaGroundCutouts.subtractConvex(coping.corners, from: ccw) : [ccw]
+        let deckPieces = usable ? DioramaGroundCutouts(polygons: [poolMask]).subtract(from: ccw) : [ccw]
         for piece in deckPieces where piece.count >= 3 {
             let p = DioramaPolygon.counterClockwise(piece)
             for t in DioramaPolygon.triangulate(p) {
@@ -96,13 +98,8 @@ nonisolated struct DioramaSlipwayPavilion {
             mesh.extrude(ring, z0: deck, z1: deck + 1.0, .whitewash)
         }
         guard usable else { return }
-        let c = coping.corners, w = pool.corners
-        for i in 0..<4 {
-            let j = (i + 1) % 4
-            mesh.quad(DV3(c[i], deck + 0.06), DV3(c[j], deck + 0.06), DV3(w[j], deck + 0.06), DV3(w[i], deck + 0.06), .poolCoping, normal: .up)
-            mesh.wall(c[i], c[j], z0: deck, z1: deck + 0.06, .poolCoping)
-            mesh.wall(w[j], w[i], z0: deck - 1.2, z1: deck + 0.06, .poolBlue)
-        }
+        mesh.band(w, offset: 0.35, z0: deck, z1: deck + 0.06, .poolCoping)
+        mesh.extrude(w, z0: deck - 1.2, z1: deck + 0.06, .poolBlue)
         mesh.polygon(w, z: deck - 1.2, .poolBlue)
         mesh.polygon(w, z: deck - 0.12, .poolBlue, attribute: -1)
         for t in stride(from: -pool.halfLength + 1, through: pool.halfLength - 1, by: 1.6) {

@@ -152,7 +152,7 @@ nonisolated struct DioramaMesh: Sendable {
         guard n >= 3, let outer = DioramaPolygon.offset(ring, by: d), outer.count == n else { return }
         for i in 0..<n where !(flags?[i] ?? false) {
             let j = (i + 1) % n
-            wall(outer[i], outer[j], z0: z0, z1: z1, s)
+            mouldedWall(outer, edge: i, z0: z0, z1: z1, s)
             quad(DV3(ring[i], z1), DV3(ring[j], z1), DV3(outer[j], z1), DV3(outer[i], z1), s, normal: .up)
             quad(DV3(ring[i], z0), DV3(ring[j], z0), DV3(outer[j], z0), DV3(outer[i], z0), s, dark: true, normal: DV3(0, 0, -1))
         }
@@ -258,9 +258,9 @@ nonisolated struct DioramaMesh: Sendable {
         tube(from: DV3(centre, z0), to: DV3(centre, z1), r0: r0, r1: r1, sides: sides, s, cap: cap)
     }
 
-    /// Blobby ellipsoid built from an icosphere (detail 0: 20 triangles, 1: 80 triangles).
+    /// Smooth ellipsoid: small details use 80 faces, visible rounded forms use 320 faces.
     mutating func sphere(centre: DV3, radii: DV3, _ s: DioramaSwatch, detail: Int = 1) {
-        let shape = detail >= 1 ? DioramaIcosphere.level1 : DioramaIcosphere.level0
+        let shape = detail >= 1 ? DioramaIcosphere.level2 : DioramaIcosphere.level1
         reserve(shape.vertices.count)
         let uv = DioramaAtlas.uv(s, dark: false)
         let base = positions.count
@@ -280,7 +280,7 @@ nonisolated struct DioramaMesh: Sendable {
     /// surface so the lumps shade softly.
     mutating func blob(centre: DV3, radii: DV3, seed: UInt64, amplitude: Double, frequency: Double,
                        lower: DioramaSwatch, mid: DioramaSwatch, upper: DioramaSwatch, flattenBottom: Double = 0.3) {
-        let shape = DioramaIcosphere.level2
+        let shape = DioramaIcosphere.level3
         var rng = DioramaRandom(seed: seed, salt: 91)
         var waves: [(dir: DV3, freq: Double, phase: Double, amp: Double)] = []
         for k in 0..<5 {
@@ -345,8 +345,9 @@ nonisolated enum DioramaIcosphere {
 
     static let level0: Shape = make(subdivisions: 0)
     static let level1: Shape = make(subdivisions: 1)
-    /// 162 vertices, 320 faces: smooth enough for a sculpted canopy.
     static let level2: Shape = make(subdivisions: 2)
+    /// Cached 642-vertex surface preserves curved canopy silhouettes after displacement.
+    static let level3: Shape = make(subdivisions: 3)
 
     private static func make(subdivisions: Int) -> Shape {
         let t = (1 + 5.0.squareRoot()) / 2

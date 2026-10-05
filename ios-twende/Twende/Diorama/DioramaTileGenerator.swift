@@ -53,7 +53,6 @@ nonisolated enum DioramaTileGenerator {
 
         let roadIndex = DioramaRoadIndex(roads: data.roads, pavementWidth: config.pavementWidth)
         let terrain = (sampledTerrain ?? DioramaTerrain.load(rect: data.rect, config: config)).resolvingSurfaces(in: data)
-            .gradingBuildingSites(in: data, roads: roadIndex)
         let streetLayout = DioramaStreetLayout(data: data, config: config)
         var buildings = DioramaMesh()
         var windowGlow = DioramaMesh()

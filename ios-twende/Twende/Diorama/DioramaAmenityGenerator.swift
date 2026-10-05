@@ -4,7 +4,7 @@ import Foundation
 /// diorama matches the real Slipway: padel and sports courts with lines, nets and glass; the hotel car
 /// park with marked bays; the two fuel forecourts with canopies and pumps; the DoubleTree and Slipway
 /// pools with loungers; restaurant terraces with parasols; paved footways, steps, the wooden pier, the
-/// concrete slipway ramp; telecom masts, a playground, a sculpture and the mosque's minaret.
+/// mapped pier; telecom masts, a playground, a sculpture and the mosque's minaret.
 nonisolated struct DioramaAmenityGenerator {
     let config: DioramaConfig
     let data: DioramaTileData
@@ -43,7 +43,9 @@ nonisolated struct DioramaAmenityGenerator {
         for path in data.paths {
             switch path.kind {
             case "pier": pier(path.line, props: &props)
-            case "slipway": slipway(path.line, ground: &ground)
+            // The mapped slipway line is not a surveyed ramp footprint. Do not stretch an
+            // inferred 8 m slab across its entire 65 m line and invent offshore sidewalls.
+            case "slipway": break
             case "steps":
                 let stairRing = DioramaHotelGrounds.stairOutline(data: data)
                 if !path.line.contains(where: { DioramaPolygon.contains(stairRing, $0) || DioramaPolygon.distanceToRing(stairRing, $0) < 2 }) {
@@ -293,7 +295,9 @@ nonisolated struct DioramaAmenityGenerator {
     /// Swimming pool: pale coping deck, a tiled basin and turquoise water (the shader adds the caustic
     /// shimmer). Hotel pools get rows of loungers and parasols; the small private garden pools surveyed
     /// from satellite imagery get a narrow deck and a lounger or two.
-    private func pool(_ ring: [DV2], areaID: UInt64, isPrivate: Bool, rng: inout DioramaRandom, ground: inout DioramaMesh, props: inout DioramaMesh) {
+    private func pool(_ sourceRing: [DV2], areaID: UInt64, isPrivate: Bool, rng: inout DioramaRandom, ground: inout DioramaMesh, props: inout DioramaMesh) {
+        let ring = DioramaPolygon.rounded(sourceRing, flags: Array(repeating: false, count: sourceRing.count),
+                                          radius: isPrivate ? 0.45 : 0.8, segments: 12).points
         let deckWidth = isPrivate ? 1.1 : 2.2
         let deck = DioramaPolygon.offset(ring, by: deckWidth) ?? ring
         let base = terrain.foundationHeight(deck)
@@ -312,14 +316,8 @@ nonisolated struct DioramaAmenityGenerator {
         ground.polygon(ring, z: base - 0.5, .skyBlue)
         ground.polygon(ring, z: deckTop - 0.08, .poolBlue)
         // Rounded coping lip so the edge catches the light.
-        if let lip = DioramaPolygon.offset(ring, by: 0.18), lip.count == ring.count {
-            ground.extrude(lip, z0: deckTop, z1: deckTop + 0.05, .trimWhite)
-            for i in ring.indices {
-                let j = (i + 1) % ring.count
-                ground.quad(DV3(ring[i], deckTop + 0.05), DV3(ring[j], deckTop + 0.05),
-                            DV3(lip[j], deckTop + 0.05), DV3(lip[i], deckTop + 0.05), .trimWhite, normal: .up)
-            }
-        }
+        // A rounded swept lip, open in the centre; never cap the basin with a solid slab.
+        ground.band(ring, offset: 0.18, z0: deckTop, z1: deckTop + 0.05, .trimWhite)
         let box = DioramaPolygon.minimumAreaRectangle(ring)
         if isPrivate {
             // A pool ladder on one short end and up to two loungers where the deck has room.
@@ -479,26 +477,6 @@ nonisolated struct DioramaAmenityGenerator {
     }
 
     /// Concrete boat ramp sloping from the yard down into the water.
-    private func slipway(_ line: [DV2], ground: inout DioramaMesh) {
-        guard line.count >= 2 else { return }
-        let a = line[0], b = line[line.count - 1]
-        // The end in the water is the low end.
-        let landEnd = isWater(a) && !isWater(b) ? b : a
-        let seaEnd = isWater(a) && !isWater(b) ? a : b
-        let dir = (seaEnd - landEnd).normalized
-        let n = dir.right * 4.0
-        let zLand = z(landEnd) + 0.1, zSea = terrain.seabedLevel + 0.4
-        ground.quad(DV3(landEnd - n, zLand), DV3(seaEnd - n, zSea), DV3(seaEnd + n, zSea), DV3(landEnd + n, zLand), .concrete)
-        for s in [-1.0, 1.0] {
-            let e0 = landEnd + n * s, e1 = seaEnd + n * s
-            ground.quad(DV3(e0, zLand - 1.2), DV3(e1, zSea - 1.2), DV3(e1, zSea), DV3(e0, zLand), .concrete, dark: true, normal: DV3((e1 - e0).normalized.right * s, 0))
-        }
-        // Rails down the ramp.
-        for s in [-0.5, 0.5] {
-            let r0 = landEnd + n * s, r1 = seaEnd + n * s
-            ground.quad(DV3(r0 - dir.right * 0.08, zLand + 0.03), DV3(r1 - dir.right * 0.08, zSea + 0.03), DV3(r1 + dir.right * 0.08, zSea + 0.03), DV3(r0 + dir.right * 0.08, zLand + 0.03), .metalCharcoal)
-        }
-    }
 
     // MARK: Points of interest
 

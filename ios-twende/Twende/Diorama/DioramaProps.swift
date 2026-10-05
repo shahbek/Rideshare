@@ -67,13 +67,13 @@ nonisolated struct DioramaPropLibrary: Sendable {
 
     /// Trunk with a few short branches disappearing into the canopy.
     private static func trunk(_ m: inout DioramaMesh, height h: Double, radius r: Double, branches: Int, rng: inout DioramaRandom) {
-        m.tube(from: DV3(0, 0, 0), to: DV3(0, 0, h), r0: r, r1: r * 0.72, sides: 7, .trunk, cap: false)
-        m.cylinder(centre: .zero, z0: 0, z1: 0.14, r0: r * 1.6, r1: r * 1.1, sides: 7, .trunk)
+        m.tube(from: DV3(0, 0, 0), to: DV3(0, 0, h), r0: r, r1: r * 0.72, sides: 16, .trunk, cap: false)
+        m.cylinder(centre: .zero, z0: 0, z1: 0.14, r0: r * 1.6, r1: r * 1.1, sides: 16, .trunk)
         for _ in 0..<branches {
             let a = rng.range(0...6.28)
             let dir = DV2(cos(a), sin(a))
             let z0 = h * rng.range(0.72...0.95)
-            m.tube(from: DV3(0, 0, z0), to: DV3(dir * rng.range(0.9...1.5), z0 + rng.range(0.7...1.3)), r0: r * 0.45, r1: r * 0.18, sides: 4, .trunk, cap: false)
+            m.tube(from: DV3(0, 0, z0), to: DV3(dir * rng.range(0.9...1.5), z0 + rng.range(0.7...1.3)), r0: r * 0.45, r1: r * 0.18, sides: 12, .trunk, cap: false)
         }
     }
 
@@ -82,8 +82,8 @@ nonisolated struct DioramaPropLibrary: Sendable {
     /// Shading comes from the three-tone split: shadowed underside, mid sides, sunlit top.
     private static func lumpyCanopy(_ m: inout DioramaMesh, centre: DV3, radius R: Double, squash: Double, lumps: Int, palette: [DioramaSwatch], rng: inout DioramaRandom) {
         let seed = rng.next()
-        let amplitude = lumps >= 10 ? 0.16 : 0.12
-        let frequency = 2.6 + Double(lumps) * 0.12
+        let amplitude = lumps >= 10 ? 0.08 : 0.06
+        let frequency = 1.8 + Double(lumps) * 0.06
         m.blob(centre: centre, radii: DV3(R * rng.range(0.92...1.05), R * rng.range(0.92...1.05), R * squash),
                seed: seed, amplitude: amplitude, frequency: frequency,
                lower: palette[0], mid: palette[1], upper: palette[2], flattenBottom: 0.35)
@@ -126,7 +126,7 @@ nonisolated struct DioramaPropLibrary: Sendable {
         trunk(&m, height: h, radius: 0.3, branches: 4, rng: &rng)
         for k in 0..<3 {
             let a = Double(k) / 3 * 2 * Double.pi + 0.4
-            m.tube(from: DV3(0, 0, h - 0.6), to: DV3(cos(a) * 2.4, sin(a) * 2.4, h + 0.4), r0: 0.14, r1: 0.06, sides: 4, .trunk, cap: false)
+            m.tube(from: DV3(0, 0, h - 0.6), to: DV3(cos(a) * 2.4, sin(a) * 2.4, h + 0.4), r0: 0.14, r1: 0.06, sides: 12, .trunk, cap: false)
         }
         lumpyCanopy(&m, centre: DV3(0, 0, h + 0.7), radius: 3.8, squash: 0.34, lumps: 12, palette: [.leafDark, .leafOlive, .leafMid], rng: &rng)
         return m
@@ -169,14 +169,13 @@ nonisolated struct DioramaPropLibrary: Sendable {
         var rng = DioramaRandom(seed: seed, salt: 28)
         let height = rng.range(7.0...8.5)
         let leanDir = DV2(1, 0.3).normalized * lean
-        let segments = 7
+        let segments = 24
         var prev = DV3(0, 0, 0)
         for k in 1...segments {
             let t = Double(k) / Double(segments)
             let p = DV3(leanDir * (t * t * 1.6), height * t)
             let r0 = 0.30 - 0.12 * Double(k - 1) / Double(segments), r1 = 0.30 - 0.12 * Double(k) / Double(segments)
-            // Alternating slightly fatter rings give the trunk its scaly texture.
-            m.tube(from: prev, to: p, r0: k % 2 == 0 ? r0 * 1.12 : r0, r1: k % 2 == 1 ? r1 * 1.12 : r1, sides: 7, .palmTrunk, cap: k == segments)
+            m.tube(from: prev, to: p, r0: r0, r1: r1, sides: 16, .palmTrunk, cap: k == segments)
             prev = p
         }
         let top = prev + DV3(0, 0, 0.1)
@@ -201,36 +200,50 @@ nonisolated struct DioramaPropLibrary: Sendable {
         return m
     }
 
-    /// One palm frond: a tapered two-sided strip along a parabolic spine with a central rib.
+    /// Smooth indexed frond skin with a continuous curved cross-section and drooping leaflets.
     private static func frond(_ m: inout DioramaMesh, from top: DV3, direction dir: DV2, length: Double, rise: Double, droop: Double, width: Double, _ s: DioramaSwatch) {
-        let steps = 6
+        let steps = 20, crossSteps = 6
         let across = dir.left
-        var spine: [DV3] = []
+        let uv = DioramaAtlas.uv(s, dark: false)
+        let base = m.positions.count
+        func spine(_ t: Double) -> DV3 {
+            top + DV3(dir * (length * t), rise * t - droop * t * t)
+        }
         for k in 0...steps {
             let t = Double(k) / Double(steps)
-            let z = rise * t - droop * t * t
-            spine.append(top + DV3(dir * (length * t), z))
+            let w = width * sin(.pi * t)
+            for j in 0...crossSteps {
+                let u = Double(j) * 2 / Double(crossSteps) - 1
+                let p = spine(t) + DV3(across * (u * w), -0.12 * u * u * sin(.pi * t))
+                let slope = (rise - 2 * droop * t) / max(length, 0.01)
+                let normal = DV3(dir * -slope + across * (0.24 * u / max(width, 0.01)), 1).normalized
+                m.vertex(p, normal, uv)
+            }
         }
-        m.tube(from: spine[0], to: spine[2], r0: 0.05, r1: 0.035, sides: 4, .trunk, cap: false)
         for k in 0..<steps {
-            let t0 = Double(k) / Double(steps), t1 = Double(k + 1) / Double(steps)
-            let w0 = width * pow(sin(Double.pi * min(t0 + 0.12, 1)), 0.7), w1 = width * pow(sin(Double.pi * min(t1 + 0.12, 1)), 0.7)
-            let a = spine[k], b = spine[k + 1]
-            // Leaflets fold down from the rib, so the strip is a shallow V.
-            let fold = 0.14
-            let l0 = a + DV3(across * w0, -fold * w0 / max(width, 0.01)), r0 = a - DV3(across * w0, fold * w0 / max(width, 0.01))
-            let l1 = b + DV3(across * w1, -fold * w1 / max(width, 0.01)), r1 = b - DV3(across * w1, fold * w1 / max(width, 0.01))
-            m.quad(a, b, l1, l0, s, normal: DV3(across * 0.3, 1).normalized)
-            m.quad(r0, r1, b, a, s, normal: DV3(across * -0.3, 1).normalized)
-            // Only one skin: reverse coplanar faces fought for depth and made the palms black.
-            // Individual drooping pinnae articulate the crown instead of a solid triangular fan.
-            for j in 0..<3 {
-                let t = (Double(j) + 0.4) / 3
-                let root = a + (b - a) * t
-                let width = w0 + (w1 - w0) * t
-                for side in [-1.0, 1.0] {
-                    let tip = root + DV3(across * (side * width * 1.35) + dir * 0.24, -0.25 - width * 0.18)
-                    m.triangle(root, tip, root + DV3(dir * 0.12, -0.025), s, normal: DV3(across * (side * 0.25), 1).normalized)
+            for j in 0..<crossSteps {
+                let a = UInt32(base + k * (crossSteps + 1) + j), b = a + UInt32(crossSteps + 1)
+                m.tri(a, b, b + 1); m.tri(a, b + 1, a + 1)
+            }
+        }
+        // Each pinna is a curved tapered ribbon, not a single sharp triangular shard.
+        for k in 1..<16 {
+            let t = Double(k) / 17
+            let w = width * sin(.pi * t)
+            for side in [-1.0, 1.0] {
+                let root = spine(t) + DV3(across * (side * w * 0.75), -0.07)
+                let ribbonBase = m.positions.count
+                for j in 0...6 {
+                    let q = Double(j) / 6
+                    let p = root + DV3(across * (side * w * 0.65 * q) + dir * (0.28 * q), -0.32 * q * q)
+                    let half = 0.045 * sin(.pi * q)
+                    let n = DV3(across * (side * 0.3 * q), 1).normalized
+                    m.vertex(p - DV3(dir * half, 0), n, uv)
+                    m.vertex(p + DV3(dir * half, 0), n, uv)
+                }
+                for j in 0..<6 {
+                    let a = UInt32(ribbonBase + j * 2)
+                    m.tri(a, a + 2, a + 3); m.tri(a, a + 3, a + 1)
                 }
             }
         }
@@ -239,10 +252,10 @@ nonisolated struct DioramaPropLibrary: Sendable {
     private static func makeFlamboyant() -> DioramaMesh {
         var m = DioramaMesh()
         var rng = DioramaRandom(seed: 61, salt: 29)
-        m.tube(from: DV3(0, 0, 0), to: DV3(0, 0, 3.4), r0: 0.34, r1: 0.22, sides: 6, .trunk, cap: false)
+        m.tube(from: DV3(0, 0, 0), to: DV3(0, 0, 3.4), r0: 0.34, r1: 0.22, sides: 16, .trunk, cap: false)
         for k in 0..<3 {
             let a = Double(k) / 3 * 2 * Double.pi
-            m.tube(from: DV3(0, 0, 3.2), to: DV3(cos(a) * 2.2, sin(a) * 2.2, 4.6), r0: 0.16, r1: 0.08, sides: 4, .trunk, cap: false)
+            m.tube(from: DV3(0, 0, 3.2), to: DV3(cos(a) * 2.2, sin(a) * 2.2, 4.6), r0: 0.16, r1: 0.08, sides: 12, .trunk, cap: false)
         }
         lumpyCanopy(&m, centre: DV3(0, 0, 5.1), radius: 4.0, squash: 0.38, lumps: 12, palette: [.leafDark, .flamboyant, .flamboyant], rng: &rng)
         return m
@@ -399,7 +412,7 @@ nonisolated struct DioramaPropLibrary: Sendable {
         m.box(centre: DV2(0.6, 0), z0: 0, halfLength: 0.35, halfWidth: 1.3, height: 1.0, .deck, top: .deck, ao: 0.3, bevel: 0.05)
         m.box(centre: DV2(-0.9, 0), z0: 0, halfLength: 0.12, halfWidth: 1.3, height: 2.2, .ochre, ao: 0.4, bevel: 0.04)
         for y in [-1.25, 1.25] {
-            m.tube(from: DV3(0.95, y, 0), to: DV3(0.95, y, 2.1), r0: 0.06, r1: 0.06, sides: 4, .trunk, cap: false)
+            m.tube(from: DV3(0.95, y, 0), to: DV3(0.95, y, 2.1), r0: 0.06, r1: 0.06, sides: 12, .trunk, cap: false)
         }
         m.quad(DV3(-1.1, -1.5, 2.45), DV3(-1.1, 1.5, 2.45), DV3(1.25, 1.5, 2.05), DV3(1.25, -1.5, 2.05), canopy)
         m.quad(DV3(1.25, -1.5, 2.05), DV3(1.25, 1.5, 2.05), DV3(1.25, 1.5, 1.8), DV3(1.25, -1.5, 1.8), .trimWhite, normal: DV3(1, 0, 0))

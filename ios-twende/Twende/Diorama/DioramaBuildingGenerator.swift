@@ -48,7 +48,7 @@ nonisolated struct DioramaBuildingGenerator {
         return (.villa, floors)
     }
 
-    /// Builds level rooms on a locally cut/fill graded site, not a highest-point raised plinth.
+    /// Buildings follow their site datum without changing the underlying landform.
     @discardableResult
     func build(_ f: DioramaBuildingFeature, into mesh: inout DioramaMesh, glow: inout DioramaMesh, lights: Bool, pointLights: inout [DioramaLight]) -> DioramaBuilt {
         let ground = terrain.buildingHeight(f)
@@ -73,9 +73,12 @@ nonisolated struct DioramaBuildingGenerator {
         }
         if let forced = override?.wallColor { wallColor = forced }
 
-        // Continuous facade masonry meets the graded landscape. Only buried footings remain;
-        // no separate concrete/courtyard pedestal is exposed beneath the house.
-        mesh.extrude(ring, z0: -0.25, z1: 0.5, wallColor, skip: flags)
+        // Same-material wall bases follow the existing slope, never a separate pedestal.
+        for i in ring.indices where !flags[i] {
+            let a = ring[i], b = ring[(i + 1) % ring.count]
+            mesh.quad(DV3(a, terrain.height(a) - ground - 0.25), DV3(b, terrain.height(b) - ground - 0.25),
+                      DV3(b, 0.5), DV3(a, 0.5), wallColor, normal: DV3((b - a).normalized.right, 0))
+        }
         // Facade masonry below is split at door/window openings, rather than solid walls behind panes.
 
         // String courses between floors on taller buildings.
