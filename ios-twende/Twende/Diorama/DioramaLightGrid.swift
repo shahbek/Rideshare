@@ -2,14 +2,14 @@ import Foundation
 import simd
 
 /// One point light as the GPU sees it: xyz position in local metres + radius, rgb colour + intensity.
-nonisolated struct DioramaShaderLight: Codable, Sendable {
+nonisolated struct DioramaShaderLight: Sendable {
     var position: SIMD4<Float>
     var color: SIMD4<Float>
 }
 
 /// Uniform 2D grid over the tile that lists, per cell, which lights can reach it. The fragment shader
 /// looks up its cell and visits only those lights, so hundreds of lamps and lit facades stay cheap.
-nonisolated struct DioramaLightGrid: Codable, Sendable {
+nonisolated struct DioramaLightGrid: Sendable {
     let cells: Int
     let minX: Float
     let minY: Float

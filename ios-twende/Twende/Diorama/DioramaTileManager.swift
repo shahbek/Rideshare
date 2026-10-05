@@ -86,8 +86,6 @@ final class DioramaTileManager {
     private var revealStarted: CFTimeInterval? = nil
     private var revealRequested: CFTimeInterval = 0
     private var labelMaskCount: Int = -1
-    private var loadRequest: UUID = UUID()
-    private var loadStarted: CFTimeInterval = 0
     private var labelClipID: String { layerID + "-label-clip" }
     private var labelSourceID: String { layerID + "-label-mask" }
 
@@ -133,9 +131,6 @@ final class DioramaTileManager {
                 MainActor.assumeIsolated { self?.updateWaterClock() }
             }
         }
-        // The manager exists only when the feature is enabled. Overlap loading with style setup
-        // and the opening camera flight instead of waiting until the camera reaches the tile.
-        generate()
     }
 
     private func updateWaterClock() {
@@ -180,7 +175,6 @@ final class DioramaTileManager {
     }
 
     func remove() {
-        loadRequest = UUID()
         pendingUpdate?.cancel()
         pendingUpdate = nil
         if let settingsObserver { NotificationCenter.default.removeObserver(settingsObserver) }
@@ -253,7 +247,7 @@ final class DioramaTileManager {
         case .idle:
             generate()
         case .generating:
-            state.status = "Loading Slipway…"
+            state.status = "Generating Slipway…"
         case .loaded(let artifacts):
             if !shown { show(artifacts, on: map) }
         case .failed:
@@ -274,37 +268,55 @@ final class DioramaTileManager {
 
     // MARK: Generation
 
-    /// Restore exact packed artifacts first; only construct the scene when no valid archive exists.
-    private func generate(force: Bool = false) {
+    /// Builds the tile from bundled data only. Nothing is read from the live map, so the result is
+    /// the same every session and needs no terrain-loading wait.
+    private func generate() {
         status = .generating
-        state.status = "Loading Slipway…"
-        loadStarted = CACurrentMediaTime()
-        let request = UUID()
-        loadRequest = request
+        state.status = "Generating Slipway…"
         let config = self.config
         let reduced = thermalReduced
-        Task { [weak self] in
-            let artifacts = await DioramaTileArchive.load(config: config, reduced: reduced, force: force)
-            guard let self, self.loadRequest == request, case .generating = self.status else { return }
-            guard let artifacts else {
-                self.status = .failed
-                self.state.status = "Diorama generation failed"
-                return
+        Task.detached(priority: .userInitiated) {
+            let artifacts: DioramaTileArtifacts?
+            let started = Date()
+            let tile = DioramaTileID(latitude: config.seedLatitude, longitude: config.seedLongitude, zoom: config.tileZoom)
+            if let cached = DioramaTileGenerator.cached(tile, config: config, reduced: reduced) {
+                artifacts = cached
+            } else if let data = DioramaBundledTile.load(config: config), !data.isEmpty {
+                do {
+                    // Prototype construction used to block the main thread at map-manager init,
+                    // even when the diorama was off. Build lazily here, after checking the cache.
+                    let library = DioramaPropLibrary(config: config)
+                    print("[Diorama timing] bundle + prototypes: \(String(format: "%.3f", Date().timeIntervalSince(started)))s")
+                    artifacts = try DioramaTileGenerator.generate(data, config: config, library: library, reduced: reduced)
+                } catch {
+                    print("[Diorama] generate failed: \(error)")
+                    artifacts = nil
+                }
+            } else {
+                artifacts = nil
             }
-            self.status = .loaded(artifacts)
-            print("[Diorama load] artifacts available: \(String(format: "%.3f", CACurrentMediaTime() - self.loadStarted))s")
-            self.scheduleUpdate(delay: 0)
+            await MainActor.run {
+                guard case .generating = self.status else { return }
+                guard let artifacts else {
+                    self.status = .failed
+                    self.state.status = "Diorama generation failed"
+                    return
+                }
+                self.status = .loaded(artifacts)
+                print("[Diorama] \(artifacts.tile): \(artifacts.totalTriangles) unique tris, \(artifacts.lightDrawnTriangles)–\(artifacts.drawnTriangles) drawn (light–full LOD), \(artifacts.totalInstances) instances, \(artifacts.totalBytes / 1024) KB in \(String(format: "%.2f", artifacts.generationSeconds))s")
+                self.scheduleUpdate(delay: 0.05)
+            }
         }
     }
 
     /// Drops the cached geometry and rebuilds it.
     func regenerate() {
-        // Repeated debug taps must not queue multiple expensive reconstructions.
-        if case .generating = status { return }
         guard let map else { return }
+        DioramaTileGenerator.clearCache(for: tile, config: config)
         hide(on: map)
+        status = .idle
         state.loadedTiles[tile] = nil
-        generate(force: true)
+        scheduleUpdate(delay: 0.05)
     }
 
     // MARK: Showing
@@ -402,10 +414,7 @@ final class DioramaTileManager {
             } else { map?.triggerRepaint() }
             return
         }
-        if revealStarted == nil {
-            revealStarted = now
-            print("[Diorama load] renderer ready / reveal begins: \(String(format: "%.3f", now - loadStarted))s since load request")
-        }
+        if revealStarted == nil { revealStarted = now }
         let progress = finish ? 1 : min(1, max(0, (now - (revealStarted ?? now)) / 1.8))
         let rect = DioramaProjection(origin: tile.centre).rect(of: tile)
         let extent = 0.8 + (max(rect.width, rect.height) * 0.5 + 12) * (progress * progress * (3 - 2 * progress))

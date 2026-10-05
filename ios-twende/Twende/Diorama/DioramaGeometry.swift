@@ -1,7 +1,7 @@
 import Foundation
 
 /// 2D vector in local metres (x east, y north).
-nonisolated struct DV2: Hashable, Codable, Sendable {
+nonisolated struct DV2: Hashable, Sendable {
     var x: Double
     var y: Double
 
@@ -35,7 +35,7 @@ nonisolated struct DV2: Hashable, Codable, Sendable {
 }
 
 /// 3D vector in local metres (x east, y north, z up).
-nonisolated struct DV3: Codable, Sendable {
+nonisolated struct DV3: Sendable {
     var x: Double
     var y: Double
     var z: Double

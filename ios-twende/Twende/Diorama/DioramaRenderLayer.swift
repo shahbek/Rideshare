@@ -11,7 +11,7 @@ import simd
 /// Directional shadows are cached. Spatial batches outside the camera frustum never draw;
 /// only water/halos blend. There is no planar reflection pass.
 nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
-    nonisolated struct Range: Codable, Sendable {
+    nonisolated struct Range: Sendable {
         let category: DioramaCategory
         let start: Int
         let count: Int
