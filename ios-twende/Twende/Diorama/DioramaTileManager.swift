@@ -136,7 +136,7 @@ final class DioramaTileManager {
             return
         }
         guard waterClock == nil else { return }
-        // 12 Hz is enough for a slow drift; the reflection target stays cached between ticks.
+        // Bounded 12 Hz wave updates only while the diorama is visible and the app is active.
         let timer = Timer(timeInterval: 1.0 / 12.0, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.map?.triggerRepaint() }
         }

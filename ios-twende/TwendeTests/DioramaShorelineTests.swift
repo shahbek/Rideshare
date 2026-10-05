@@ -176,7 +176,7 @@ final class DioramaShorelineTests: XCTestCase {
         config.waterLevel = 1.4
         let data = try XCTUnwrap(DioramaBundledTile.load(config: config))
         let terrain = DioramaTerrain.load(rect: data.rect, config: config).resolvingSurfaces(in: data)
-        XCTAssertEqual(terrain.waterLevel, config.waterLevel + terrain.clearance, accuracy: 0.0001)
+        XCTAssertGreaterThanOrEqual(terrain.waterLevel, config.waterLevel)
         XCTAssertEqual(terrain.pierLevel, terrain.waterLevel + 0.83, accuracy: 0.0001)
         XCTAssertEqual(terrain.seabedLevel, terrain.waterLevel - 1.22, accuracy: 0.0001)
         let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())

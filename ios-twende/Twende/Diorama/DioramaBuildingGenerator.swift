@@ -52,6 +52,7 @@ nonisolated struct DioramaBuildingGenerator {
     @discardableResult
     func build(_ f: DioramaBuildingFeature, into mesh: inout DioramaMesh, glow: inout DioramaMesh, lights: Bool, pointLights: inout [DioramaLight]) -> DioramaBuilt {
         let ground = terrain.buildingHeight(f)
+        terrain.foundation(f.ring, top: ground, swatch: .concrete, into: &mesh)
         let savedMesh = mesh.baseZ, savedGlow = glow.baseZ
         mesh.baseZ = ground
         glow.baseZ = ground

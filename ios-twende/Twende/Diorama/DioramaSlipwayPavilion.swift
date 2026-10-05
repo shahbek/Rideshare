@@ -12,6 +12,7 @@ nonisolated struct DioramaSlipwayPavilion {
 
     func build(_ f: DioramaBuildingFeature, mesh: inout DioramaMesh) -> DioramaBuilt {
         let base = terrain.buildingHeight(f)
+        terrain.foundation(f.ring, top: base, swatch: .coralStone, into: &mesh)
         let floors = f.id == Self.buildingID ? 2 : 4
         let height = f.id == Self.buildingID ? 6.35 : (f.height ?? 12.8)
         let storey = height / Double(floors), eave = base + height

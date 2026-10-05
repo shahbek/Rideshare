@@ -15,6 +15,7 @@ nonisolated struct DioramaHotelGenerator {
     func build(_ f: DioramaBuildingFeature, mesh: inout DioramaMesh, glow: inout DioramaMesh,
                lights: inout [DioramaLight]) -> DioramaBuilt {
         let base = terrain.buildingHeight(f)
+        terrain.foundation(f.ring, top: base, swatch: .concrete, into: &mesh)
         let old = mesh.baseZ, oldGlow = glow.baseZ
         mesh.baseZ = base; glow.baseZ = base
         defer { mesh.baseZ = old; glow.baseZ = oldGlow }

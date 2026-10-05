@@ -18,6 +18,7 @@ nonisolated struct DioramaGroundGenerator {
 
     func generate(compounds: [DioramaCompound], into mesh: inout DioramaMesh, water waterMesh: inout DioramaMesh) {
         plate(into: &mesh)
+        reef(into: &mesh)
         parks(into: &mesh)
         compoundGround(compounds, into: &mesh)
         water(into: &waterMesh)
@@ -25,12 +26,12 @@ nonisolated struct DioramaGroundGenerator {
 
     // MARK: Plate
 
-    /// Continuous offset DEM land backing under every finish and structure, including pools.
+    /// One continuous DEM skin over the whole tile: grass on land, sand under the sea. The same
+    /// draped lattice continues beneath the water plane, so the coast has no step, lid or skirt.
     /// Ownership cutouts apply only to the upper finishes, never to this terrain skin.
     private func plate(into mesh: inout DioramaMesh) {
         let r = data.rect
         let corners = [DV2(r.minX, r.minY), DV2(r.maxX, r.minY), DV2(r.maxX, r.maxY), DV2(r.minX, r.maxY)]
-        // Land and submerged backing have disjoint plans, not two nearly coplanar tile skins.
         let ocean = DioramaGroundCutouts(polygons: data.water.compactMap { $0.rings.first })
         for piece in ocean.subtract(from: corners) {
             terrain.drape(piece, lift: 0, swatch: .grass, into: &mesh)
@@ -39,11 +40,40 @@ nonisolated struct DioramaGroundGenerator {
             guard let outer = area.rings.first else { continue }
             let holes = DioramaGroundCutouts(polygons: Array(area.rings.dropFirst()))
             for piece in holes.subtract(from: DioramaPolygon.clipPolygon(outer, to: r)) {
-                mesh.polygon(piece, z: terrain.seabedLevel, .seabed)
+                terrain.drape(piece, lift: 0, swatch: .seabed, into: &mesh)
             }
-            // Islands retain continuous land backing, including beneath their amenities.
             for ring in area.rings.dropFirst() {
                 terrain.drape(DioramaPolygon.clipPolygon(ring, to: r), lift: 0, swatch: .grass, into: &mesh)
+            }
+        }
+    }
+
+    /// Bounded, deterministic illustrative reef patches, not surveyed marine habitat.
+    private func reef(into mesh: inout DioramaMesh) {
+        var count = 0
+        for segment in data.shorelines {
+            for i in segment.points.indices where i % 6 == 0 && count < 72 {
+                let p = segment.points[i] + segment.outward[i] * Double(8 + (i % 3) * 6)
+                let margin = [DV2(-1.5, -1.5), DV2(1.5, -1.5), DV2(1.5, 1.5), DV2(-1.5, 1.5)]
+                guard data.rect.contains(p), margin.allSatisfy({ isWater(p + $0) }),
+                      !data.paths.contains(where: { path in path.kind == "pier" && zip(path.line, path.line.dropFirst()).contains { DioramaPolygon.distanceToSegment(p, $0.0, $0.1) < 5 } }) else { continue }
+                let base = terrain.height(p)
+                guard base < terrain.waterLevel - 0.5 else { continue }
+                mesh.sphere(centre: DV3(p, base + 0.12), radii: DV3(1.1, 0.8, 0.2), .rockWarm)
+                for branch in 0..<7 {
+                    let angle = Double(branch) * 2.399
+                    let q = p + DV2(cos(angle), sin(angle)) * (0.25 + Double(branch % 3) * 0.22)
+                    let stem = DV3(q, base + 0.15)
+                    let tip = DV3(q + DV2(cos(angle), sin(angle)) * 0.13, base + 0.45 + Double(branch % 3) * 0.12)
+                    mesh.tube(from: stem, to: tip, r0: 0.09, r1: 0.055, sides: 10, .coralStone)
+                    for side in [-1.0, 1.0] {
+                        let fork = tip + DV3(DV2(cos(angle + side), sin(angle + side)) * 0.18, 0.12)
+                        mesh.tube(from: tip - DV3(0, 0, 0.15), to: fork, r0: 0.05, r1: 0.025, sides: 8, .coralStone)
+                        mesh.sphere(centre: fork, radii: DV3(0.04, 0.04, 0.04), .cream)
+                    }
+                }
+                mesh.sphere(centre: DV3(p + DV2(1.0, 0.4), base + 0.2), radii: DV3(0.45, 0.4, 0.26), .algaeStone)
+                count += 1
             }
         }
     }

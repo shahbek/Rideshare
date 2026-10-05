@@ -147,6 +147,8 @@ nonisolated enum DioramaShaderSource {
                 normal.z = -normal.z;
             }
         }
+        // Waves are shaded per pixel only. Displacing water vertices opens cracks at the mesh's
+        // adaptive T-junctions, which read as a grid of pinholes over the whole bay.
         out.position = matrix * float4(world, 1.0);
         out.worldPosition = world;
         out.normal = normal;
@@ -354,7 +356,13 @@ nonisolated enum DioramaShaderSource {
             float chop = dioramaNoise((wp + flow) * 0.22) * 0.6
                        + dioramaNoise((wp + flow * 1.6) * 0.6) * 0.4;
             float nearShoreWeight = 0.35 + 0.65 * shallow;
-            body *= 0.95 + 0.07 * (chop - 0.5) + 0.06 * swell * nearShoreWeight;
+            body *= 0.92 + 0.14 * (chop - 0.5) + 0.15 * swell * nearShoreWeight;
+            float2 ripplePhase = float2(dot(wp, float2(0.65, 0.32)) - time * 0.85,
+                                       dot(wp, float2(-0.28, 0.72)) - time * 0.6);
+            float2 slope = float2(cos(ripplePhase.x) * 0.12 - cos(ripplePhase.y) * 0.055,
+                                 cos(ripplePhase.x) * 0.06 + cos(ripplePhase.y) * 0.14);
+            float3 waveNormal = normalize(float3(-slope, 1.0));
+            float glint = pow(saturate(dot(waveNormal, normalize(view + u.sunDirection.xyz))), 48.0);
 
             // Broken, transient foam patches, not the former continuous near-white perimeter stroke.
             float lace = dioramaNoise(wp * 0.8 + float2(time * 0.12, -time * 0.09));
@@ -364,9 +372,9 @@ nonisolated enum DioramaShaderSource {
             float foam = contact * smoothstep(0.62, 0.84, lace) * breath * 0.14 * (1.0 - u.shoreline.z);
             color = body * (ambient * 0.35 + float3(0.72) + u.sunColor.rgb * 0.22);
             color = mix(color, float3(0.78, 0.87, 0.83), foam);
-            color += pointLight * glow * 0.15;
+            color += pointLight * glow * 0.15 + u.sunColor.rgb * glint * 0.22;
             // Shallow water reveals the actual submerged sand/rocks; opaque deep water hides the plate.
-            return float4(color, mix(1.0, 0.72, shallow));
+            return float4(color, mix(1.0, 0.48, shallow));
         }
 
         if (tex > 5.5 && tex < 6.5) {

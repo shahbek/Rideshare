@@ -133,7 +133,7 @@ nonisolated enum DioramaTileGenerator {
                 let texture: Float
                 switch cell?.swatch {
                 case .grass, .lawn, .pitchGreen: texture = 1
-                case .earth, .wetSand: texture = 2
+                case .earth, .wetSand, .seabed: texture = 2
                 case .asphalt: texture = 3
                 case .paving, .pavement, .concrete: texture = 4
                 case .poolBlue: texture = 5

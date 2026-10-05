@@ -254,9 +254,13 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
         encoder.setFragmentBuffer(lightIndexBuffer, offset: 0, index: 3)
         encoder.setFragmentTexture(blankReflection, index: 0)
         encoder.setFragmentTexture(shadowMap?.texture, index: 1)
-        for range in mainRanges {
+        // Opaque seabed, coral and hulls first; translucent sea then tints submerged geometry.
+        let orderedRanges = mainRanges.filter { $0.category != .water && $0.category != .propGlow }
+            + mainRanges.filter { $0.category == .water }
+            + mainRanges.filter { $0.category == .propGlow }
+        for range in orderedRanges {
             encoder.setRenderPipelineState(range.category == .propGlow ? (glowPipeline ?? pipeline) : (range.category == .water ? (waterPipeline ?? pipeline) : pipeline))
-            encoder.setDepthStencilState(range.category == .propGlow ? noWriteDepthState : depthState)
+            encoder.setDepthStencilState(range.category == .propGlow || range.category == .water ? noWriteDepthState : depthState)
             encoder.drawIndexedPrimitives(type: .triangle, indexCount: range.count, indexType: .uint32, indexBuffer: indexBuffer, indexBufferOffset: range.start * MemoryLayout<UInt32>.stride)
         }
         encoder.endEncoding()

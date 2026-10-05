@@ -74,8 +74,10 @@ nonisolated struct DioramaAmenityGenerator {
         let masks = DioramaGroundCutouts(data: data, pavementWidth: config.pavementWidth,
             additionalMasks: data.water.compactMap { $0.rings.first }, excludedAreaIDs: [areaID])
         let pieces = masks.subtract(from: ring)
-        for piece in pieces { ground.polygon(piece, z: top, finish) }
-        // Ground finishes have no generic extruded sides; actual coastal walls belong to shoreline.
+        for piece in pieces {
+            terrain.foundation(piece, top: top, swatch: side, into: &ground)
+            ground.polygon(piece, z: top, finish)
+        }
         return pieces
     }
 
@@ -297,7 +299,8 @@ nonisolated struct DioramaAmenityGenerator {
                                           radius: isPrivate ? 0.45 : 0.8, segments: 12).points
         let deckWidth = isPrivate ? 1.1 : 2.2
         let deck = DioramaPolygon.offset(ring, by: deckWidth) ?? ring
-        let base = terrain.foundationHeight(deck)
+        // Keep the entire basin above continuous land; no hidden floor beneath grass.
+        let base = terrain.foundationHeight(deck) + 0.55
         let deckTop = base + 0.12
         let excluded = Set(data.landuse.filter { $0.kind == "terrace" || $0.id == areaID }.map(\.id))
         let cutouts = DioramaGroundCutouts(data: data, pavementWidth: config.pavementWidth,
@@ -305,6 +308,7 @@ nonisolated struct DioramaAmenityGenerator {
         let deckPieces = cutouts.subtract(from: deck)
         // Boolean annulus, clipped to neighbours and roads; no assumed offset-vertex correspondence.
         for piece in deckPieces {
+            terrain.foundation(piece, top: deckTop, swatch: .poolCoping, into: &ground)
             ground.polygon(piece, z: deckTop, .poolCoping)
         }
         func onDeck(_ p: DV2) -> Bool { deckPieces.contains { DioramaPolygon.contains($0, p) } }
@@ -356,7 +360,7 @@ nonisolated struct DioramaAmenityGenerator {
 
     private func terrace(_ ring: [DV2], areaID: UInt64, rng: inout DioramaRandom, ground: inout DioramaMesh, props: inout DioramaMesh, glow: inout DioramaMesh, lights: inout [DioramaLight]) {
         let base = terrain.foundationHeight(ring)
-        let top = connectedBuildingLevel(near: ring, within: 4) ?? (base + 0.35)
+        let top = max(connectedBuildingLevel(near: ring, within: 4) ?? base, max(base, terrain.pierLevel))
         let cutouts = DioramaGroundCutouts(data: data, pavementWidth: config.pavementWidth, excludedAreaIDs: [areaID])
         let pieces = cutouts.subtract(from: ring)
         let box = DioramaPolygon.minimumAreaRectangle(ring)
@@ -408,11 +412,14 @@ nonisolated struct DioramaAmenityGenerator {
         guard length > 0.5 else { return }
         let dir = (b - a).normalized
         let count = max(Int(length / 0.4), 2)
-        let base = z(a)
+        let across = dir.right * 1.2
+        let base = terrain.foundationHeight([a - across, b - across, b + across, a + across])
         for k in 0..<count {
             let p = a + dir * (length * (Double(k) + 0.5) / Double(count))
             let rise = 0.12 * Double(min(k, 5) + 1)
-            ground.box(centre: p, z0: base, axis: dir, halfLength: length / Double(count) / 2 + 0.01, halfWidth: 1.2, height: rise, .concrete, top: .paving)
+            let tread = DioramaOrientedRect(centre: p, axis: dir, halfLength: length / Double(count) / 2 + 0.01, halfWidth: 1.2)
+            terrain.foundation(tread.corners, top: base + rise, swatch: .concrete, into: &ground)
+            ground.box(centre: p, z0: base, axis: dir, halfLength: tread.halfLength, halfWidth: 1.2, height: rise, .concrete, top: .paving)
         }
     }
 
@@ -432,7 +439,10 @@ nonisolated struct DioramaAmenityGenerator {
     private func pier(_ line: [DV2], props: inout DioramaMesh) {
         guard line.count >= 2 else { return }
         let endpoints = [line[0], line[line.count - 1]]
-        let deck = connectedBuildingLevel(near: endpoints, within: 30) ?? terrain.pierHeight(line)
+        let dry = DioramaPolygon.densify(line, maxStep: 1).filter { !isWater($0) }
+        let dryTop = dry.map { terrain.height($0) + 0.18 }.max() ?? terrain.pierLevel
+        let deck = max(connectedBuildingLevel(near: endpoints, within: 30) ?? terrain.pierLevel,
+                       max(dryTop, terrain.pierLevel))
         let half = 1.8
         // Orient from shore to sea regardless of the source way's ordering.
         let shoreFirst = terrain.height(line[0]) >= terrain.height(line[line.count - 1])
@@ -460,7 +470,9 @@ nonisolated struct DioramaAmenityGenerator {
 
     /// Lattice telecom mast with a red aircraft light.
     private func mast(at p: DV2, props: inout DioramaMesh, glow: inout DioramaMesh, lights: inout [DioramaLight]) {
-        let base = z(p)
+        let footing = DioramaOrientedRect(centre: p, axis: DV2(1, 0), halfLength: 1.6, halfWidth: 1.6).corners
+        let base = terrain.foundationHeight(footing)
+        terrain.foundation(footing, top: base, swatch: .concrete, into: &props)
         let h = 28.0
         props.box(centre: p, z0: base, halfLength: 1.6, halfWidth: 1.6, height: 0.5, .concrete)
         let legs = 3
@@ -523,8 +535,10 @@ nonisolated struct DioramaAmenityGenerator {
     }
 
     private func sculpture(at p: DV2, ground: inout DioramaMesh, props: inout DioramaMesh) {
-        let base = z(p)
+        let footing = DioramaOrientedRect(centre: p, axis: DV2(1, 0), halfLength: 1, halfWidth: 1).corners
+        let base = terrain.foundationHeight(footing)
         guard !roads.isOnRoad(p, margin: 1), !buildings.contains(where: { $0.box.expanded(by: 0.5).contains(p) }) else { return }
+        terrain.foundation(footing, top: base, swatch: .concrete, into: &ground)
         ground.cylinder(centre: p, z0: base, z1: base + 0.9, r0: 1.0, r1: 0.9, sides: 10, .concrete)
         props.sphere(centre: DV3(p, base + 1.9), radii: DV3(0.7, 0.7, 0.9), .bronze)
         props.tube(from: DV3(p, base + 0.9), to: DV3(p, base + 2.9), r0: 0.18, r1: 0.1, sides: 6, .bronze)
@@ -547,6 +561,9 @@ nonisolated struct DioramaAmenityGenerator {
             props.tube(from: DV3(host.box.centre, baseZ + 3.2), to: DV3(host.box.centre, baseZ + 4.6), r0: 0.12, r1: 0.03, sides: 5, .sunflower)
         } else {
             guard !roads.isOnRoad(spot, margin: 1.5) else { return }
+            let footing = DioramaOrientedRect(centre: spot, axis: DV2(1, 0), halfLength: 0.9, halfWidth: 0.9).corners
+            baseZ = terrain.foundationHeight(footing)
+            terrain.foundation(footing, top: baseZ, swatch: .concrete, into: &props)
         }
         let h = 14.0
         props.cylinder(centre: spot, z0: baseZ, z1: baseZ + h, r0: 0.9, r1: 0.75, sides: 8, .whitewash)

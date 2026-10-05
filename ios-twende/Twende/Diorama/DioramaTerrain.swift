@@ -12,11 +12,10 @@ nonisolated struct DioramaTerrain: Sendable {
     let rows: Int
     /// Absolute exaggerated DEM values, row-major from south to north.
     let values: [Double]
-    /// Native terrain elevations are absolute; never offset the whole scene to clear the ocean.
-    var clearance: Double { 0 }
+    var attachedFootprints: [UInt64: [[DV2]]] = [:]
 
     var midTideDatum: Double = DioramaConfig.slipway.waterLevel
-    var waterLevel: Double { midTideDatum + clearance }
+    var waterLevel: Double { midTideDatum }
     var pierLevel: Double { waterLevel + 0.83 }
     var seabedLevel: Double { waterLevel - 1.22 }
 
@@ -51,34 +50,89 @@ nonisolated struct DioramaTerrain: Sendable {
                               values: file.elevations.map { $0 * 1.6 }, midTideDatum: config.waterLevel)
     }
 
-    /// Coastline geometry cannot change the Mapbox elevation datum.
+    /// The sea datum is read from the open-water DEM itself, so the flat sea sits just above the
+    /// draped seabed. Land is never raised to meet it: where the landform rises through the datum,
+    /// that is simply the shore. A robust percentile ignores land values bleeding into coastal cells.
     func resolvingSurfaces(in data: DioramaTileData) -> DioramaTerrain {
-        self
+        var result = self
+        var interior: [Double] = []
+        for row in 0..<rows {
+            for column in 0..<columns {
+                let p = DV2(rect.minX + Double(column) * rect.width / Double(columns - 1),
+                            rect.minY + Double(row) * rect.height / Double(rows - 1))
+                guard data.water.contains(where: { DioramaPolygon.contains(polygon: $0.rings, p) }),
+                      !data.shorelines.contains(where: { DioramaShoreline.distance(p, line: $0.points) < 12 }) else { continue }
+                interior.append(rawHeight(p))
+            }
+        }
+        if interior.count >= 4 {
+            let sorted = interior.sorted()
+            let p95 = sorted[min(sorted.count - 1, Int(Double(sorted.count) * 0.95))]
+            result.midTideDatum = max(midTideDatum, p95 + Self.lift + 0.3)
+        }
+        for area in data.landuse where area.kind == "terrace" {
+            guard let ring = area.rings.first else { continue }
+            result.attach(ring, reach: 4, data: data)
+        }
+        for path in data.paths where path.kind == "pier" {
+            let dry = DioramaPolygon.densify(path.line, maxStep: 1).filter { p in
+                !data.water.contains { DioramaPolygon.contains(polygon: $0.rings, p) }
+            }
+            result.attach(dry, reach: 30, data: data)
+        }
+        return result
     }
 
-    /// Site datum for level floors; the original landscape is never cut, filled or flattened.
+    private mutating func attach(_ points: [DV2], reach: Double, data: DioramaTileData) {
+        guard !points.isEmpty else { return }
+        let nearest = data.buildings.map { building in
+            (building.id, points.map { DioramaPolygon.contains(building.ring, $0) ? 0 : DioramaPolygon.distanceToRing(building.ring, $0) }.min() ?? .infinity)
+        }.min { $0.1 < $1.1 }
+        if let nearest, nearest.1 <= reach { attachedFootprints[nearest.0, default: []].append(points) }
+    }
+
+    /// Level floors clear the complete footprint and connected decks with a shallow foundation.
+    /// Only waterfront buildings with a connected deck are also held above the pier datum.
     func buildingHeight(_ feature: DioramaBuildingFeature) -> Double {
-        height(feature.centroid) + 0.04
+        let attached = attachedFootprints[feature.id, default: []]
+        let support = attached.map { foundationHeight($0) }.max() ?? -Double.infinity
+        let floor = max(foundationHeight(feature.ring), support)
+        return attached.isEmpty ? floor : max(floor, pierLevel)
     }
 
     /// Level amenity slab above its footprint.
     func foundationHeight(_ ring: [DV2]) -> Double {
-        guard let first = ring.first else { return Self.lift + clearance }
+        guard let first = ring.first else { return Self.lift }
         let bounds = DioramaRect.bounding(ring)
         var highest = height(DioramaPolygon.centroid(ring))
         for p in DioramaPolygon.densify(ring + [first], maxStep: 1) { highest = max(highest, height(p)) }
-        for y in stride(from: floor(bounds.minY / Self.surfaceStep) * Self.surfaceStep, through: bounds.maxY, by: Self.surfaceStep) {
-            for x in stride(from: floor(bounds.minX / Self.surfaceStep) * Self.surfaceStep, through: bounds.maxX, by: Self.surfaceStep) {
-                let p = DV2(x, y)
-                if DioramaPolygon.contains(ring, p) { highest = max(highest, height(p)) }
+        let step = Self.surfaceStep
+        for y in stride(from: floor(bounds.minY / step) * step, through: bounds.maxY, by: step) {
+            for x in stride(from: floor(bounds.minX / step) * step, through: bounds.maxX, by: step) {
+                let clipped = DioramaPolygon.clipPolygon(ring, to: DioramaRect(minX: x, minY: y, maxX: x + step, maxY: y + step))
+                for inside in [true, false] {
+                    let piece = DioramaGroundCutouts.halfPlane(clipped, a: DV2(x, y), b: DV2(x + step, y + step), inside: inside)
+                    // A linear triangle's maximum is at a clipped vertex, including diagonal crossings.
+                    for p in piece { highest = max(highest, height(p)) }
+                }
             }
         }
-        return highest + 0.04
+        return highest + 0.18
+    }
+
+    /// Footprint-contained foundation skirt follows the slope without modifying continuous land.
+    func foundation(_ ring: [DV2], top: Double, swatch: DioramaSwatch, into mesh: inout DioramaMesh) {
+        guard let first = ring.first else { return }
+        let boundary = DioramaPolygon.densify(ring + [first], maxStep: 1)
+        for (a, b) in zip(boundary, boundary.dropFirst()) {
+            mesh.quad(DV3(a, height(a) - 0.08), DV3(b, height(b) - 0.08),
+                      DV3(b, top), DV3(a, top), swatch, normal: DV3((b - a).normalized.right, 0))
+        }
     }
 
     /// Continuous support reaches below the lowest boundary rather than floating on the high side.
     func footingHeight(_ ring: [DV2]) -> Double {
-        guard let first = ring.first else { return Self.lift + clearance - 0.3 }
+        guard let first = ring.first else { return Self.lift - 0.3 }
         return (DioramaPolygon.densify(ring + [first], maxStep: 1).map { height($0) }.min() ?? height(first)) - 0.3
     }
 
