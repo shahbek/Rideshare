@@ -2,7 +2,8 @@ import Foundation
 
 /// One triangulated height field for land, draped finishes, markings and structural foundations.
 nonisolated struct DioramaTerrain: Sendable {
-    static let lift: Double = 0
+    /// Shared render separation from Standard; preserves the DEM shape and all land attachments.
+    static let lift: Double = 0.2
     /// All draped surfaces use the same cell origin, diagonal and interpolation, not separate meshes.
     static let surfaceStep: Double = 4
 
@@ -99,7 +100,7 @@ nonisolated struct DioramaTerrain: Sendable {
             let h01 = rawHeight(DV2(x, y + step))
             h = h00 * (1 - ty) + h11 * tx + h01 * (ty - tx)
         }
-        return h
+        return h + Self.lift
     }
 
     /// DEM interpolation with no visual offsets or additional exaggeration.

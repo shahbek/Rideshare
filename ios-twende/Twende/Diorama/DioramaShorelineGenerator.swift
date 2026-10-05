@@ -223,7 +223,10 @@ nonisolated struct DioramaShorelineGenerator {
                     if index % 4 == 0 {
                         vegetation.append(library.palm, DioramaTransform(rotation: rng.range(0...6.28), scale: DV3(0.7, 0.7, 0.7), translation: DV3(q, top)))
                     } else if index % 4 == 2 {
-                        props.append(library.dhow, DioramaTransform(rotation: out.angle + 0.2, scale: DV3(0.4, 0.4, 0.4), translation: DV3(q, top + 0.3)))
+                        let mooring = p + out * 8
+                        if data.water.contains(where: { DioramaPolygon.contains(polygon: $0.rings, mooring) }) {
+                            props.append(library.dhow, DioramaTransform(rotation: out.angle + 0.2, scale: DV3(0.4, 0.4, 0.4), translation: DV3(mooring, terrain.waterLevel)))
+                        }
                     }
                 }
                 props.append(Self.rocks[index % 3], DioramaTransform(scale: DV3(0.5, 0.5, 0.5), translation: DV3(p - out * 0.5, terrain.waterLevel + 0.12)))

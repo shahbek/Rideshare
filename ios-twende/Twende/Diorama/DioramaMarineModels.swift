@@ -1,6 +1,7 @@
 import Foundation
 
 /// Hulls are lofted ribs with open interiors, not extruded footprint prisms. +X is the bow.
+/// Local z = 0 is the waterline for every family; translate directly to terrain.waterLevel.
 /// Boats are illustrative anchored craft; positions are not live vessel locations.
 nonisolated enum DioramaMarineModels {
     static func dhow() -> DioramaMesh {

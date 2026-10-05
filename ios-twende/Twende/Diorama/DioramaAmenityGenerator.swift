@@ -356,7 +356,7 @@ nonisolated struct DioramaAmenityGenerator {
 
     private func terrace(_ ring: [DV2], areaID: UInt64, rng: inout DioramaRandom, ground: inout DioramaMesh, props: inout DioramaMesh, glow: inout DioramaMesh, lights: inout [DioramaLight]) {
         let base = terrain.foundationHeight(ring)
-        let top = base + 0.35
+        let top = connectedBuildingLevel(near: ring, within: 4) ?? (base + 0.35)
         let cutouts = DioramaGroundCutouts(data: data, pavementWidth: config.pavementWidth, excludedAreaIDs: [areaID])
         let pieces = cutouts.subtract(from: ring)
         let box = DioramaPolygon.minimumAreaRectangle(ring)
@@ -416,12 +416,28 @@ nonisolated struct DioramaAmenityGenerator {
         }
     }
 
+    /// Nearby mapped architecture supplies the floor datum, not a separate highest-ground slab.
+    private func connectedBuildingLevel(near points: [DV2], within reach: Double) -> Double? {
+        let nearest = buildings.map { building in
+            let distance = points.map { p in
+                DioramaPolygon.contains(building.feature.ring, p) ? 0 : DioramaPolygon.distanceToRing(building.feature.ring, p)
+            }.min() ?? Double.infinity
+            return (feature: building.feature, distance: distance)
+        }.min { $0.distance < $1.distance }
+        guard let nearest, nearest.distance <= reach else { return nil }
+        return terrain.buildingHeight(nearest.feature)
+    }
+
     /// Wooden pier on piles over the bay with a railing.
     private func pier(_ line: [DV2], props: inout DioramaMesh) {
         guard line.count >= 2 else { return }
-        let deck = terrain.pierHeight(line)
+        let endpoints = [line[0], line[line.count - 1]]
+        let deck = connectedBuildingLevel(near: endpoints, within: 30) ?? terrain.pierHeight(line)
         let half = 1.8
-        let dense = DioramaPolygon.densify(line, maxStep: config.deckPostSpacing)
+        // Orient from shore to sea regardless of the source way's ordering.
+        let shoreFirst = terrain.height(line[0]) >= terrain.height(line[line.count - 1])
+        let oriented = shoreFirst ? line : Array(line.reversed())
+        let dense = DioramaPolygon.densify(oriented, maxStep: config.deckPostSpacing)
         let joins = DioramaShoreline.frames(dense)
         let left = dense.indices.map { dense[$0] + joins[$0] * half }
         let right = dense.indices.reversed().map { dense[$0] - joins[$0] * half }

@@ -25,21 +25,25 @@ nonisolated struct DioramaGroundGenerator {
 
     // MARK: Plate
 
-    /// Continuous native-elevation backing under every finish and structure, including pools.
+    /// Continuous offset DEM land backing under every finish and structure, including pools.
     /// Ownership cutouts apply only to the upper finishes, never to this terrain skin.
     private func plate(into mesh: inout DioramaMesh) {
         let r = data.rect
         let corners = [DV2(r.minX, r.minY), DV2(r.maxX, r.minY), DV2(r.maxX, r.maxY), DV2(r.minX, r.maxY)]
-        // Colour ocean backing as seabed without deleting any terrain triangles.
+        // Land and submerged backing have disjoint plans, not two nearly coplanar tile skins.
         let ocean = DioramaGroundCutouts(polygons: data.water.compactMap { $0.rings.first })
-        terrain.drape(corners, lift: 0, swatch: .seabed, into: &mesh)
         for piece in ocean.subtract(from: corners) {
-            terrain.drape(piece, lift: 0.002, swatch: .grass, into: &mesh)
+            terrain.drape(piece, lift: 0, swatch: .grass, into: &mesh)
         }
-        // Ocean polygon holes are land, not holes in the continuous backing.
         for area in data.water {
+            guard let outer = area.rings.first else { continue }
+            let holes = DioramaGroundCutouts(polygons: Array(area.rings.dropFirst()))
+            for piece in holes.subtract(from: DioramaPolygon.clipPolygon(outer, to: r)) {
+                mesh.polygon(piece, z: terrain.seabedLevel, .seabed)
+            }
+            // Islands retain continuous land backing, including beneath their amenities.
             for ring in area.rings.dropFirst() {
-                terrain.drape(DioramaPolygon.clipPolygon(ring, to: r), lift: 0.002, swatch: .grass, into: &mesh)
+                terrain.drape(DioramaPolygon.clipPolygon(ring, to: r), lift: 0, swatch: .grass, into: &mesh)
             }
         }
     }
