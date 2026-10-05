@@ -123,21 +123,8 @@ nonisolated struct DioramaShorelineGenerator {
         colors += [.algaeStone, .dampStone, .wetSand]
         sweep(segment, profiles: rows, swatches: colors, into: &ground)
 
-        let half = config.copingWidth / 2, radius = min(config.copingRadius, config.copingHeight / 2)
-        // Clockwise rounded rectangle in the cross-section: top, water side, bottom, land side.
-        let corners = [DV2(-half, config.copingHeight), DV2(half, config.copingHeight), DV2(half, 0), DV2(-half, 0)]
-        var rounded: [DV2] = []
-        for i in corners.indices {
-            let a = corners[(i + 3) % 4], b = corners[i], c = corners[(i + 1) % 4]
-            let entry = b + (a - b).normalized * radius, exit = b + (c - b).normalized * radius
-            for k in 0...6 {
-                let t = Double(k) / 6, u = 1 - t
-                rounded.append(entry * (u * u) + b * (2 * u * t) + exit * (t * t))
-            }
-        }
-        rounded.append(rounded[0])
-        let cap = segment.points.map { p in rounded.map { DV2($0.x, terrain.height(p) + $0.y) } }
-        sweep(segment, profiles: cap, swatches: [.concrete], into: &ground)
+        // No continuous raised coping/pavement rail along the waterfront. The retaining face
+        // terminates flush with the terrain; mapped piers keep their own structural rails.
         details(segment, props: &props)
     }
 

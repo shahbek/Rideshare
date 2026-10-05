@@ -664,7 +664,7 @@ nonisolated struct DioramaPropPlacer {
                 let inward = dir.left
                 guard !blocksAccess((a + b) * 0.5, radius: 0.7) else { continue }
                 if !compound.isHedge, crng.chance(config.hedgeChancePerStretch), length > 2.0 {
-                    hedge(from: a + dir * 0.3 + inward * 0.7, to: b - dir * 0.3 + inward * 0.7, z: z, into: &mesh)
+                    hedge(from: a + dir * 0.3 + inward * 0.7, to: b - dir * 0.3 + inward * 0.7, into: &mesh)
                 }
                 guard !compound.isHedge, crng.chance(min(length * config.bougainvilleaChancePerMetre, 0.5)) else { continue }
                 let p = a + dir * crng.range(between: 0.6, and: max(length - 0.6, 0.7))
@@ -740,18 +740,12 @@ nonisolated struct DioramaPropPlacer {
         }
     }
 
-    /// Clipped box hedge between two points with a slightly uneven top.
-    private func hedge(from a: DV2, to b: DV2, z: Double, into mesh: inout DioramaMesh) {
+    /// Box-like clipped foliage with a continuous, irregular crown and softly moulded sides.
+    private func hedge(from a: DV2, to b: DV2, into mesh: inout DioramaMesh) {
         let length = a.distance(to: b)
         guard length > 1 else { return }
-        let dir = (b - a).normalized
-        let segments = max(Int(length / 2.2), 1)
-        let segLength = length / Double(segments)
-        for k in 0..<segments {
-            let c = a + dir * (segLength * (Double(k) + 0.5))
-            let h = 0.9 + 0.08 * Double(k % 3)
-            mesh.box(centre: c, z0: z, axis: dir, halfLength: segLength / 2 + 0.05, halfWidth: 0.4, height: h, .hedge, top: .leafLight, bevel: 0.14)
-        }
+        mesh.mouldedStrip([a, b], halfWidth: 0.4, height: 1.05, radius: 0.23,
+            foliage: true, swatch: .hedge, base: { terrain.height($0) - 0.08 })
     }
 
     /// Raised bed: soil polygon with a pale kerb and a scatter of coloured blooms.

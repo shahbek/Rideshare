@@ -159,8 +159,10 @@ nonisolated struct DioramaCompoundWallGenerator {
             let wallColor: DioramaSwatch = rng.chance(0.5) ? built.wallColor : rng.pick([.whitewash, .cream, .paleYellow])
             let capColor: DioramaSwatch = rng.chance(0.5) ? .capTerracotta : .capCharcoal
             let gateColor: DioramaSwatch = rng.pick([.gateGreen, .gateBlue, .metalCharcoal])
-            let h = config.wallHeight, t = config.wallThickness
+            let h = config.wallHeight + rng.range(-0.12...0.12)
+            let t = config.wallThickness + rng.range(-0.025...0.025)
             var pieces: [(DV2, DV2)] = []
+            var boundarySpans: [(DV2, DV2)] = []
 
             for i in 0..<n where !gaps[i] {
                 let a = points[i], b = points[(i + 1) % n]
@@ -173,13 +175,7 @@ nonisolated struct DioramaCompoundWallGenerator {
                     let half = max(min(config.gateWidth, length - 0.6), 0.2) / 2
                     let mid = (a + b) * 0.5
                     let gl = mid - dir * half, gr = mid + dir * half
-                    if isHedge {
-                        hedge(a, gl, out: out, into: &mesh)
-                        hedge(gr, b, out: out, into: &mesh)
-                    } else {
-                        segment(a, gl, out: out, h: h, t: t, wallColor, capColor, into: &mesh)
-                        segment(gr, b, out: out, h: h, t: t, wallColor, capColor, into: &mesh)
-                    }
+                    boundarySpans.append(contentsOf: [(a, gl), (gr, b)])
                     // Pillars and a flat metal gate, slightly recessed.
                     for p in [gl, gr] {
                         mesh.box(centre: p, z0: 0, axis: dir, halfLength: 0.28, halfWidth: 0.28, height: h + 0.35, isHedge ? .whitewash : wallColor, top: capColor, ao: 0.4, bevel: 0.06)
@@ -196,10 +192,23 @@ nonisolated struct DioramaCompoundWallGenerator {
                             mesh.box(centre: hut, z0: 0, axis: dir, halfLength: 0.9, halfWidth: 0.8, height: 2.2, .whitewash, top: .roofSlate, ao: 0.4, bevel: 0.1)
                         }
                     }
-                } else if isHedge {
-                    hedge(a, b, out: out, into: &mesh)
                 } else {
-                    segment(a, b, out: out, h: h, t: t, wallColor, capColor, into: &mesh)
+                    boundarySpans.append((a, b))
+                }
+            }
+            mesh.baseZ = 0
+            for chain in DioramaLinearGeometry.chains(boundarySpans) {
+                let line = DioramaLinearGeometry.rounded(chain, radius: isHedge ? 0.65 : 0.5)
+                if isHedge {
+                    mesh.mouldedStrip(line, halfWidth: 0.45, height: 1.45, radius: 0.24,
+                        foliage: true, swatch: .hedge, base: { terrain.height($0) - 0.12 })
+                } else {
+                    // One terrain-following shell, including both sides, bottom and cropped ends.
+                    // No independent flat sections perched on different foundation heights.
+                    mesh.mouldedStrip(line, halfWidth: t / 2, height: h + 0.18, radius: 0.065,
+                        swatch: wallColor, base: { terrain.height($0) - 0.18 })
+                    mesh.mouldedStrip(line, halfWidth: t / 2 + 0.045, height: config.capThickness + 0.04,
+                        radius: 0.055, swatch: capColor, base: { terrain.height($0) + h - 0.04 })
                 }
             }
             placed.append(Placed(ring: points, pieces: pieces))
@@ -208,29 +217,6 @@ nonisolated struct DioramaCompoundWallGenerator {
         return compounds
     }
 
-    private func segment(_ a: DV2, _ b: DV2, out: DV2, h: Double, t: Double, _ wall: DioramaSwatch, _ cap: DioramaSwatch, into mesh: inout DioramaMesh) {
-        guard a.distance(to: b) > 0.2 else { return }
-        let ao = a + out * (t / 2), bo = b + out * (t / 2)
-        let ai = a - out * (t / 2), bi = b - out * (t / 2)
-        mesh.wall(ao, bo, z0: -0.4, z1: h, wall, ao: 0.4)
-        mesh.wall(bi, ai, z0: -0.4, z1: h, wall, ao: 0.4)
-        let c = config.capThickness
-        let ac = a + out * (t / 2 + 0.05), bc = b + out * (t / 2 + 0.05)
-        let aci = a - out * (t / 2 + 0.05), bci = b - out * (t / 2 + 0.05)
-        mesh.wall(ac, bc, z0: h, z1: h + c, cap)
-        mesh.wall(bci, aci, z0: h, z1: h + c, cap)
-        mesh.quad(DV3(ac, h + c), DV3(bc, h + c), DV3(bci, h + c), DV3(aci, h + c), cap, normal: .up)
-    }
-
-    /// Clipped box hedge along a boundary piece, with a slightly uneven top.
-    private func hedge(_ a: DV2, _ b: DV2, out: DV2, into mesh: inout DioramaMesh) {
-        let length = a.distance(to: b)
-        guard length > 0.3 else { return }
-        let dir = (b - a).normalized
-        let c = (a + b) * 0.5
-        let h = 1.25 + 0.1 * Double(Int(abs(c.x + c.y)) % 3)
-        mesh.box(centre: c, z0: 0, axis: dir, halfLength: length / 2 + 0.03, halfWidth: 0.45, height: h, .hedge, top: .leafLight, ao: 0.35, bevel: 0.16)
-    }
 }
 
 extension DioramaOrientedRect {

@@ -343,12 +343,15 @@ nonisolated enum DioramaShaderSource {
         float2 wp = in.worldPosition.xy;
         if (tex > 8.5 && tex < 9.5) {
             // Painted ground: albedo from the tile image, grain code from its alpha (×32).
-            constexpr sampler groundSampler(coord::normalized, address::clamp_to_edge, filter::linear, mip_filter::linear);
+            constexpr sampler groundSampler(coord::normalized, address::clamp_to_edge, filter::linear, mip_filter::linear, max_anisotropy(8));
+            constexpr sampler materialSampler(coord::normalized, address::clamp_to_edge, filter::nearest);
             float2 guv = (wp - u.groundImage.xy) * u.groundImage.zw;
             guv.y = 1.0 - guv.y;
             float4 painted = groundImage.sample(groundSampler, guv);
             albedo = painted.rgb;
-            tex = floor(painted.a * 255.0 / 32.0 + 0.5);
+            // Codes are categorical: interpolating white paint (0) into asphalt (3) invents
+            // grass (1), incorrectly applying coastal pigment inside road markings.
+            tex = floor(groundImage.sample(materialSampler, guv, level(0.0)).a * 255.0 / 32.0 + 0.5);
             if (tex > 0.5 && tex < 1.5) {
                 // Natural coast pigment is interpolated on the same mesh as the land and seabed.
                 // Hard finishes retain their painted color and never become a second surface.

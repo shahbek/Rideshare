@@ -29,7 +29,7 @@ nonisolated struct DioramaRoadGenerator {
 
     func generate(into mesh: inout DioramaMesh) {
         paintSurfaces()
-        for road in data.roads where road.isPaved && road.width >= 6 { markings(road) }
+        for road in data.roads where road.isPaved && road.width >= 5.5 { markings(road) }
         junctionPaint()
         kerbs(into: &mesh)
     }
@@ -41,19 +41,19 @@ nonisolated struct DioramaRoadGenerator {
     }
 
     private func paintSurfaces() {
-        // Pavements and sandy shoulders first, then every carriageway over them.
-        for piece in layout.corridor.pieces() {
-            let paved = isPaved(near: DioramaPolygon.centroid(piece))
-            painter.fill(DioramaPolygon.clipPolygon(piece, to: data.rect), paved ? .pavement : .earth)
-        }
-        for piece in layout.carriageway.pieces() {
-            let paved = isPaved(near: DioramaPolygon.centroid(piece))
-            painter.fill(DioramaPolygon.clipPolygon(piece, to: data.rect), paved ? .asphalt : .roadEarth)
+        // Rasterize each union in ONE fill. Separately antialiasing boolean fragments exposes
+        // the previous paint at every shared edge, especially through round road joins.
+        for (surface, isCarriageway) in [(layout.corridor, false), (layout.carriageway, true)] {
+            for paved in [false, true] {
+                let pieces = surface.polygons.filter { isPaved(near: DioramaPolygon.centroid($0)) == paved }
+                let swatch: DioramaSwatch = isCarriageway ? (paved ? .asphalt : .roadEarth) : (paved ? .pavement : .earth)
+                painter.fillPieces(pieces, swatch)
+            }
         }
     }
 
-    /// Centre dashes keyed to the shared station so they continue across split ways; edge lines on
-    /// main roads only. Paint stops short of junction circles.
+    /// Centre dashes keyed to the shared station across split ways, with legible edge paint on
+    /// two-lane-width streets. Narrow access lanes remain unmarked; junction interiors stay clear.
     private func markings(_ road: DioramaRoadFeature) {
         let length = DioramaPolygon.length(road.line)
         let period = config.dashLength + config.dashGap
@@ -73,23 +73,24 @@ nonisolated struct DioramaRoadGenerator {
                 phase = station.offset - run[run.count - 1].distance
             }
             let wrapped = (phase.truncatingRemainder(dividingBy: period) + period).truncatingRemainder(dividingBy: period)
-            painter.stroke(ordered, width: 0.18, .marking, dashes: [config.dashLength, config.dashGap], phase: wrapped, cap: .butt)
-            if road.isMain {
+            painter.stroke(ordered, width: 0.32, .marking, dashes: [config.dashLength, config.dashGap], phase: wrapped, cap: .butt)
+            if road.width >= 6 {
                 for side in [-1.0, 1.0] {
                     let offset = (road.width / 2 - 0.38) * side
-                    painter.stroke(run.map { $0.point + $0.direction.right * offset }, width: 0.14, .marking, cap: .butt)
+                    painter.stroke(run.map { $0.point + $0.direction.right * offset }, width: 0.25, .marking, cap: .butt)
                 }
             }
         }
         var d = 0.0
-        while d <= length {
+        while true {
             guard let s = DioramaPolygon.sample(road.line, at: min(d, length)) else { break }
             if layout.paintIsClear(s.point), data.rect.contains(s.point) {
                 run.append((s.point, d, s.direction))
             } else {
                 flush()
             }
-            d += 0.5
+            if d >= length { break }
+            d = min(d + 0.5, length)
         }
         flush()
     }
@@ -109,7 +110,7 @@ nonisolated struct DioramaRoadGenerator {
                 for row in [0.0, 0.4] {
                     for x in stride(from: -half, to: -0.3, by: 0.85) {
                         let a = centre + across * (x + 0.25) - approach.toward * row
-                        painter.bar(at: a, along: across, length: 0.5, width: 0.18, .marking)
+                        painter.bar(at: a, along: across, length: 0.5, width: 0.28, .marking)
                     }
                 }
             }
@@ -137,8 +138,8 @@ nonisolated struct DioramaRoadGenerator {
         return result
     }
 
-    /// A 24 cm kerb stone along every exposed paved carriageway edge: top, road face and pavement
-    /// face. The terrain is sampled at 2 m so the strip follows the ground.
+    /// Closed 24 cm-wide curbs follow connected exposed boundaries. Shared corner sections fill
+    /// both sides of bends; capped ends occur only at deliberate access/obstacle openings.
     private func kerbs(into mesh: inout DioramaMesh) {
         let ramps = accessRamps()
         let occupied = data.buildings.map(\.ring) + data.water.compactMap { $0.rings.first }
@@ -146,22 +147,22 @@ nonisolated struct DioramaRoadGenerator {
             let ccw = DioramaPolygon.counterClockwise(ring)
             return DioramaPolygon.triangulate(ccw).map { [ccw[$0.0], ccw[$0.1], ccw[$0.2]] }
         })
-        let h = config.kerbHeight
+        var spans: [(DV2, DV2)] = []
         for edge in layout.carriageway.boundary() {
             let mid = (edge.a + edge.b) * 0.5
             guard isPaved(near: mid) else { continue }
-            let out = (edge.b - edge.a).normalized.right
             for segment in obstacles.outsideSegments(edge.a, edge.b, within: data.rect.expanded(by: -0.3)) {
-                let line = DioramaPolygon.densify([segment.0, segment.1], maxStep: 2)
+                let line = DioramaPolygon.densify([segment.0, segment.1], maxStep: 0.75)
                 for (a, b) in zip(line, line.dropFirst()) {
                     guard !ramps.contains(where: { $0.covers((a + b) * 0.5) }) else { continue }
-                    let za = terrain.height(a), zb = terrain.height(b)
-                    let ia = a - out * 0.05, ib = b - out * 0.05, oa = a + out * 0.19, ob = b + out * 0.19
-                    mesh.quad(DV3(ia, za + h), DV3(ib, zb + h), DV3(ob, zb + h), DV3(oa, za + h), .kerb, normal: .up)
-                    mesh.quad(DV3(ia, za), DV3(ib, zb), DV3(ib, zb + h), DV3(ia, za + h), .kerb, normal: DV3(-out, 0))
-                    mesh.quad(DV3(ob, zb), DV3(oa, za), DV3(oa, za + h), DV3(ob, zb + h), .kerb, dark: true, normal: DV3(out, 0))
+                    spans.append((a, b))
                 }
             }
+        }
+        for line in DioramaLinearGeometry.chains(spans) {
+            mesh.mouldedStrip(line, halfWidth: 0.12, height: config.kerbHeight + 0.08,
+                radius: 0.045, lateralOffset: 0.07, swatch: .kerb,
+                base: { terrain.height($0) - 0.08 })
         }
     }
 }
