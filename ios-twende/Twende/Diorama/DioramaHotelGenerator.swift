@@ -47,7 +47,17 @@ nonisolated struct DioramaHotelGenerator {
             }
             return score(i) < score(j)
         } ?? 0
-        let fa = f.ring[front], fb = f.ring[(front + 1) % f.ring.count]
+        // Hotel Slipway's signed porte-cochère faces the car park on the eastern service loop,
+        // opposite the west mural frontage.
+        let signSide = isHotel ? DV2(1, 0.22).normalized : desired
+        let signEdge = f.ring.indices.max { i, j in
+            func score(_ k: Int) -> Double {
+                let e = f.ring[(k + 1) % f.ring.count] - f.ring[k]
+                return e.length * max(0, e.normalized.right.dot(signSide))
+            }
+            return score(i) < score(j)
+        } ?? front
+        let fa = f.ring[signEdge], fb = f.ring[(signEdge + 1) % f.ring.count]
         let entrance = (fa + fb) * 0.5, entranceOut = (fb - fa).normalized.right
         for i in f.ring.indices where !f.clipped[i] {
             let a = f.ring[i], b = f.ring[(i + 1) % f.ring.count]

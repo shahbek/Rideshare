@@ -66,6 +66,9 @@ final class DioramaTileManager {
     private var thermalObserver: NSObjectProtocol? = nil
     private var renderLayer: DioramaRenderLayer? = nil
     private var powerObserver: NSObjectProtocol? = nil
+    /// Low-rate clock for the gentle water drift. Runs only while the tile is shown, the app is
+    /// active and effects are not reduced; Mapbox otherwise sleeps between camera changes.
+    private var waterClock: Timer? = nil
 
     private var reducesEffects: Bool {
         thermalReduced || ProcessInfo.processInfo.isLowPowerModeEnabled
@@ -88,6 +91,7 @@ final class DioramaTileManager {
                 guard reduced != self.thermalReduced else { return }
                 self.thermalReduced = reduced
                 self.renderLayer?.setReducedEffects(self.reducesEffects)
+                self.updateWaterClock()
                 self.map?.triggerRepaint()
             }
         }
@@ -95,9 +99,33 @@ final class DioramaTileManager {
             MainActor.assumeIsolated {
                 guard let self else { return }
                 self.renderLayer?.setReducedEffects(self.reducesEffects)
+                self.updateWaterClock()
                 self.map?.triggerRepaint()
             }
         }
+        for name in [UIApplication.didBecomeActiveNotification, UIApplication.willResignActiveNotification] {
+            NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.updateWaterClock() }
+            }
+        }
+    }
+
+    private func updateWaterClock() {
+        let wanted = shown && !reducesEffects && !UIAccessibility.isReduceMotionEnabled
+            && UIApplication.shared.applicationState == .active
+        if !wanted {
+            waterClock?.invalidate()
+            waterClock = nil
+            return
+        }
+        guard waterClock == nil else { return }
+        // 12 Hz is enough for a slow drift; the reflection target stays cached between ticks.
+        let timer = Timer(timeInterval: 1.0 / 12.0, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.map?.triggerRepaint() }
+        }
+        timer.tolerance = 0.02
+        RunLoop.main.add(timer, forMode: .common)
+        waterClock = timer
     }
 
     // MARK: Install / remove
@@ -113,6 +141,7 @@ final class DioramaTileManager {
     func styleDidReload() {
         installed = false
         shown = false
+        updateWaterClock()
         renderLayer = nil
         appliedCategories = []
         appliedTimeOfDay = nil
@@ -224,8 +253,7 @@ final class DioramaTileManager {
     private func show(_ artifacts: DioramaTileArtifacts, on map: MapboxMap) {
         do {
             hide(on: map)
-            // Static water lets Mapbox sleep when the camera/content is idle. No repaint clock.
-            let animates = false
+            let animates = !UIAccessibility.isReduceMotionEnabled
             let host = DioramaRenderLayer(
                 origin: tile.centre, vertices: artifacts.vertices, indices: artifacts.indices, ranges: artifacts.ranges,
                 lightGrid: artifacts.lightGrid, waterHeight: DioramaTerrain.waterSurface, visible: state.visibleCategories, timeOfDay: state.timeOfDay,
@@ -246,6 +274,7 @@ final class DioramaTileManager {
             host.setReducedEffects(reducesEffects)
             state.loadedTiles[tile] = artifacts
             state.status = "Slipway loaded" + (thermalReduced ? " · reduced detail (thermal)" : "")
+            updateWaterClock()
             map.triggerRepaint()
         } catch {
             print("[Diorama] show failed: \(error)")
@@ -259,6 +288,7 @@ final class DioramaTileManager {
         if map.sourceExists(withId: clipSourceID) { try? map.removeSource(withId: clipSourceID) }
         renderLayer = nil
         shown = false
+        updateWaterClock()
     }
 
     // MARK: Style state

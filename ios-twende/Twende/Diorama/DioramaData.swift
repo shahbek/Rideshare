@@ -18,6 +18,8 @@ nonisolated struct DioramaTileData: Sendable {
     var pois: [DioramaPointFeature] = []
     /// Mapped courtyard with a bounded margin, shared by hardscape and furniture exclusions.
     var hotelCourtyardOutline: [DV2] = []
+    /// Paved dining apron in front of Hotel Slipway's arcade (photo-led, not a mapped area).
+    var hotelDiningOutline: [DV2] = []
 
     var isEmpty: Bool { buildings.isEmpty && roads.isEmpty && water.isEmpty }
 }
@@ -135,6 +137,9 @@ nonisolated enum DioramaBundledTile {
             buildings[b.id] = DioramaBuildingFeature(id: b.id, ring: pts, clipped: flags, area: area, centroid: centroid, height: height, type: b.type)
         }
 
+        DioramaFootprints.carveStairGap(&buildings)
+        buildings = buildings.mapValues(DioramaFootprints.softened)
+
         var roads: [UInt64: DioramaRoadFeature] = [:]
         for r in file.roads {
             let width: Double
@@ -204,6 +209,7 @@ nonisolated enum DioramaBundledTile {
             pois: pois.sorted { $0.id < $1.id }
         )
         result.hotelCourtyardOutline = DioramaHotelGrounds.courtyardOutline(data: result)
+        result.hotelDiningOutline = DioramaHotelGrounds.diningOutline(data: result)
         return result
     }
 }

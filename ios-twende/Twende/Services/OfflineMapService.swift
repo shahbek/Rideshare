@@ -147,7 +147,7 @@ final class OfflineMapService {
 
     private func loadTiles(_ area: OfflineMapArea, token: UUID, update: Bool) {
         let descriptor = manager.createTilesetDescriptor(for: TilesetDescriptorOptions(
-            styleURI: .standard, zoomRange: 0...16, tilesets: nil))
+            styleURI: .standard, zoomRange: 0...16, tilesets: ["mapbox://mapbox.mapbox-terrain-dem-v1"]))
         guard let options = TileRegionLoadOptions(geometry: area.geometry, descriptors: [descriptor],
             metadata: ["app": "zuri", "area": area.id, "schema": 1], acceptExpired: !update,
             networkRestriction: wiFiOnly ? .disallowExpensive : .none) else {

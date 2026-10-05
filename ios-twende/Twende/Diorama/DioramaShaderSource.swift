@@ -263,17 +263,17 @@ nonisolated enum DioramaShaderSource {
         }
 
         if (tex > 6.5 && tex < 7.5 && abs(n.z) > 0.7) {
-            float2 bond = wp / float2(0.48, 0.24);
-            bond.x += fmod(abs(floor(bond.y)), 2.0) * 0.5;
+            // Square 40 cm maroon quarry tiles laid in a straight grid (no running bond).
+            float2 bond = wp / float2(0.40, 0.40);
             float2 cell = fract(bond);
             float2 footprint = max(fwidth(bond), float2(0.0001));
             float2 edge = min(cell, 1.0 - cell);
             float2 interior = smoothstep(float2(0.018), float2(0.018) + footprint, edge);
             float resolved = 1.0 - smoothstep(0.15, 0.65, max(footprint.x, footprint.y));
             float joint = (1.0 - interior.x * interior.y) * resolved;
-            float variation = (dioramaHash(floor(bond)) - 0.5) * 0.07 * resolved;
+            float variation = (dioramaHash(floor(bond)) - 0.5) * 0.10 * resolved;
             albedo *= 1.0 + variation;
-            albedo = mix(albedo, albedo * 0.79, joint * 0.55);
+            albedo = mix(albedo, float3(0.80, 0.74, 0.66), joint * 0.6);
         }
 
         // Fish are pigment in the arched plaster, not raised discs/triangles casting tiny shadows.
@@ -341,11 +341,13 @@ nonisolated enum DioramaShaderSource {
 
             // Swells: bands of brightness keyed to the distance from shore, so they always run parallel
             // to the beach, plus a soft 2D choppiness that drifts across the bay.
-            float phase = shore * 0.55 - time * 1.1 + dioramaNoise(wp * 0.05 + float2(time * 0.03, 0.0)) * 2.5;
+            // Gentle current: a slow drift of the whole pattern plus quiet swells towards the shore.
+            float2 flow = float2(time * 0.18, time * 0.07);
+            float phase = shore * 0.55 - time * 0.6 + dioramaNoise((wp + flow) * 0.05) * 2.5;
             float swell = sin(phase) * 0.5 + 0.5;
             swell = pow(swell, 3.0);
-            float chop = dioramaNoise(wp * 0.22 + float2(time * 0.12, time * 0.08)) * 0.6
-                       + dioramaNoise(wp * 0.6 - float2(time * 0.07, time * 0.11)) * 0.4;
+            float chop = dioramaNoise((wp + flow) * 0.22) * 0.6
+                       + dioramaNoise((wp + flow * 1.6) * 0.6) * 0.4;
             float nearShoreWeight = 0.35 + 0.65 * shallow;
             body *= 0.95 + 0.07 * (chop - 0.5) + 0.06 * swell * nearShoreWeight;
 
@@ -358,19 +360,20 @@ nonisolated enum DioramaShaderSource {
             float foam = saturate(foamBand + fringe * 0.22);
 
             float2 uv = in.position.xy / u.water.zw;
-            float2 ripple = float2(dioramaNoise(wp * 0.3 + float2(3.1 + time * 0.1, 7.7)),
-                                   dioramaNoise(wp * 0.3 + float2(0.0, time * 0.08))) - 0.5;
-            uv += ripple * 0.010;
+            float2 ripple = float2(dioramaNoise((wp + flow) * 0.3 + float2(3.1, 7.7)),
+                                   dioramaNoise((wp + flow) * 0.3)) - 0.5;
+            uv += ripple * 0.006;
             uv = clamp(uv, float2(0.001), float2(0.999));
             constexpr sampler s(address::clamp_to_edge, filter::linear);
             float4 refl = reflection.sample(s, uv);
             float3 skyRef = mix(u.skyColor.rgb, float3(1.0), 0.35);
-            float3 reflected = mix(skyRef, refl.rgb, refl.a * 0.7);
-            float fresnel = 0.10 + 0.35 * pow(1.0 - saturate(dot(n, view)), 3.0);
+            float3 reflected = mix(skyRef, refl.rgb, refl.a * 0.92);
+            float fresnel = 0.18 + 0.50 * pow(1.0 - saturate(dot(n, view)), 3.0);
+            fresnel = max(fresnel, refl.a * 0.42);
 
             float3 lit = body * (ambient * 0.55 + float3(0.62) + u.sunColor.rgb * 0.30);
             float3 glint = u.sunColor.rgb * pow(saturate(dot(reflect(-view, n), u.sunDirection.xyz)), 90.0) * 0.25 * (0.6 + 0.4 * chop);
-            color = mix(lit, reflected, fresnel * (1.0 - shallow * 0.5)) + glint;
+            color = mix(lit, reflected, saturate(fresnel * (1.0 - shallow * 0.35))) + glint;
             color = mix(color, float3(0.97, 0.98, 0.96), foam * 0.85);
             color += pointLight * glow * 0.25;
             return float4(color, 1.0);

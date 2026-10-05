@@ -3,8 +3,9 @@ import Foundation
 /// One bounded, rounded shoreline shared by land, sea, beach and the retaining wall.
 /// Corner interpolation is illustrative (at most 1.2 m), not a new surveyed coastline.
 nonisolated enum DioramaCoastline {
-    static func rounded(_ ring: [DV2], flags: [Bool]) -> (points: [DV2], flags: [Bool]) {
-        guard ring.count >= 3 else { return (ring, flags) }
+    static func rounded(_ ring: [DV2], flags: [Bool], maxReach: Double = 1.2, fraction: Double = 0.18,
+                        samples: Int = 8, minimumTurn: Double = 0) -> (points: [DV2], flags: [Bool]) {
+        guard ring.count >= 3, flags.count == ring.count, samples >= 2 else { return (ring, flags) }
         var points: [DV2] = []
         var resultFlags: [Bool] = []
         for i in ring.indices {
@@ -14,11 +15,16 @@ nonisolated enum DioramaCoastline {
                 points.append(b); resultFlags.append(flags[i])
                 continue
             }
-            let reach = min(1.2, min(a.distance(to: b), b.distance(to: c)) * 0.18)
+            let turn = abs((b - a).normalized.cross((c - b).normalized))
+            let reach = min(maxReach, min(a.distance(to: b), b.distance(to: c)) * fraction)
+            guard turn >= minimumTurn, reach > 0.05 else {
+                points.append(b); resultFlags.append(flags[i])
+                continue
+            }
             let entry = b + (a - b).normalized * reach
             let exit = b + (c - b).normalized * reach
-            for j in 0...8 {
-                let t = Double(j) / 8, u = 1 - t
+            for j in 0...samples {
+                let t = Double(j) / Double(samples), u = 1 - t
                 points.append(entry * (u * u) + b * (2 * u * t) + exit * (t * t))
                 resultFlags.append(false)
             }

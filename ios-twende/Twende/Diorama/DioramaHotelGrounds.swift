@@ -18,9 +18,27 @@ nonisolated struct DioramaHotelGrounds {
     }
 
     static func ownsCourtyard(_ p: DV2, data: DioramaTileData, margin: Double = 0) -> Bool {
-        let ring = data.hotelCourtyardOutline
-        guard ring.count >= 3 else { return false }
-        return DioramaPolygon.contains(ring, p) || DioramaPolygon.distanceToRing(ring, p) < margin
+        for ring in [data.hotelCourtyardOutline, data.hotelDiningOutline] where ring.count >= 3 {
+            if DioramaPolygon.contains(ring, p) || DioramaPolygon.distanceToRing(ring, p) < margin { return true }
+        }
+        return false
+    }
+
+    /// Dining apron along Hotel Slipway's west arcade: a 7 m paved strip, photo-led, replacing the
+    /// default lawn so tables and chairs stand on paving.
+    static func diningOutline(data: DioramaTileData) -> [DV2] {
+        guard let hotel = data.buildings.first(where: { $0.id == DioramaHotelGenerator.gallery }) else { return [] }
+        let ring = hotel.ring, desired = DV2(-1, -0.22).normalized
+        guard let i = ring.indices.max(by: { i, j in
+            func score(_ k: Int) -> Double {
+                let e = ring[(k + 1) % ring.count] - ring[k]
+                return e.length * max(0, e.normalized.right.dot(desired))
+            }
+            return score(i) < score(j)
+        }) else { return [] }
+        let a = ring[i], b = ring[(i + 1) % ring.count]
+        let dir = (b - a).normalized, out = dir.right
+        return DioramaPolygon.counterClockwise([a - dir * 1.5, b + dir * 1.5, b + dir * 1.5 + out * 7, a - dir * 1.5 + out * 7])
     }
 
     func generate(ground: inout DioramaMesh, props: inout DioramaMesh, vegetation: inout DioramaMesh,
@@ -30,7 +48,50 @@ nonisolated struct DioramaHotelGrounds {
             let furnitureRing = data.landuse.first(where: { $0.id == Self.courtyardID })?.rings.first ?? ring
             courtyard(ring, furnitureRing: furnitureRing, ground: &ground, props: &props, vegetation: &vegetation, glow: &glow, lights: &lights)
         }
+        dining(ground: &ground, props: &props, vegetation: &vegetation)
         seawall(ground: &ground)
+    }
+
+    private func dining(ground: inout DioramaMesh, props: inout DioramaMesh, vegetation: inout DioramaMesh) {
+        let ring = data.hotelDiningOutline
+        guard ring.count >= 3 else { return }
+        let box = DioramaPolygon.minimumAreaRectangle(ring), z = terrain.height(box.centre) + 0.11
+        let cutouts = DioramaGroundCutouts(data: data, pavementWidth: 1.2, streetPolygons: streetPolygons,
+                                           additionalMasks: data.water.compactMap { $0.rings.first } + [data.hotelCourtyardOutline])
+        let pieces = cutouts.subtract(from: ring)
+        pave(pieces, z: z, ground: &ground)
+        for piece in pieces {
+            for i in piece.indices {
+                let a = piece[i], b = piece[(i + 1) % piece.count]
+                ground.wall(a, b, z0: z - 0.12, z1: z, .coralStone)
+            }
+        }
+        func onPaving(_ p: DV2, _ r: Double) -> Bool {
+            pieces.contains { DioramaPolygon.contains($0, p) } && clear(p, radius: r)
+                && !DioramaPolygon.contains(data.hotelCourtyardOutline, p)
+        }
+        var placed: [DV2] = []
+        for row in [2.6, 5.0] {
+            for t in stride(from: -box.halfLength + 2, through: box.halfLength - 2, by: 2.8) {
+                let probe = box.centre + box.axis * t
+                let hotelSide = data.buildings.first(where: { $0.id == DioramaHotelGenerator.gallery }).map { DioramaPolygon.centroid($0.ring) } ?? probe
+                let away = (box.across.dot(probe - hotelSide) > 0 ? box.across : box.across * -1)
+                let p = probe - away * box.halfWidth + away * row
+                guard onPaving(p, 1.1), placed.allSatisfy({ $0.distance(to: p) > 2.3 }) else { continue }
+                cafe(at: p, z: z, props: &props)
+                if row > 4, placed.count % 2 == 0 { parasol(at: p, z: z, props: &props) }
+                placed.append(p)
+            }
+        }
+        for s in [-1.0, 1.0] {
+            let p = box.centre + box.axis * (s * (box.halfLength - 0.9))
+            if onPaving(p, 0.7) { flowerPlanter(at: p, z: z, props: &props, vegetation: &vegetation) }
+        }
+    }
+
+    private func parasol(at p: DV2, z: Double, props: inout DioramaMesh) {
+        props.cylinder(centre: p, z0: z + 0.87, z1: z + 2.4, r0: 0.03, r1: 0.03, sides: 6, .trimWhite)
+        props.cylinder(centre: p, z0: z + 2.2, z1: z + 2.55, r0: 1.35, r1: 0.06, sides: 24, .cream)
     }
 
     private func courtyard(_ pavingRing: [DV2], furnitureRing ring: [DV2], ground: inout DioramaMesh, props: inout DioramaMesh,

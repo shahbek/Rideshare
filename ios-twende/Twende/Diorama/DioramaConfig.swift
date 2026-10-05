@@ -38,7 +38,7 @@ nonisolated enum DioramaSwatch: Int, CaseIterable, Sendable {
         .coral: 0xE8A08C, .skyBlue: 0x9FC4DD, .mint: 0xA9D4BC, .terracottaWall: 0xB9674C,
         .brick: 0xB4624A, .sage: 0xB9C7A6, .dustyRose: 0xE2B4A6, .slateWall: 0x8E9BB3, .paleYellow: 0xF2DDA4, .slipwayBlue: 0x8DBFD6,
         .hotelTeal: 0x418D98, .deltaStone: 0xB7B6AC, .muralBlue: 0x216391,
-        .tileClay: 0xB88770, .coralStone: 0xB6A485,
+        .tileClay: 0x7E2F2B, .coralStone: 0xB6A485,
         .roofTeal: 0x3A7F8C, .roofRust: 0xA9472E, .roofSlate: 0x4A5E8E, .roofGreen: 0x3F7D4A,
         .roofTerracotta: 0xC0603C, .roofConcrete: 0xC9C2B6,
         .trimWhite: 0xFAF7F0, .capTerracotta: 0xB5573A, .capCharcoal: 0x3B3A3D, .glass: 0x2C3440,
@@ -117,7 +117,7 @@ nonisolated struct DioramaBuildingOverride: Sendable {
 /// One place to tune the whole look without touching generation code.
 nonisolated struct DioramaConfig: Sendable {
     /// Bump to invalidate every cached tile.
-    var generatorVersion: Int = 14
+    var generatorVersion: Int = 15
     /// When false the diorama sits on a flat plate at the basemap's ground level (Mapbox Standard has no
     /// terrain at this zoom, so a lumpy plate would float off the streets around it).
     var usesElevation: Bool = false

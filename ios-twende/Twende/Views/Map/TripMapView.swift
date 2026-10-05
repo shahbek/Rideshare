@@ -330,6 +330,35 @@ extension TripMapView {
                     print("[TripMapView] standard config \(key) failed: \(error)")
                 }
             }
+            applyTerrain()
+        }
+
+        private static let demSourceID = "zuri-terrain-dem"
+        static let demTilesetURL = "mapbox://mapbox.mapbox-terrain-dem-v1"
+
+        /// Real elevation under Standard's 3D buildings. DEM tiles stop at z14 and are cached in the
+        /// shared TileStore (and included in offline areas). Low Power drops terrain to save GPU work.
+        func applyTerrain() {
+            guard let map = mapView?.mapboxMap else { return }
+            do {
+                if ProcessInfo.processInfo.isLowPowerModeEnabled {
+                    map.removeTerrain()
+                    return
+                }
+                if !map.sourceExists(withId: Self.demSourceID) {
+                    var dem = RasterDemSource(id: Self.demSourceID)
+                    dem.url = Self.demTilesetURL
+                    dem.tileSize = 514
+                    dem.maxzoom = 14
+                    try map.addSource(dem)
+                }
+                var terrain = Terrain(sourceId: Self.demSourceID)
+                // Dar es Salaam is low and gentle; a mild lift makes the Msasani ridge and shore readable.
+                terrain.exaggeration = .constant(1.6)
+                try map.setTerrain(terrain)
+            } catch {
+                print("[TripMapView] terrain unavailable: \(error.localizedDescription)")
+            }
         }
 
         /// Re-applies the basemap configuration when Settings changes it, and rebuilds the pin views so
