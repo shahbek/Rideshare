@@ -32,7 +32,7 @@ nonisolated enum DioramaSwatch: Int, CaseIterable, Sendable {
     case canopyRed, canopyYellow, canopyBlue, canopyGreen, lampPole
     // Emissive (night) colours
     case windowGlow, lampGlow, kioskGlow, shopGlow
-    case naturalEarth
+    case naturalEarth, seaCliffRoof
 
     /// Fixed palette. Never random RGB.
     static let defaultPalette: [DioramaSwatch: UInt32] = [
@@ -48,7 +48,7 @@ nonisolated enum DioramaSwatch: Int, CaseIterable, Sendable {
         .carvedWood: 0x4E2E1A, .metalCharcoal: 0x2E2F33, .gateGreen: 0x2F5E46, .gateBlue: 0x2D5785,
         .tankBlack: 0x232427, .tankBlue: 0x2B5FA8, .dishWhite: 0xECECEC, .solarNavy: 0x1F2E4E,
         .grass: 0x74A848, .courtyard: 0xE7D9C6, .deck: 0xB98E62, .earth: 0xE3D3B2, .seabed: 0xB7A77F, .sea: 0x2E8FA3, .painted: 0xFFFFFF,
-        .naturalEarth: 0xB3987A,
+        .naturalEarth: 0xB3987A, .seaCliffRoof: 0x665A55,
         .wetSand: 0xB7A77F, .dampStone: 0x817866, .algaeStone: 0x667B62,
         .rockWarm: 0xB6A485, .rockGrey: 0x8E9188, .rockPale: 0xC9C2B6, .seaweed: 0x6B7352,
         .asphalt: 0x5C4A58, .roadEarth: 0xC19466, .pavement: 0xEBDCD2, .kerb: 0xF6EFE8, .marking: 0xFAF4E8, .crossing: 0xFFFBF2, .parkEdge: 0xD9CBB4,
@@ -122,7 +122,7 @@ nonisolated struct DioramaBuildingOverride: Sendable {
 /// One place to tune the whole look without touching generation code.
 nonisolated struct DioramaConfig: Sendable {
     /// Bump to invalidate every cached tile.
-    var generatorVersion: Int = 34
+    var generatorVersion: Int = 35
     /// Reuse full-detail architectural primitives without changing their tessellation.
     var instancesArchitecture: Bool = true
     /// Drape the plate/ground overlays over the bundled height snapshot used by roads and foundations.

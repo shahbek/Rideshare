@@ -48,6 +48,7 @@ nonisolated enum DioramaMasakiSource {
             else {
                 switch sourceClass {
                 case "park", "grass", "wood", "scrub": kind = "park"
+                case "cemetery", "grave_yard": kind = "cemetery"
                 case "pitch": kind = "pitch"
                 case "sand": kind = "sand"
                 default: continue
@@ -71,6 +72,7 @@ nonisolated enum DioramaMasakiSource {
                 if kind == "water" { data.water.append(area) } else { data.landuse.append(area) }
             }
         }
+        data = DioramaSeaCliffSite.merge(into: data)
         data = DioramaPoolRecognition.merge(features, into: data)
         data = DioramaMapboxData.merge(features, into: data)
         data.shorelines = DioramaShoreline.classify(data: data, config: config, overrides: [])

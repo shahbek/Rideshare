@@ -29,6 +29,7 @@ nonisolated struct DioramaAmenityGenerator {
             guard ring.count >= 3, DioramaPolygon.area(ring) > (area.kind == "pool" ? 3 : 15) else { continue }
             var rng = DioramaRandom(seed: area.id, salt: 51)
             switch area.kind {
+            case "cemetery": DioramaCemeteryGenerator.generate(area, data: data, terrain: terrain, roads: roads, into: &props)
             case "pitch": court(ring, areaID: area.id, sport: area.sport, rng: &rng, ground: &ground, props: &props)
             case "parking": carPark(ring, areaID: area.id, rng: &rng, ground: &ground, props: &props)
             case "fuel": fuelStation(ring, areaID: area.id, rng: &rng, ground: &ground, props: &props, glow: &glow, lights: &lights)

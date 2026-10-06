@@ -69,6 +69,7 @@ nonisolated final class DioramaReflection {
         e.setRenderPipelineState(pipeline)
         let reflectedRanges = DioramaDrawPlan.ranges(ranges.filter {
             $0.category != .water && $0.category != .propGlow && $0.category != .shorelineDebug
+                && $0.maximum.z >= uniforms.water.x - 0.05 && $0.intersectsReveal(uniforms.reveal)
                 && $0.intersects(matrix, mirrorHeight: uniforms.water.x)
         })
         for range in reflectedRanges {
@@ -78,8 +79,10 @@ nonisolated final class DioramaReflection {
         if let instances {
             e.setVertexBuffer(instances, offset: 0, index: 3); e.setRenderPipelineState(instancedPipeline)
             let reflectedGroups = groups.filter { group in
-                group.category != .propGlow && DioramaRenderLayer.Range(category: group.category, start: 0, count: 0,
-                    minimum: group.minimum, maximum: group.maximum).intersects(matrix, mirrorHeight: uniforms.water.x)
+                let bounds = DioramaRenderLayer.Range(category: group.category, start: 0, count: 0,
+                    minimum: group.minimum, maximum: group.maximum)
+                return group.category != .propGlow && group.maximum.z >= uniforms.water.x - 0.05
+                    && bounds.intersectsReveal(uniforms.reveal) && bounds.intersects(matrix, mirrorHeight: uniforms.water.x)
             }
             for group in DioramaDrawPlan.instances(reflectedGroups) {
                 e.setCullMode(group.doubleSided ? .none : .back)

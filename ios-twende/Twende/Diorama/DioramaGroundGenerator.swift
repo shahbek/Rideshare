@@ -159,7 +159,7 @@ nonisolated struct DioramaGroundGenerator {
 
     /// Parks, commons and gardens as brighter lawns. Roads painted later cross them where mapped.
     private func parks() {
-        for park in data.landuse where ["park", "common", "garden"].contains(park.kind) {
+        for park in data.landuse where ["park", "common", "garden", "cemetery"].contains(park.kind) {
             guard let outer = park.rings.first else { continue }
             let ring = DioramaPolygon.clipPolygon(outer, to: data.rect)
             guard ring.count >= 3, DioramaPolygon.area(ring) > 40 else { continue }

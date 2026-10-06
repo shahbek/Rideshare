@@ -17,6 +17,11 @@ nonisolated enum DioramaContextGenerator {
         let classifier = DioramaBuildingGenerator(config: config, roads: roads, terrain: terrain)
         for feature in data.buildings {
             try Task.checkCancellation()
+            if feature.id == DioramaSeaCliffSite.buildingID {
+                _ = DioramaSeaCliffGenerator(data: data, terrain: terrain, config: config)
+                    .build(feature, mesh: &buildings, glow: &unusedGlow, detailed: false)
+                continue
+            }
             if !feature.occupiedPieces.isEmpty {
                 _ = DioramaClippedBuilding.build(feature, terrain: terrain, config: config, mesh: &buildings,
                     glow: &unusedGlow, lights: false, includesWindows: false)

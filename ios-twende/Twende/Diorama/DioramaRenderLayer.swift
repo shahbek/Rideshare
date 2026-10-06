@@ -20,6 +20,23 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
         /// Thin open surfaces (fronds, sails, canopies, sprites) drawn without back-face culling.
         var doubleSided: Bool = false
 
+        /// Reject only boxes wholly behind the reveal front; crossing geometry still uses fragment clipping.
+        func intersectsReveal(_ reveal: SIMD4<Float>) -> Bool {
+            guard reveal.w > 0.5, minimum.x > -.greatestFiniteMagnitude,
+                  minimum.x.isFinite, minimum.y.isFinite, maximum.x.isFinite, maximum.y.isFinite,
+                  reveal.x.isFinite, reveal.y.isFinite, reveal.z.isFinite else { return true }
+            let margin: Float = 0.02
+            if reveal.w > 1.5 {
+                let x0 = reveal.x * minimum.x, x1 = reveal.x * maximum.x
+                let y0 = reveal.y * minimum.y, y1 = reveal.y * maximum.y
+                return reveal.w > 2.5
+                    ? max(x0, x1) + max(y0, y1) >= reveal.z - margin
+                    : min(x0, x1) + min(y0, y1) <= reveal.z + margin
+            }
+            return maximum.x >= reveal.x - reveal.z - margin && minimum.x <= reveal.x + reveal.z + margin
+                && maximum.y >= reveal.y - reveal.z - margin && minimum.y <= reveal.y + reveal.z + margin
+        }
+
         func intersects(_ matrix: simd_float4x4, mirrorHeight: Float? = nil) -> Bool {
             guard minimum.x > -.greatestFiniteMagnitude else { return true }
             var outside: UInt8 = 15
@@ -116,6 +133,10 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
     private var eligibleGroups: [DioramaInstanceGroup] = []
     private var eligibleCasters: [DioramaInstanceGroup] = []
     private var selectionTransform: simd_double4x4?
+    private var selectedReveal: SIMD4<Float>?
+    private var drawRevision: UInt64 = 0
+    private var cameraRanges: [Range] = []
+    private var cameraGroups: [DioramaInstanceGroup] = []
     private var selectedRanges: [Range] = []
     private var selectedGroups: [DioramaInstanceGroup] = []
     private var selectedRangeDraws: [Range] = []
@@ -313,7 +334,13 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
             selectionVisible = visible; selectionGlow = glowOn; selectionTransform = nil
         }
         let drawn = eligibleRanges
-        guard !drawn.isEmpty || !eligibleGroups.isEmpty else { publishLabels([]); return }
+        guard !drawn.isEmpty || !eligibleGroups.isEmpty else {
+            publishLabels([])
+            mtlCommandBuffer.addCompletedHandler { [weak self] command in
+                if command.status == .completed { self?.didComplete(reveal) }
+            }
+            return
+        }
 
         var projection = matrix_identity_double4x4
         for column in 0..<4 {
@@ -336,10 +363,20 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
         ))
         let selectionChanged = selectionTransform != transform
         if selectionChanged {
-            selectedRanges = drawn.filter { $0.intersects(matrix) }
-            selectedGroups = eligibleGroups.filter { group in
+            cameraRanges = drawn.filter { $0.intersects(matrix) }
+            cameraGroups = eligibleGroups.filter { group in
                 Range(category: group.category, start: 0, count: 0, minimum: group.minimum, maximum: group.maximum).intersects(matrix)
             }
+            selectionTransform = transform
+        }
+        let planChanged = selectionChanged || selectedReveal != reveal
+        if planChanged {
+            selectedRanges = cameraRanges.filter { $0.intersectsReveal(reveal) }
+            selectedGroups = cameraGroups.filter { group in
+                Range(category: group.category, start: 0, count: 0, minimum: group.minimum, maximum: group.maximum).intersectsReveal(reveal)
+            }
+            selectedReveal = reveal
+            drawRevision &+= 1
         }
         let mainRanges = selectedRanges
         let drawnGroups = selectedGroups
@@ -401,11 +438,14 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
         // Screen-space passes first: occlusion the main pass samples, bloom added at the end.
         // Reduced effects (Low Power, thermal) drop them entirely; geometry is unchanged.
         let effectsOn = !reducedEffects && !wireframe
-        let aoStrength: Float = effectsOn ? postSettings.ao : 0
-        let bloomStrength: Float = effectsOn && glowOn ? postSettings.bloom : 0
+        let hasOpaque = mainRanges.contains { $0.category != .water && !$0.category.isEmissive }
+            || drawnGroups.contains { !$0.category.isEmissive }
+        let hasEmission = mainRanges.contains { $0.category.isEmissive } || drawnGroups.contains { $0.category.isEmissive }
+        let aoStrength: Float = effectsOn && hasOpaque ? postSettings.ao : 0
+        let bloomStrength: Float = effectsOn && glowOn && hasEmission ? postSettings.bloom : 0
         uniforms.post = SIMD4<Float>(aoStrength, bloomStrength, postSettings.grade, postSettings.haze)
         let lodDistance: Float = 140
-        if selectionChanged {
+        if planChanged {
             selectedRangeDraws = DioramaDrawPlan.ranges(mainRanges)
             selectedInstanceDraws = DioramaDrawPlan.instances(drawnGroups, eye: eye, lodDistance: lodDistance)
             selectionTransform = transform
@@ -422,7 +462,8 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
                 opaqueGroups: submittedGroups.filter { !$0.category.isEmissive },
                 emissiveGroups: submittedGroups.filter { $0.category.isEmissive },
                 matrix: matrix, uniforms: uniforms, eye: eye,
-                aoRadius: postSettings.aoRadius, aoStrength: aoStrength, bloomStrength: bloomStrength, lodDistance: lodDistance)
+                aoRadius: postSettings.aoRadius, aoStrength: aoStrength, bloomStrength: bloomStrength, lodDistance: lodDistance,
+                revision: drawRevision)
         }
         if aoStrength > 0, postProcess?.occlusion == nil { uniforms.post.x = 0 }
 

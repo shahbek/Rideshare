@@ -28,7 +28,7 @@ nonisolated enum DioramaMapboxData {
 
     private static func landmarkIDs(in data: DioramaTileData) -> Set<UInt64> {
         DioramaHotelGenerator.ids.union(DioramaSlipwayPavilion.buildingIDs)
-            .union(DioramaMosqueGenerator.buildingIDs(in: data)).union([165_397_124])
+            .union(DioramaMosqueGenerator.buildingIDs(in: data)).union([165_397_124, DioramaSeaCliffSite.buildingID])
     }
 
     /// Reserve both the original mapped outline and the authored replacement. A replacement may
@@ -49,6 +49,19 @@ nonisolated enum DioramaMapboxData {
         func name(_ f: DioramaVectorTile.Feature) -> String? {
             let value = (f.properties["name"] ?? f.properties["name_en"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             return value.isEmpty ? nil : String(value.prefix(96))
+        }
+        // Supplement cemetery parcels in the bundled tile too, without duplicating addressed land use.
+        for f in features where f.type == 3 && ["landuse", "landuse_overlay"].contains(f.layer)
+            && ["cemetery", "grave_yard"].contains(f.properties["class"] ?? "") {
+            for (part, path) in f.paths.enumerated() where DioramaPolygon.signedArea(path) > 0 {
+                let ring = DioramaPolygon.counterClockwise(DioramaPolygon.clean(path.map { local($0, extent: f.extent) }, flags: []).points)
+                guard ring.count >= 3, DioramaRect.bounding(ring).intersects(data.rect),
+                      !data.landuse.contains(where: { $0.kind == "cemetery" && DioramaPolygon.contains(polygon: $0.rings, DioramaPolygon.centroid(ring)) }) else { continue }
+                let holes = f.paths.dropFirst(part + 1).prefix { DioramaPolygon.signedArea($0) < 0 }
+                    .map { $0.map { local($0, extent: f.extent) } }
+                data.landuse.append(.init(id: DioramaRandom.hash("cemetery:\(f.id):\(part)"), rings: [ring] + holes,
+                    clipped: Array(repeating: false, count: ring.count), kind: "cemetery", tags: f.properties))
+            }
         }
         // POIs remain at their actual coordinates. No nearest-house renaming and no category fallback.
         var seenNames: Set<String> = []

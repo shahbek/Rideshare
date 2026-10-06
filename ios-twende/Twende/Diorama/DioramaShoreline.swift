@@ -96,6 +96,12 @@ nonisolated enum DioramaShoreline {
         func nearArea(_ area: DioramaAreaFeature, distance: Double) -> Bool {
             area.rings.first.map { DioramaPolygon.contains($0, p) || DioramaPolygon.distanceToRing($0, p) <= distance } ?? false
         }
+        if data.tile == DioramaSeaCliffSite.tile,
+           data.landuse.contains(where: { $0.kind == "seacliffGrounds" && nearArea($0, distance: 14) }) {
+            // Hard-edge terrain semantics preserve the photographed coral cliff, not a beach ramp.
+            // The landmark owns its rock face; the generic deck/seawall builder is bypassed.
+            return Choice(kind: .deck, source: .override, evidence: DioramaSeaCliffGrounds.cliffEvidence, rocks: false)
+        }
         let deck = data.landuse.first { $0.kind == "terrace" && nearArea($0, distance: 6) }
         let pier = data.paths.first { ($0.kind == "pier" || $0.tags["man_made"] == "pier") && distance(p, line: $0.line) <= 2 }
         if let entry = overrides.first(where: { $0.contains(p, projection: data.projection) }) {

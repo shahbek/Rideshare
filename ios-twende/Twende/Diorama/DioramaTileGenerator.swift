@@ -161,7 +161,9 @@ nonisolated enum DioramaTileGenerator {
         var porchLights: [DioramaLight] = []
         let mosqueIDs = DioramaMosqueGenerator.buildingIDs(in: data)
         for feature in data.buildings {
-            if !feature.occupiedPieces.isEmpty {
+            if feature.id == DioramaSeaCliffSite.buildingID {
+                built.append(DioramaSeaCliffGenerator(data: data, terrain: terrain, config: config).build(feature, mesh: &buildings, glow: &windowGlow))
+            } else if !feature.occupiedPieces.isEmpty {
                 built.append(DioramaClippedBuilding.build(feature, terrain: terrain, config: config, mesh: &buildings, glow: &windowGlow, lights: true))
             } else if mosqueIDs.contains(feature.id) {
                 built.append(DioramaMosqueGenerator(config: config, terrain: terrain).build(feature, into: &buildings))
@@ -198,6 +200,10 @@ nonisolated enum DioramaTileGenerator {
                 .generate(ground: &ground, props: &props, vegetation: &vegetation, glow: &propGlow, lights: &lights)
         }
 
+        if data.tile == DioramaSeaCliffSite.tile {
+            DioramaSeaCliffGrounds(data: data, terrain: terrain, config: config, library: library, painter: painter)
+                .generate(ground: &ground, props: &props, vegetation: &vegetation, glow: &propGlow, lights: &lights)
+        }
         try timing("hotel grounds")
         DioramaRoadGenerator(config: config, data: data, roads: roadIndex, terrain: terrain, layout: streetLayout, compounds: compounds, painter: painter).generate(into: &roadsMesh)
         groundGenerator.paintWater()

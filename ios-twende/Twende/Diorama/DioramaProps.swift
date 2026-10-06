@@ -518,7 +518,7 @@ nonisolated struct DioramaPropPlacer {
     let terrain: DioramaTerrain
 
     /// Hard-surfaced amenity areas nothing may be planted on.
-    private static let hardKinds: Set<String> = ["pitch", "parking", "fuel", "pool", "terrace"]
+    private static let hardKinds: Set<String> = ["pitch", "parking", "fuel", "pool", "terrace", "cemetery", "seacliffGrounds"]
 
     private func ground(_ p: DV2) -> Double { terrain.height(p) }
     /// Roads are paint on the ground, so vehicles sit directly on the terrain.

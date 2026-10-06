@@ -1,3 +1,4 @@
+import Foundation
 import Metal
 import simd
 
@@ -34,6 +35,18 @@ nonisolated final class DioramaPostProcess {
     private var eighthB: MTLTexture?
 
     private(set) var occlusion: MTLTexture?
+    private var cachedRevision: UInt64?
+    private var cachedSettings: SIMD4<Float> = .zero
+    private var cachedBloom: [MTLTexture] = []
+    private var cachedSubmission: Submission?
+
+    /// Track failure without retaining Mapbox's entire command buffer and its frame resources.
+    private final class Submission: @unchecked Sendable {
+        private let lock = NSLock()
+        private var failed: Bool = false
+        var isValid: Bool { lock.lock(); defer { lock.unlock() }; return !failed }
+        func invalidate() { lock.lock(); failed = true; lock.unlock() }
+    }
 
     init?(device: MTLDevice, library: MTLLibrary, colorFormat: MTLPixelFormat, depthFormat: MTLPixelFormat) {
         self.device = device
@@ -135,6 +148,7 @@ nonisolated final class DioramaPostProcess {
     private func resize(width w: Int, height h: Int) {
         guard w != width || h != height else { return }
         width = w; height = h
+        cachedRevision = nil; cachedBloom = []; occlusion = nil
         let hw = max(w / 2, 1), hh = max(h / 2, 1)
         position = make(.rgba16Float, hw, hh, label: "Diorama G position")
         normal = make(.rgba16Float, hw, hh, label: "Diorama G normal")
@@ -154,8 +168,15 @@ nonisolated final class DioramaPostProcess {
                 opaqueRanges: [DioramaRenderLayer.Range], emissiveRanges: [DioramaRenderLayer.Range],
                 opaqueGroups: [DioramaDrawPlan.Instance], emissiveGroups: [DioramaDrawPlan.Instance],
                 matrix: simd_float4x4, uniforms: DioramaShaderUniforms, eye: SIMD3<Float>,
-                aoRadius: Float, aoStrength: Float, bloomStrength: Float, lodDistance: Float) -> [MTLTexture] {
+                aoRadius: Float, aoStrength: Float, bloomStrength: Float, lodDistance: Float,
+                revision: UInt64) -> [MTLTexture] {
         resize(width: targetWidth, height: targetHeight)
+        // Revision includes the exact camera, categories, reveal boundary and instance LOD.
+        // G-buffer/emission do not depend on water time or directional-shadow contents.
+        let settings = SIMD4(aoRadius, aoStrength, bloomStrength, uniforms.params.x)
+        if cachedRevision == revision, cachedSettings == settings,
+           cachedSubmission?.isValid == true { return cachedBloom }
+        cachedRevision = nil; cachedBloom = []; occlusion = nil
         guard let position, let normal, let emissive, let depth, let occlusionA, let occlusionB,
               let quarterA, let quarterB, let eighthA, let eighthB else { return [] }
         var matrix = matrix
@@ -220,12 +241,13 @@ nonisolated final class DioramaPostProcess {
         }
         g.endEncoding()
 
+        var allPassesEncoded = true
         func screenPass(_ target: MTLTexture, pipeline: MTLRenderPipelineState, sources: [MTLTexture], post: DioramaPostUniforms, label: String) {
             let d = MTLRenderPassDescriptor()
             d.colorAttachments[0].texture = target
             d.colorAttachments[0].loadAction = .dontCare
             d.colorAttachments[0].storeAction = .store
-            guard let e = command.makeRenderCommandEncoder(descriptor: d) else { return }
+            guard let e = command.makeRenderCommandEncoder(descriptor: d) else { allPassesEncoded = false; return }
             e.label = label
             e.setRenderPipelineState(pipeline)
             var post = post
@@ -251,14 +273,23 @@ nonisolated final class DioramaPostProcess {
         }
 
         // 3. Bloom: downsample the emissive channel twice, blurring each level.
-        guard bloomStrength > 0.001 else { return [] }
+        func saveCache(_ bloom: [MTLTexture]) -> [MTLTexture] {
+            guard allPassesEncoded else { occlusion = nil; return [] }
+            let submission = Submission()
+            cachedRevision = revision; cachedSettings = settings; cachedBloom = bloom; cachedSubmission = submission
+            command.addCompletedHandler { finished in
+                if finished.status != .completed { submission.invalidate() }
+            }
+            return bloom
+        }
+        guard bloomStrength > 0.001 else { return saveCache([]) }
         screenPass(quarterA, pipeline: copyPipeline, sources: [emissive], post: post(for: quarterA), label: "Diorama bloom down 1")
         screenPass(quarterB, pipeline: blurColorPipeline, sources: [quarterA], post: post(for: quarterB, blur: SIMD2(1, 0)), label: "Diorama bloom blur 1H")
         screenPass(quarterA, pipeline: blurColorPipeline, sources: [quarterB], post: post(for: quarterA, blur: SIMD2(0, 1)), label: "Diorama bloom blur 1V")
         screenPass(eighthA, pipeline: copyPipeline, sources: [quarterA], post: post(for: eighthA), label: "Diorama bloom down 2")
         screenPass(eighthB, pipeline: blurColorPipeline, sources: [eighthA], post: post(for: eighthB, blur: SIMD2(2.5, 0)), label: "Diorama bloom blur 2H")
         screenPass(eighthA, pipeline: blurColorPipeline, sources: [eighthB], post: post(for: eighthA, blur: SIMD2(0, 2.5)), label: "Diorama bloom blur 2V")
-        return [quarterA, eighthA]
+        return saveCache([quarterA, eighthA])
     }
 
     /// Adds the bloom levels over the finished frame inside Mapbox's own render pass.

@@ -1,11 +1,11 @@
 import Foundation
 
 /// Pool evidence must be resolved before coastline classification or heightfield construction.
-/// A swimming symbol alone never invents a basin: it must lie inside a small mapped water polygon.
+/// Swimming symbols select bounded mapped basins, never fabricate polygons or convert open sea.
 nonisolated enum DioramaPoolRecognition {
     static func isPool(_ tags: [String: String]) -> Bool {
         ["class", "type", "leisure", "subclass"].contains {
-            ["swimming_pool", "swimming pool"].contains(tags[$0]?.lowercased() ?? "")
+            ["swimming_pool", "swimming pool", "pool"].contains(tags[$0]?.lowercased() ?? "")
         }
     }
 
@@ -19,8 +19,9 @@ nonisolated enum DioramaPoolRecognition {
         let symbols: [DV2] = features.filter {
             $0.layer == "poi_label" && $0.type == 1 &&
                 (isPool($0.properties) || $0.properties["maki"] == "swimming")
-        }.compactMap { feature in feature.paths.first?.first.map { local($0, extent: feature.extent) } }
+        }.flatMap { feature in feature.paths.flatMap { $0.map { local($0, extent: feature.extent) } } }
         var candidates: [DioramaAreaFeature] = []
+        var possibleBasins: [DioramaAreaFeature] = []
         for feature in features where feature.type == 3 && ["water", "landuse", "landuse_overlay"].contains(feature.layer) {
             for (part, path) in feature.paths.enumerated() where DioramaPolygon.signedArea(path) > 0 {
                 let outer = DioramaPolygon.counterClockwise(DioramaPolygon.clean(path.map { local($0, extent: feature.extent) }, flags: []).points)
@@ -29,22 +30,36 @@ nonisolated enum DioramaPoolRecognition {
                     .map { $0.map { local($0, extent: feature.extent) } }
                 let area = DioramaPolygon.area(outer)
                 let tagged = isPool(feature.properties)
-                let naturalKinds: Set<String> = ["lake", "pond", "river", "stream", "reservoir", "ocean", "sea", "basin"]
-                let natural = ["water", "class", "type"].contains { naturalKinds.contains(feature.properties[$0] ?? "") }
+                let flowingOrMarine: Set<String> = ["river", "stream", "canal", "reservoir", "ocean", "sea"]
+                let natural = ["water", "class", "type"].contains { flowingOrMarine.contains(feature.properties[$0]?.lowercased() ?? "") }
                 let box = DioramaPolygon.minimumAreaRectangle(outer)
-                // A swimming icon may describe open-water recreation, not a constructed basin.
-                // Symbol-only matching is deliberately limited to compact, pool-like outlines.
-                let symbolMatch = feature.layer == "water" && !natural && area >= 6 && area <= 2500 && holes.isEmpty
-                    && area / max(box.area, 1) > 0.8 && max(box.halfLength, box.halfWidth) < 40
-                    && symbols.contains { DioramaPolygon.contains(outer, $0) }
-                guard tagged || symbolMatch else { continue }
-                // Keep complete mapped outlines; a partially visible basin is still one pool.
-                let flags = Array(repeating: false, count: outer.count)
-                candidates.append(.init(id: DioramaRandom.hash("pool:\(data.tile.key):\(feature.layer):\(feature.id):\(part)"),
-                    rings: [outer] + holes, clipped: flags, kind: "pool",
+                // Lake/pond are broad source classes, not enough to overrule swimming evidence.
+                // Kidney/L-shaped basins and planted islands must not fail a rectangle test.
+                let compact = feature.layer == "water" && !natural && area >= 4 && area <= 3000
+                    && area / max(box.area, 1) > 0.28 && max(box.halfLength, box.halfWidth) <= 55
+                    && !outer.contains { p in
+                        abs(p.x - data.rect.minX) < 0.3 || abs(p.x - data.rect.maxX) < 0.3
+                            || abs(p.y - data.rect.minY) < 0.3 || abs(p.y - data.rect.maxY) < 0.3
+                    }
+                guard tagged || compact else { continue }
+                let basin = DioramaAreaFeature(id: DioramaRandom.hash("pool:\(data.tile.key):\(feature.layer):\(feature.id):\(part)"),
+                    rings: [outer] + holes, clipped: Array(repeating: false, count: outer.count), kind: "pool",
                     sport: feature.properties["access"] == "private" || area < 180 ? "private" : nil,
-                    tags: feature.properties))
+                    tags: feature.properties)
+                if tagged { candidates.append(basin) } else { possibleBasins.append(basin) }
             }
+        }
+        var matched: Set<UInt64> = []
+        for symbol in symbols {
+            let ranked = possibleBasins.compactMap { basin -> (DioramaAreaFeature, Double)? in
+                guard let ring = basin.rings.first else { return nil }
+                let distance = DioramaPolygon.contains(polygon: basin.rings, symbol) ? 0 : DioramaPolygon.distanceToRing(ring, symbol)
+                return distance <= 8 ? (basin, distance) : nil
+            }.sorted { $0.1 < $1.1 }
+            guard let best = ranked.first else { continue }
+            // Near-but-outside symbols are accepted only with an unambiguous nearest basin.
+            guard ranked.count == 1 || best.1 == 0 || ranked[1].1 - best.1 > 3 else { continue }
+            if matched.insert(best.0.id).inserted { candidates.append(best.0) }
         }
         // Also protect bundled/tagged water when no supplementary tile can be obtained.
         for water in data.water where isPool(water.tags) {

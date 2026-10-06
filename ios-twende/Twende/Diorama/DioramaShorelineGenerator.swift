@@ -11,6 +11,7 @@ nonisolated struct DioramaShorelineGenerator {
     func generate(ground: inout DioramaMesh, props: inout DioramaMesh, vegetation: inout DioramaMesh,
                   debug: inout DioramaMesh) {
         for segment in data.shorelines where segment.points.count >= 2 {
+            if segment.evidence == DioramaSeaCliffGrounds.cliffEvidence { continue }
             switch segment.kind {
             case .beach:
                 beachDetails(segment, props: &props, vegetation: &vegetation)

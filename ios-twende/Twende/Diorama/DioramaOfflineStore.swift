@@ -53,6 +53,16 @@ actor DioramaOfflineStore {
         guard verifiedFiles(directory: staging, name: name) else { throw Failure.package }
         if FileManager.default.fileExists(atPath: destination.path) { try FileManager.default.removeItem(at: destination) }
         try FileManager.default.moveItem(at: staging, to: destination)
+        // Retire only superseded generated packages for this tile/detail after its replacement
+        // has been verified and published. Keep source downloads and every other tile intact.
+        let suffix = context ? "-context1" : "-focus"
+        let marker = "-\(artifact.tile.key)-"
+        if let entries = try? FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil) {
+            for old in entries where old.lastPathComponent != name && old.lastPathComponent.hasPrefix("v")
+                && old.lastPathComponent.contains(marker) && old.lastPathComponent.hasSuffix(suffix) {
+                try? FileManager.default.removeItem(at: old)
+            }
+        }
     }
     func isVerified(_ tile: DioramaTileID, context: Bool) -> Bool {
         let name = key(tile, context: context)

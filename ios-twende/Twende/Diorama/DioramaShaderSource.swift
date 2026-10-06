@@ -302,6 +302,9 @@ nonisolated enum DioramaShaderSource {
         float3 sum = float3(0.0);
         for (uint k = 0; k < entry.y; k++) {
             DioramaLight l = lights[indices[entry.x + k]];
+            // A not-yet-revealed fixture must not light already-visible ground.
+            // Keep off-camera fixtures whose finite radius still reaches a visible receiver.
+            if (u.reveal.w > 0.5 && dioramaRevealDistance(l.position.xyz, u) > 0.0) continue;
             float3 d = l.position.xyz - p;
             float dist2 = dot(d, d);
             float radius = l.position.w;
