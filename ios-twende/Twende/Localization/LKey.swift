@@ -155,6 +155,7 @@ nonisolated enum LKey: Hashable, Sendable {
     // Settings
     case language, notifications, tripUpdates, promoUpdates, account, logOut, logOutConfirmTitle
     case mapStyle, mapStyleBody
+    case masakiDiorama, dioramaControlsBody, dioramaEnabled, driverEye, driverEyeBody, driverEyeExit
     case mapStyleMonochromeDay, mapStyleMonochromeDayBody
     case mapStyleMonochromeDusk, mapStyleMonochromeDuskBody
     case mapStyleNight, mapStyleNightBody

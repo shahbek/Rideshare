@@ -64,6 +64,7 @@ nonisolated enum MenuRoute: Hashable, Sendable {
     case support
     case settings
     case offlineMaps
+    case diorama
     case siriGuide
     case identity
 }

@@ -61,6 +61,17 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
         }
     }
 
+    private let groundQueryLock = NSLock()
+    private var cameraGround = DioramaCameraGround()
+
+    /// Resident CPU buffers are immutable; this tiny query cache is independent of the render thread.
+    func groundHeight(at point: GeoPoint) -> Double? {
+        let local = DioramaProjection(origin: origin).local(longitude: point.longitude, latitude: point.latitude)
+        guard groundRect.contains(local) else { return nil }
+        groundQueryLock.lock(); defer { groundQueryLock.unlock() }
+        return cameraGround.height(local, vertices: vertices, indices: indices, ranges: ranges)
+    }
+
     private let labels: [DioramaBuildingLabel]
     private let displayScale: Float
     private var labelRenderer: DioramaLabelRenderer?

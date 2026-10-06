@@ -40,11 +40,6 @@ struct HomeView: View {
                     OfflineBanner()
                         .transition(.move(edge: .top).combined(with: .opacity))
                 }
-                if DioramaState.shared.isEnabled {
-                    DioramaDebugPanel(state: DioramaState.shared)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .transition(.move(edge: .top).combined(with: .opacity))
-                }
 
                 Spacer()
 

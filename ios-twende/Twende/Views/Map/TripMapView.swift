@@ -30,6 +30,8 @@ struct TripMapView: UIViewRepresentable {
     var driverPosition: GeoPoint? = nil
     var driverHeading: Double = 0
     var driverTier: RideTier = .economy
+    var followsDriver: Bool = false
+    var onDriverFollowInterrupted: (() -> Void)? = nil
     var nearbyDrivers: [Driver] = []
     var favouriteIDs: Set<String> = []
     var isSearching: Bool = false
@@ -108,6 +110,7 @@ struct TripMapView: UIViewRepresentable {
         coordinator.applyMapStyleIfNeeded()
         coordinator.updateSelection()
         coordinator.updateDiorama()
+        coordinator.updateDriverCamera()
     }
 
     func makeCoordinator() -> Coordinator {
@@ -146,6 +149,9 @@ extension TripMapView {
         var parent: TripMapView
         weak var mapView: MapView?
 
+        private let driverEyeCamera = DriverEyeCamera()
+        private var driverFollowInterrupted: Bool = false
+        private var lastDioramaFollowUpdate: Date = .distantPast
         private var appliedCamera: MapCameraTarget? = nil
         private var pendingCamera: MapCameraTarget? = nil
         private var hasPositionedCamera: Bool = false
@@ -495,7 +501,7 @@ extension TripMapView {
                 }
                 diorama = manager
                 if styleReady { manager.install(on: mapView.mapboxMap) }
-                mapView.camera.fly(to: manager.introCamera(), duration: 1.6)
+                if !parent.followsDriver { mapView.camera.fly(to: manager.introCamera(), duration: 1.6) }
                 dioramaFly = state.cameraFlyRequest
                 dioramaRegenerate = state.regenerateRequest
             } else if !state.isEnabled, let manager = diorama {
@@ -516,7 +522,7 @@ extension TripMapView {
             }
             if state.cameraFlyRequest != dioramaFly {
                 dioramaFly = state.cameraFlyRequest
-                mapView.camera.fly(to: diorama.introCamera(), duration: 1.2)
+                if !parent.followsDriver { mapView.camera.fly(to: diorama.introCamera(), duration: 1.2) }
             }
             diorama.scheduleUpdate(delay: 0.05)
         }
@@ -531,6 +537,7 @@ extension TripMapView {
         // MARK: Camera
 
         func applyCameraIfNeeded(_ target: MapCameraTarget) {
+            guard !driverEyeCamera.isActive, !(parent.followsDriver && parent.driverPosition != nil) else { return }
             guard target != appliedCamera, target != .automatic, let mapView else { return }
             guard mapView.bounds.width > 0, mapView.bounds.height > 0 else {
                 pendingCamera = target
@@ -853,7 +860,7 @@ extension TripMapView {
         private func syncVehicles() {
             guard let mapView else { return }
             var poses = nearbyVehicles.mapValues(\.pose)
-            if let driverShown { poses[Self.driverModelID] = driverShown }
+            if let driverShown, !driverEyeCamera.isActive { poses[Self.driverModelID] = driverShown }
             let staleIDs = vehicleMarkers.keys.filter { poses[$0] == nil }
             for id in staleIDs {
                 vehicleMarkers.removeValue(forKey: id)?.remove()
@@ -875,6 +882,7 @@ extension TripMapView {
         }
 
         func removeVehicles() {
+            if let mapView { driverEyeCamera.stop(on: mapView, restore: false) }
             for marker in vehicleMarkers.values { marker.remove() }
             vehicleMarkers.removeAll()
             for banner in banners.values { banner.remove() }
@@ -924,6 +932,7 @@ extension TripMapView {
             )
             if pose != driverShown {
                 driverShown = pose
+                updateDriverCamera()
                 syncVehicles()
             }
             if t >= 1 {
@@ -931,6 +940,29 @@ extension TripMapView {
                 return false
             }
             return true
+        }
+
+        func updateDriverCamera() {
+            guard let mapView else { return }
+            if !parent.followsDriver { driverFollowInterrupted = false }
+            guard parent.followsDriver, !driverFollowInterrupted, activeGestures.isEmpty, let pose = driverShown else {
+                if driverEyeCamera.isActive {
+                    driverEyeCamera.stop(on: mapView, restore: true)
+                    appliedCamera = parent.camera
+                    syncVehicles()
+                }
+                return
+            }
+            let wasActive = driverEyeCamera.isActive
+            let ground = diorama?.groundHeight(at: pose.point)
+                ?? mapView.mapboxMap.elevation(at: pose.point.coordinate)
+            driverEyeCamera.update(point: pose.point, heading: pose.heading, ground: ground, on: mapView)
+            if wasActive != driverEyeCamera.isActive { syncVehicles() }
+            // Continuous driving must not perpetually postpone the normal camera-settle debounce.
+            if Date().timeIntervalSince(lastDioramaFollowUpdate) >= 0.5 {
+                lastDioramaFollowUpdate = Date()
+                diorama?.update()
+            }
         }
 
         func updateNearby(_ drivers: [Driver]) {
@@ -961,6 +993,13 @@ extension TripMapView {
         nonisolated func gestureManager(_ gestureManager: GestureManager, didBegin gestureType: GestureType) {
             MainActor.assumeIsolated {
                 activeGestures.insert(String(describing: gestureType))
+                if driverEyeCamera.isActive, let mapView {
+                    driverFollowInterrupted = true
+                    driverEyeCamera.stop(on: mapView, restore: false)
+                    appliedCamera = parent.camera
+                    syncVehicles()
+                    parent.onDriverFollowInterrupted?()
+                }
                 cancelCameraSettlement()
                 if parent.highlightsSelectionBuilding, let mapView {
                     buildingHighlight.clear(on: mapView.mapboxMap)

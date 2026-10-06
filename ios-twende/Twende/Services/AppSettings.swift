@@ -28,6 +28,7 @@ final class AppSettings {
         static let promoNotifications = "twende.settings.promoNotifications"
         static let hasSeenZeroCommission = "twende.settings.hasSeenZeroCommission"
         static let mapStyle = "twende.settings.mapStyle"
+        static let driverEye = "zuri.settings.driverEye"
     }
 
     private var storedLanguage: AppLanguage
@@ -37,6 +38,7 @@ final class AppSettings {
     private var storedPromoNotifications: Bool
     private var storedHasSeenZeroCommission: Bool
     private var storedMapStyle: MapStyleOption
+    private var storedDriverEye: Bool
 
     private let defaults: UserDefaults
 
@@ -50,6 +52,7 @@ final class AppSettings {
         storedPromoNotifications = defaults.object(forKey: Keys.promoNotifications) as? Bool ?? false
         storedHasSeenZeroCommission = defaults.bool(forKey: Keys.hasSeenZeroCommission)
         storedMapStyle = MapStyleOption(rawValue: defaults.string(forKey: Keys.mapStyle) ?? "") ?? .fallback
+        storedDriverEye = defaults.bool(forKey: Keys.driverEye)
     }
 
     /// Basemap look chosen in Settings. Persisted so the map opens in the same light on a cold start.
@@ -59,6 +62,12 @@ final class AppSettings {
             storedMapStyle = newValue
             defaults.set(newValue.rawValue, forKey: Keys.mapStyle)
         }
+    }
+
+    /// Opt-in camera preference, effective only when a trip has an assigned vehicle pose.
+    var driverEyeEnabled: Bool {
+        get { storedDriverEye }
+        set { storedDriverEye = newValue; defaults.set(newValue, forKey: Keys.driverEye) }
     }
 
     var language: AppLanguage {

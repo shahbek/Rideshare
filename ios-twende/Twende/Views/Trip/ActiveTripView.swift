@@ -18,6 +18,10 @@ struct ActiveTripView: View {
     @Environment(\.foldLayout) private var foldLayout
 
     private var driver: Driver? { env.trips.assignedDriver }
+    private var canUseDriverEye: Bool {
+        env.trips.driverPosition != nil && [.driverAssigned, .driverArrived, .inTrip].contains(trip.phase)
+    }
+    private var followsDriver: Bool { env.settings.driverEyeEnabled && canUseDriverEye }
     private var showsChrome: Bool { trip.phase != .searching && trip.phase != .noDrivers }
 
     var body: some View {
@@ -31,6 +35,8 @@ struct ActiveTripView: View {
                 driverPosition: env.trips.driverPosition,
                 driverHeading: env.trips.driverHeading,
                 driverTier: trip.tier,
+                followsDriver: followsDriver,
+                onDriverFollowInterrupted: { env.settings.driverEyeEnabled = false },
                 isSearching: trip.phase == .searching,
                 pickupEtaMinutes: trip.phase == .driverAssigned ? max(env.trips.driverEtaMinutes, 1) : nil,
                 destinationEtaMinutes: trip.phase == .inTrip ? max(env.trips.remainingTripMinutes, 1) : nil,
@@ -58,9 +64,20 @@ struct ActiveTripView: View {
                         .transition(.move(edge: .top).combined(with: .opacity))
                 }
                 Spacer()
-                HStack {
-                    Spacer()
+                HStack(spacing: 12) {
+                    if canUseDriverEye {
+                        Toggle(L(.driverEye), isOn: Bindable(env.settings).driverEyeEnabled)
+                            .font(TwendeFont.label)
+                            .toggleStyle(.button)
+                            .tint(TwendeColor.primary)
+                            .padding(.horizontal, 12)
+                            .frame(minHeight: 48)
+                            .background(TwendeColor.surface, in: .rect(cornerRadius: 8))
+                            .accessibilityIdentifier("trip.driverEye")
+                    }
+                    Spacer(minLength: 0)
                     MapCircleButton(systemImage: "location.fill", accessibilityLabel: L(.recentre)) {
+                        env.settings.driverEyeEnabled = false
                         frame(force: true)
                     }
                 }
@@ -145,7 +162,7 @@ struct ActiveTripView: View {
             frame(force: true)
         }
         .onChange(of: env.trips.driverPosition) { _, _ in
-            guard trip.phase == .inTrip || trip.phase == .driverAssigned else { return }
+            guard !followsDriver, trip.phase == .inTrip || trip.phase == .driverAssigned else { return }
             // Re-frame at most every 4s, and only when the vehicle has actually left the framed area, so the
             // camera glides instead of restarting its ease on every fix.
             let now = Date()
@@ -180,6 +197,7 @@ struct ActiveTripView: View {
     }
 
     private func frame(force: Bool) {
+        guard !followsDriver else { return }
         guard force || lastFramedPhase != trip.phase else { return }
         lastFramedPhase = trip.phase
         var points: [GeoPoint]

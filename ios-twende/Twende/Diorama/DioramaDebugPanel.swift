@@ -1,10 +1,9 @@
 import SwiftUI
 
-/// Floating developer panel over the Home map: time of day, category toggles, regenerate and tile
-/// bounds. Follows the app's flat white/ink/gold language.
+/// Settings-only diorama controls. The containing MenuScreen owns scrolling and navigation.
 struct DioramaDebugPanel: View {
     @Bindable var state: DioramaState
-    @State private var isExpanded: Bool = false
+    @State private var isExpanded: Bool = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -15,7 +14,7 @@ struct DioramaDebugPanel: View {
                 HStack(spacing: 10) {
                     Image(systemName: "cube.transparent")
                         .font(.system(size: 15, weight: .semibold))
-                    Text("Masaki diorama")
+                    Text(L(.masakiDiorama))
                         .font(TwendeFont.headline)
                     Spacer(minLength: 8)
                     Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
@@ -29,10 +28,9 @@ struct DioramaDebugPanel: View {
             .buttonStyle(.pressableCard)
 
             if !DioramaDownloadService.shared.canView {
-                ScrollView { DioramaDownloadView().padding(14) }
-                    .frame(maxHeight: 340)
+                DioramaDownloadView().padding(.vertical, 14)
             } else if isExpanded {
-                ScrollView {
+                Group {
                   VStack(alignment: .leading, spacing: 12) {
                     RowDivider(leading: 0)
                     Text("Prepared offline detail with up to eight coarse neighbours (64 MiB packed budget). No network fetches or geometry generation during viewing. Idle water animation is off.")
@@ -109,16 +107,12 @@ struct DioramaDebugPanel: View {
                         .foregroundStyle(TwendeColor.inkSecondary)
                         .fixedSize(horizontal: false, vertical: true)
                   }
-                  .padding(14)
+                  .padding(.vertical, 14)
                 }
-                .frame(maxHeight: 340)
                 .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
-        .frame(maxWidth: 360)
-        .background(TwendeColor.surface, in: RoundedRectangle(cornerRadius: 8))
-        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(TwendeColor.border, lineWidth: 1))
-        .shadow(color: .black.opacity(0.08), radius: 10, y: 3)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func toggle(_ title: String, _ category: DioramaCategory) -> some View {

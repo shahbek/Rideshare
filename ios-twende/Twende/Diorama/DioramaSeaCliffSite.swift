@@ -1,6 +1,6 @@
 import Foundation
 
-/// Bundled OSM geometry, fetched 2026-10-06. Architecture is photo-led; horizontal outlines are mapped.
+/// Bundled OSM anchors, fetched 2026-10-06. Photo-authored masses replace the traced extrusion.
 nonisolated enum DioramaSeaCliffSite {
     static let buildingID: UInt64 = 8_844_582
     static let poolID: UInt64 = 141_608_483
@@ -35,6 +35,9 @@ nonisolated enum DioramaSeaCliffSite {
     }
     static func site(_ projection: DioramaProjection) -> [DV2] { ring(siteID, file: siteFile, projection: projection) }
     static func courtyard(_ projection: DioramaProjection) -> [DV2] { ring(637_489_336, file: buildingFile, projection: projection) }
+    static func plan(_ projection: DioramaProjection) -> DioramaSeaCliffPlan {
+        DioramaSeaCliffPlan(projection: projection, mappedOutline: ring(141_608_447, file: buildingFile, projection: projection))
+    }
     static func owns(_ p: DV2, data: DioramaTileData) -> Bool {
         guard data.tile == tile else { return false }
         return data.landuse.contains { $0.kind == "seacliffGrounds" && DioramaPolygon.contains(polygon: $0.rings, p) }
@@ -52,8 +55,8 @@ nonisolated enum DioramaSeaCliffSite {
             print("[Diorama Sea Cliff] Landmark resources unavailable; retaining source buildings")
             return data
         }
-        let pieces = DioramaGroundCutouts(polygons: [hole]).subtract(from: outline)
-        // The OSM one-level tag is contradicted by the supplied aerial. 10.2 m is a photo estimate.
+        let pieces = plan(data.projection).footprints
+        // Reserve the source envelope, but use only the authored masses for occupancy and support.
         data.buildings.append(.init(id: buildingID, ring: outline, clipped: Array(repeating: false, count: outline.count),
             area: pieces.reduce(0) { $0 + DioramaPolygon.area($1) }, centroid: DioramaPolygon.centroid(outline),
             height: 10.2, type: "hotel", name: "Sea Cliff Hotel", occupiedPieces: pieces, sourceFootprint: outline))

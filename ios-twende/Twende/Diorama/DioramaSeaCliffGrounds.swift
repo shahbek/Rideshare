@@ -13,12 +13,17 @@ nonisolated struct DioramaSeaCliffGrounds {
     func generate(ground: inout DioramaMesh, props: inout DioramaMesh, vegetation: inout DioramaMesh,
                   glow: inout DioramaMesh, lights: inout [DioramaLight]) {
         guard let grounds = data.landuse.first(where: { $0.id == DioramaSeaCliffSite.siteID })?.rings.first else { return }
+        let plan = DioramaSeaCliffSite.plan(data.projection)
         let buildings = data.buildings.flatMap(\.footprints)
         let basins = data.landuse.filter { $0.kind == "pool" }.compactMap { $0.rings.first }
         let blocked = buildings + basins.map { DioramaPolygon.offset($0, by: 2.3) ?? $0 } + data.water.compactMap { $0.rings.first }
         let cutouts = DioramaGroundCutouts(polygons: blocked)
         let gardens = cutouts.subtract(from: grounds)
         painter.fillPieces(gardens, .lawn)
+        let deck = DioramaStreetSurface([grounds]).intersection(plan.restaurantDeck)
+        painter.fillPieces(deck, .tileClay)
+        let lawn = DioramaStreetSurface(gardens).intersection(plan.lawn)
+        painter.fillPieces(lawn, .grass)
         func clear(_ p: DV2, margin: Double = 0) -> Bool {
             DioramaPolygon.contains(grounds, p) && !blocked.contains { ring in
                 DioramaPolygon.contains(ring, p) || (margin > 0 && DioramaPolygon.distanceToRing(ring, p) < margin)
@@ -32,17 +37,10 @@ nonisolated struct DioramaSeaCliffGrounds {
             vegetation.instance(palm ? library.palms[index % library.palms.count] : library.trees[index % 4],
                 .init(rotation: Double(index) * 1.73, scale: DV3(size, size, size), translation: DV3(p, terrain.height(p))))
         }
-        // Keep the broad centre lawn empty; cluster planting along built edges and around the pool.
-        if let hotel = data.buildings.first(where: { $0.id == DioramaSeaCliffSite.buildingID }) {
-            for i in hotel.ring.indices {
-                let a = hotel.ring[i], b = hotel.ring[(i + 1) % hotel.ring.count]
-                guard a.distance(to: b) > 8 else { continue }
-                let out = (b - a).normalized.right
-                for k in 0..<max(1, Int(a.distance(to: b) / 10)) {
-                    let p = a + (b - a) * ((Double(k) + 0.5) / Double(max(1, Int(a.distance(to: b) / 10)))) + out * 4
-                    plant(p, palm: i % 3 == 0, index: i + k)
-                }
-            }
+        // Deliberate clusters between the bedroom wing and pavilion; leave the photographed lawn open.
+        for (index, uv) in [DV2(-34, 19), DV2(-25, 16), DV2(-17, 22), DV2(-12, 13), DV2(0, 15),
+                            DV2(12, 17), DV2(21, 13), DV2(35, 17), DV2(-25, 34), DV2(20, 40)].enumerated() {
+            plant(plan.point(uv.x, uv.y), palm: index % 3 == 0, index: index)
         }
         if let pool = data.landuse.first(where: { $0.id == DioramaSeaCliffSite.poolID })?.rings.first {
             let box = DioramaPolygon.minimumAreaRectangle(pool)
@@ -92,23 +90,36 @@ nonisolated struct DioramaSeaCliffGrounds {
                 }
             }
         }
-        // Low tropical garden pavilion visible in the aerial, fitted only in clear owned ground.
-        let centre = data.projection.local(longitude: 39.28468, latitude: -6.73950)
-        let pavilion = DioramaOrientedRect(centre: centre, axis: DV2(0.9, -0.43).normalized, halfLength: 8, halfWidth: 4.5)
-        if pavilion.expanded(by: 1).corners.allSatisfy({ clear($0) }),
-           !blocked.contains(where: { DioramaMapboxData.overlaps($0, pavilion.expanded(by: 1).corners) }) {
-            let base = terrain.foundationHeight(pavilion.corners)
-            terrain.foundation(pavilion.corners, top: base, swatch: .coralStone, into: &props)
-            props.extrude(pavilion.corners, z0: base, z1: base + 0.2, .doorWood)
-            for side in [-1.0, 1.0] {
-                for k in -2...2 {
-                    let p = centre + pavilion.axis * Double(k * 4) + pavilion.across * (side * 4.3)
-                    props.box(centre: p, z0: base + 0.2, axis: pavilion.axis, halfLength: 0.14, halfWidth: 0.14,
-                              height: 2.7, .doorWood, bevel: 0.04)
-                }
+        // Ocean restaurant: terrace furniture and the white switchback stair seen at the left.
+        let base = plan.footprints.map { terrain.foundationHeight($0) }.max() ?? 0
+        let deckPieces = cutouts.subtract(from: plan.restaurantDeck)
+        for piece in deckPieces.flatMap({ DioramaStreetSurface([grounds]).intersection($0) }) {
+            terrain.foundation(piece, top: base, swatch: .coralStone, into: &props)
+            props.extrude(piece, z0: base - 0.24, z1: base, .coralStone, top: .tileClay)
+        }
+        for u in stride(from: -59.0, through: -35, by: 6) {
+            let p = plan.point(u, 53)
+            guard DioramaPolygon.contains(grounds, p), !data.water.contains(where: { DioramaPolygon.contains(polygon: $0.rings, p) }) else { continue }
+            props.instance(library.parasol[0], .init(scale: DV3(0.8, 0.8, 0.8), translation: DV3(p, max(base, terrain.height(p)))))
+        }
+        let stair = plan.point(-28, 44)
+        for flight in 0..<2 {
+            let direction = flight == 0 ? plan.seaward : -plan.seaward
+            let start = stair + plan.axis * (Double(flight) * 2.5) + (flight == 0 ? .zero : plan.seaward * 4.2)
+            let z = base + Double(flight) * 1.65
+            for step in 0..<10 {
+                let p = start + direction * (Double(step) * 0.42)
+                props.box(centre: p, z0: z + Double(step) * 0.165, axis: plan.axis,
+                    halfLength: 1.1, halfWidth: 0.23, height: 0.165, .poolCoping, bevel: 0.02)
             }
-            _ = DioramaRoofBuilder.hip(pavilion.corners, flags: [false, false, false, false], z: base + 3,
-                pitch: 0.57, overhang: 0.7, maxRise: 2.8, color: .seaCliffRoof, fascia: .doorWood, into: &props)
+            for side in [-1.0, 1.0] {
+                let p = start + plan.axis * (side * 1.07)
+                props.tube(from: DV3(p, z + 0.95), to: DV3(p + direction * 4.2, z + 2.6),
+                    r0: 0.045, r1: 0.045, sides: 8, .trimWhite)
+            }
+            let landing = start + direction * 4.2
+            props.box(centre: landing, z0: z + 1.5, axis: plan.axis, halfLength: 2.4, halfWidth: 0.7,
+                height: 0.18, .poolCoping, bevel: 0.04)
         }
     }
 }

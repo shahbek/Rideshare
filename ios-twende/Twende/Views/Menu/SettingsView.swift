@@ -78,11 +78,17 @@ struct SettingsView: View {
 
             RowDivider(leading: 0)
 
-            Toggle(isOn: Bindable(DioramaState.shared).isEnabled) {
-                IconRow(icon: .house, title: "Masaki 3D diorama", subtitle: "Prepare all Masaki in Offline maps before viewing") { EmptyView() }
+            MenuRow(icon: .house, title: L(.masakiDiorama), subtitle: L(.dioramaControlsBody), horizontalPadding: 0) {
+                navigation.path.append(.diorama)
+            }
+            .accessibilityIdentifier("settings.diorama")
+
+            RowDivider(leading: 0)
+            Toggle(isOn: Bindable(env.settings).driverEyeEnabled) {
+                IconRow(icon: .cityCar, title: L(.driverEye), subtitle: L(.driverEyeBody)) { EmptyView() }
             }
             .tint(TwendeColor.primary)
-            .accessibilityIdentifier("settings.diorama")
+            .accessibilityIdentifier("settings.driverEye")
 
             RowDivider(leading: 0)
 

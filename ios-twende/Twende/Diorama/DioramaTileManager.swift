@@ -237,6 +237,12 @@ final class DioramaTileManager {
         return CameraOptions(center: DioramaMasakiSource.slipway.centre, zoom: config.cameraZoom, bearing: config.cameraBearing, pitch: config.cameraPitch)
     }
 
+    /// Ground beneath the vehicle is read from resident geometry, including coarse handoff neighbours.
+    func groundHeight(at point: GeoPoint) -> Double? {
+        guard shown, !state.isBasemapOnly else { return nil }
+        return renderLayer?.groundHeight(at: point) ?? contextTiles.groundHeight(at: point)
+    }
+
     // MARK: Updates
 
     func scheduleUpdate(delay: Double) {

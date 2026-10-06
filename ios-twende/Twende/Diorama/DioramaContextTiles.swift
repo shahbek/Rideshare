@@ -20,6 +20,11 @@ final class DioramaContextTiles {
     var onReady: ((DioramaTileID) -> Void)?
     var onUnavailable: ((DioramaTileID) -> Void)?
 
+    func groundHeight(at point: GeoPoint) -> Double? {
+        let tile = DioramaTileID(latitude: point.latitude, longitude: point.longitude, zoom: 16)
+        return residents[tile]?.host.groundHeight(at: point)
+    }
+
     var report: String {
         "Context: \(residents.count) coarse tiles · \(residents.values.reduce(0) { $0 + $1.triangles }) stored tris · \(residents.values.reduce(0) { $0 + $1.bytes } / 1_048_576) MiB packed (not total memory)"
     }

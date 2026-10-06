@@ -514,6 +514,12 @@ extension Strings {
         case .privacyPolicy: "Privacy policy"
 
         // Settings
+        case .masakiDiorama: "Masaki 3D diorama"
+        case .dioramaControlsBody: "Download, prepare and adjust Masaki here. The map stays free of floating diorama controls."
+        case .dioramaEnabled: "Show prepared diorama"
+        case .driverEye: "Driver’s-eye view"
+        case .driverEyeBody: "Follow the assigned vehicle at street level during a ride. Drag the map or switch off to leave. Uses the trip’s position feed, including simulated movement in demo trips—not Street View imagery."
+        case .driverEyeExit: "Exit driver’s-eye view"
         case .mapStyle: "Map style"
         case .mapStyleBody: "Changes the map's lighting and colour. Buildings, places and vehicles stay the same."
         case .mapStyleMonochromeDay: "Monochrome daylight"

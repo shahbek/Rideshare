@@ -1,6 +1,13 @@
 # Dar diorama scaling — initial audit, 2026-10-06
 
-Status: Geometry v35 adds pool/cemetery corrections, photo-led Sea Cliff and reveal-aware effect submission/cache optimizations to the download-first viewer. Seam-certified city rendering, certified 1-pixel LOD and CDN streaming remain incomplete. This is not a city-scale completion or measured battery report.
+Status: Geometry v36 supersedes the Sea Cliff traced model with photo-composed architecture and adds Settings-only diorama controls plus a driver's-eye camera; v35 pool/cemetery/effect optimizations remain. Seam-certified city rendering, certified 1-pixel LOD and CDN streaming remain incomplete. This is not a city-scale completion or measured battery report.
+
+## V36 photo sculpt and driver-eye integration
+
+- Sea Cliff now uses a dedicated photo-space plan, anchored near −6.73958, 39.28415 and scaled against the mapped envelope. Six masses replace the two clipped extrusions/distance roofs: three-storey spine, return wing, open restaurant galleries, lower wing and garden pavilion. Long ridges/four continuous hip planes, eaves and low-relief tile courses replace recursively tessellated roof surfaces. Full/context use the same composition; context omits room detailing/courses. Floors are capped and restaurant deck is supported; planting clusters leave the central lawn open. Stair/terrace dimensions and hidden elevations remain photo estimates.
+- Native Settings screen replaces Home overlay; enable/preparation and diagnostics remain available. The diorama itself is not disabled. Versioned offline packages require re-preparation, reusing saved sources/basemap; no view-time downloads or generation added.
+- DriverEyeCamera uses Mapbox 11.19 freeCameraOptions, location/altitude and setPitchBearingForPitch, requesting pitch 82° and 2.4 m terrain clearance with maxZoom 25.5 during the session. Restore prior native camera/bounds on toggle-off/loss of driver. Drag exits follow without restoring over the gesture. Own marker is hidden only while active. Ground comes from resident painted triangles (last supporting triangle cached) or native elevation; unavailable heights use an elevated fallback, not a fake sea-level driver position. No separate timer; existing driver interpolation drives updates and tile selection is throttled at 0.5 s rather than perpetually camera-debounced.
+- The current TripCoordinator feed is a demo simulation, not driver GPS. No new simulation route was added. No live image, terrain clearance, SDK clamp, lifecycle or performance result has been established. Continuous driving will cause needed frame work; frozen water and cached unchanged effects remain, but do not imply low power while moving. Simulator build/whitespace validation only; no tests requested/run.
 
 ## V35 reveal analysis and geographic corrections
 

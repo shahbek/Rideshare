@@ -34,7 +34,7 @@ nonisolated enum DioramaMapboxData {
     /// Reserve both the original mapped outline and the authored replacement. A replacement may
     /// deliberately recede a facade or stair passage; that space must not respawn as a second building.
     private static func reservation(_ feature: DioramaBuildingFeature) -> [[DV2]] {
-        [feature.ring, feature.sourceFootprint].filter { $0.count >= 3 }
+        ([feature.ring, feature.sourceFootprint] + feature.footprints).filter { $0.count >= 3 }
     }
 
     static func merge(_ features: [DioramaVectorTile.Feature], into original: DioramaTileData) -> DioramaTileData {

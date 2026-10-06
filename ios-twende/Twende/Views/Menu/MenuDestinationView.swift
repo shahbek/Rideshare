@@ -29,6 +29,7 @@ struct MenuDestinationView: View {
         case .support: SupportView()
         case .settings: SettingsView()
         case .offlineMaps: OfflineMapsView()
+        case .diorama: DioramaSettingsView()
         case .siriGuide: SiriGuideView()
         case .identity: IdentityVerificationView()
         }
