@@ -4,6 +4,40 @@ import Foundation
 /// not by drawing competing lawn/road faces and hoping their depth values win.
 nonisolated struct DioramaGroundCutouts: Sendable {
     private let masks: [(ring: [DV2], bounds: DioramaRect)]
+    private let bins: [SIMD2<Int>: [Int]]
+    private let broadMasks: [Int]
+    private static let binSize = 32.0
+
+    private static func index(_ masks: [(ring: [DV2], bounds: DioramaRect)]) -> ([SIMD2<Int>: [Int]], [Int]) {
+        var bins: [SIMD2<Int>: [Int]] = [:]
+        var broad: [Int] = []
+        for (i, mask) in masks.enumerated() {
+            let b = mask.bounds
+            guard b.minX.isFinite, b.maxX.isFinite, b.minY.isFinite, b.maxY.isFinite,
+                  abs(b.minX) < 1e7, abs(b.maxX) < 1e7, abs(b.minY) < 1e7, abs(b.maxY) < 1e7 else { broad.append(i); continue }
+            let x0 = Int(floor(b.minX / binSize)), x1 = Int(floor(b.maxX / binSize))
+            let y0 = Int(floor(b.minY / binSize)), y1 = Int(floor(b.maxY / binSize))
+            guard x1 >= x0, y1 >= y0, (x1 - x0 + 1) * (y1 - y0 + 1) <= 256 else { broad.append(i); continue }
+            for y in y0...y1 { for x in x0...x1 { bins[SIMD2(x, y), default: []].append(i) } }
+        }
+        return (bins, broad)
+    }
+
+    private func candidates(_ bounds: DioramaRect) -> [(ring: [DV2], bounds: DioramaRect)] {
+        guard bounds.minX.isFinite, bounds.maxX.isFinite, bounds.minY.isFinite, bounds.maxY.isFinite,
+              abs(bounds.minX) < 1e7, abs(bounds.maxX) < 1e7, abs(bounds.minY) < 1e7, abs(bounds.maxY) < 1e7 else {
+            return masks.filter { $0.bounds.intersects(bounds) }
+        }
+        let x0 = Int(floor(bounds.minX / Self.binSize)), x1 = Int(floor(bounds.maxX / Self.binSize))
+        let y0 = Int(floor(bounds.minY / Self.binSize)), y1 = Int(floor(bounds.maxY / Self.binSize))
+        guard x1 >= x0, y1 >= y0, (x1 - x0 + 1) * (y1 - y0 + 1) <= 256 else {
+            return masks.filter { $0.bounds.intersects(bounds) }
+        }
+        var ids = Set(broadMasks)
+        for y in y0...y1 { for x in x0...x1 { ids.formUnion(bins[SIMD2(x, y)] ?? []) } }
+        // Sorting source indices is essential: subtraction order is part of the byte-identity contract.
+        return ids.sorted().compactMap { masks[$0].bounds.intersects(bounds) ? masks[$0] : nil }
+    }
 
     init(data: DioramaTileData, pavementWidth: Double, streetPolygons: [[DV2]]? = nil, additionalMasks: [[DV2]] = [], excludedAreaIDs: Set<UInt64> = []) {
         var polygons: [[DV2]] = data.buildings.flatMap(\.footprints) + additionalMasks
@@ -29,6 +63,7 @@ nonisolated struct DioramaGroundCutouts: Sendable {
         }
         }
         masks = convex.map { ($0, DioramaRect.bounding($0)) }
+        (bins, broadMasks) = Self.index(masks)
     }
 
     /// Geometry-only subtraction for base land, coastline bands and disjoint path joins.
@@ -40,6 +75,7 @@ nonisolated struct DioramaGroundCutouts: Sendable {
                 return (ring: triangle, bounds: DioramaRect.bounding(triangle))
             }
         }
+        (bins, broadMasks) = Self.index(masks)
     }
 
     /// Returns convex pieces outside all occupied footprints, preserving real outline intersections.
@@ -48,10 +84,11 @@ nonisolated struct DioramaGroundCutouts: Sendable {
         let start = audit == nil ? 0 : DioramaGenerationAudit.now
         defer { audit?.operation("cutout.subtract", since: start) }
         let bounds = DioramaRect.bounding(ring)
-        let relevant = masks.filter { $0.bounds.intersects(bounds) }
+        let optimized = audit?.usesCachedCutoutBounds ?? true
+        let relevant = optimized ? candidates(bounds) : masks.filter { $0.bounds.intersects(bounds) }
         let ccw = DioramaPolygon.counterClockwise(ring)
         let initial = DioramaPolygon.triangulate(ccw).map { [ccw[$0.0], ccw[$0.1], ccw[$0.2]] }
-        if audit?.usesCachedCutoutBounds == true {
+        if audit?.usesCachedCutoutBounds ?? true {
             return subtractWithCachedBounds(initial, masks: relevant)
         }
         var pieces = initial

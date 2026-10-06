@@ -1,6 +1,19 @@
 # Dar diorama scaling — initial audit, 2026-10-06
 
-Status: partial implementation, stopped at the visual validation gate. This is not a city-scale completion report.
+Status: V32 architectural instancing, CPU cutout acceleration, lossless disk packages and live diagnostics are implemented and enabled for preview. City ingestion, certified LOD and CDN streaming remain incomplete. This is not a city-scale completion report.
+
+## V32 enabled implementation
+
+- Full-detail prototypes now replace repeated complete window/frame assemblies, water tanks, facade boxes, upright bevelled boxes, tubes/columns/posts, repeated ring bands and scaled reef/detail spheres. Placement records now carry tint and building-relative height grading through the existing Metal main, reflection, G-buffer, glow and shadow paths. Single-use primitives are consolidated back into baked bins rather than creating one draw per unique shape. Prototype full/light buffers share storage when no distinct light mesh exists.
+- Shapes retain their original tessellation. Exact dimension keys are used, not rounded dimensions or quantized vertices. Arbitrarily shaped planks, shoreline courses, rounded wall sweeps and bespoke non-primitive details remain baked; this is not a claim that every possible repeated subshape has been recognized.
+- Live report under **Instancing savings and generation timings** includes placed/prototype counts, removed stored triangles and net vertex/index/instance-buffer MiB by primitive/assembly family. Complete window rows include frames (not double counted). It excludes bin metadata and any extra prototype copy for a different shader category. This is not yet the requested exhaustive per-semantic-category census or recipe generation comparison.
+- CPU cutouts now cache surviving piece bounds and select candidate masks with a 32 m spatial index. Mask ordering, clipping arithmetic and thresholds remain unchanged. Legacy and optimized paths remain selectable in audits. Stage timings are stored on artifacts and shareable from the app; no speedup percentage is assumed.
+- `DioramaTileArchive` writes independent 4 MiB lossless LZFSE blocks, checks SHA-256, format/layout versions and bounded decode/index ranges. Draw bins, groups, labels, lights, ground image and analytic paint are restored. These are buffer blocks, not spatial streaming chunks. `DioramaDiskCache` publishes complete packages, limits storage to 512 MiB and treats corrupt entries as misses; Regenerate invalidates disk and memory. Bundled-only fallback tiles are not persisted, so future online coverage can recover. First generation includes a separately reported package-writing cost; later cold launches can decode rather than regenerate.
+- Rolling telemetry reports main-pass submitted triangles, diorama CPU encoding p50/p95 and shared Mapbox command-buffer GPU p50/p95. GPU figures are explicitly not isolated diorama timings or display FPS, and triangle figures exclude auxiliary passes.
+- Validation: first focused run passed 4 tests (primitive expansion geometry/normals/winding, window/tank reuse and instance layout, runtime Metal compilation, cutout bits). After spatial indexing and storage integration, a second selection passed 2 tests: full bundled tile instancing/archive comparison and clipping bits. The tile comparison uses a 256px albedo to bound serialization-test cost: fewer unique triangles, fewer packed bytes, more placements, **equal full-detail drawn triangle counts**, unchanged albedo, exact restored GPU buffers, compressed size below uncompressed size, and corrupt/wrong-key rejection. This does not verify the live Mapbox input or pixel-identical output. Runner durations (65s and 120s) are not generation timings.
+- Current simulator build and whitespace checks pass. The earlier screenshot capture failure is unresolved; no pixel-certification, device speedup, certified medium/low or 3×3 result is claimed.
+
+The sections below retain the earlier baseline and source inventory; V32 changes above supersede their implementation status.
 
 ## Baseline and validation
 
@@ -12,7 +25,7 @@ Status: partial implementation, stopped at the visual validation gate. This is n
 - `DioramaGenerationAudit` records monotonic generator-stage timing, inclusive cutout/drape timing and per-render-category baked vertex/index bytes. Audits bypass both reads and writes of the interactive tile cache.
 - `DioramaScalingTests/testV31ColdGenerationBaseline`: 1 test passed; runner duration 112 seconds, NOT generation time. Two cold outputs matched SHA-256 fingerprints for geometry, placements, ground image, analytic paint, light buffers, draw metadata and shader source.
 - `testCachedBoundsPreserveClippingOrderAndDoubleBits` and `testCachedCutoutBoundsPreserveFullTilePayload`: 2 tests passed; runner duration 101 seconds, NOT a before/after timing result.
-- Candidate optimization caches the bounding rectangle of surviving cutout pieces instead of recomputing it against every subsequent mask. Clipping arithmetic, thresholds, mask order and piece order are retained. It is available only inside an explicitly opted-in audit; the app still uses the V31 path.
+- Candidate optimization caches the bounding rectangle of surviving cutout pieces instead of recomputing it against every subsequent mask. Clipping arithmetic, thresholds, mask order and piece order are retained. It was originally audit-only; V32 enables it in production with the spatial index described above.
 - Numerical JSON reports are emitted and attached to XCTest results. The managed runner returned aggregate results without these attachments. Its subsequent `/tmp/rork-swift-test-ios-twende.log` path was not present in this workspace. No numerical speedup or hotspot ranking has been inferred.
 - Native fixed-camera test: hotel, white pavilion, Masjid 36 close-ups and dusk waterfront; fixed 320×320-point viewport, native-resolution RGBA comparison without tolerance/resampling, frozen wave clock, unchanged production shaders and effects. It isolates the diorama on a local background style, not changing Mapbox Standard tiles.
 - The capture test compiled after a raw-string delimiter fix, then failed with `InvalidTransition { phase: idle, targetPhase: failed(deinit) }`. It did not establish screenshot equivalence. The exact failing runtime phase is unresolved without its full log.
@@ -35,7 +48,7 @@ All paths in this table are under `Twende/Diorama/`. Counts and MB removable are
 | Seawall courses | `DioramaShorelineGenerator.seawall/sweep` | Continuous terrain-following profile strips, not individual masonry blocks | Unmeasured |
 | Rocks | `DioramaPropLibrary.makeRock`, shoreline placements, `DioramaGroundGenerator.reef` | Shoreline rocks already instanced (80-face full / 20-face light); reef spheres still baked | Unmeasured additional savings |
 
-The existing instance layout contains placement and scale, but no per-instance color/height-attribute payload. Existing transforms support Z rotation and XYZ scale, not arbitrary orientation/shear. A conversion must preserve height grading, tint saturation, normals, winding, bin ownership and all auxiliary passes. Identical mathematical shapes do not imply identical Float-transformed rasterization.
+The V31 instance layout contained placement and scale but no per-instance color/height-attribute payload; V32 adds both. Existing transforms support Z rotation and XYZ scale, not arbitrary orientation/shear. A conversion must preserve height grading, tint saturation, normals, winding, bin ownership and all auxiliary passes. Identical mathematical shapes do not imply identical Float-transformed rasterization.
 
 Instancing reduces unique stored geometry and may reduce draw submission/generation overhead; it does not by itself remove triangles processed for every visible placement. Report prototype bytes + instance bytes + group/index overhead, not only gross removed vertex bytes.
 
@@ -47,7 +60,7 @@ No category-specific recipe serializer or generation-cost comparison has been co
 
 - `DioramaBundledTile.load` reads one Slipway bundle; `DioramaTerrain.load` reads one Slipway DEM. Reusing these as nine different geographic tiles would be incorrect.
 - Mapbox supplementation currently covers buildings, driving roads and POI names, not a general terrain/coast/landuse ingestion system.
-- `DioramaTileManager` shows one fixed z16 tile; `DioramaRenderLayer` owns one origin/ground image/light grid. No multi-tile CDN scheduler, manifest, disk-cache budget or per-bin streaming exists yet.
+- `DioramaTileManager` shows one fixed z16 tile; `DioramaRenderLayer` owns one origin/ground image/light grid. V32 adds a local lossless archive manifest and bounded disk cache. Multi-tile CDN scheduling and per-bin streaming still do not exist.
 - Per-tile 36 m edge easing must not be repeated at every internal city boundary. Neighbor geometry/procedural ownership also needs consistent seams.
 - Existing light prototypes beyond 140 m have no certified projected-error bound; they must not be presented as the requested medium/low bake.
 - No command-line generator bake, error-constrained simplifier, compressed bin format or published tile catalog was added in this pass.
@@ -62,4 +75,4 @@ No category-specific recipe serializer or generation-cost comparison has been co
 | CPU/GPU frame-time distribution | Not measured | Not implemented |
 | Session download bytes, cold/warm cache | Not measured | No CDN streaming |
 
-Next required evidence is a functioning pixel-diff capture gate and accessible benchmark attachments, followed by semantic redundancy measurement. No visual acceptance threshold has been weakened and no savings have been fabricated.
+Remaining work: exhaustive semantic redundancy/recipe measurement; repaired fixed-camera comparisons; city terrain/coast/landuse ingestion with seam ownership; generator-sharing command-line bake; certified 1-pixel medium/low simplification; spatial chunks/CDN publishing and camera-bubble streaming; 3×3 Masaki/device/session measurements. The user authorized direct preview before pixel certification; no measurements are fabricated.

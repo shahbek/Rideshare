@@ -30,7 +30,9 @@ final class DioramaVisualBaselineTests: XCTestCase {
 
     @MainActor
     private func captureFixture(candidate: Bool) async throws -> [Capture] {
-        let config = DioramaConfig.slipway
+        var settings = DioramaConfig.slipway
+        settings.instancesArchitecture = candidate
+        let config = settings
         let data = DioramaMapboxData.resolveOwnership(try XCTUnwrap(DioramaBundledTile.load(config: config)))
         let artifacts = try await Task.detached(priority: .userInitiated) {
             try DioramaGenerationAudit.$current.withValue(DioramaGenerationAudit(usesCachedCutoutBounds: candidate)) {

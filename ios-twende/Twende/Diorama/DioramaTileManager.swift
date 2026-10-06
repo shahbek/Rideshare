@@ -23,6 +23,7 @@ final class DioramaState {
     /// Set after a successful tile load so the panel can report numbers.
     var loadedTiles: [DioramaTileID: DioramaTileArtifacts] = [:]
     var status: String = ""
+    var frameReport: String = "Frame measurements begin after the tile is visible."
     /// Incremented by the debug panel to request a regenerate of the tile.
     var regenerateRequest: Int = 0
     var cameraFlyRequest: Int = 0
@@ -290,6 +291,8 @@ final class DioramaTileManager {
     // MARK: Generation
 
     /// Bundled terrain remains authoritative; one whole Mapbox tile supplements coverage and names.
+    private var bypassDiskOnNextGeneration: Bool = false
+
     private func generate() {
         status = .generating
         state.status = "Generating Slipway…"
@@ -297,14 +300,19 @@ final class DioramaTileManager {
         let revision = generationRevision
         let config = self.config
         let reduced = thermalReduced
+        let bypassDisk = bypassDiskOnNextGeneration
+        bypassDiskOnNextGeneration = false
         let token = MapboxOptions.accessToken
         let offline = UserDefaults.standard.bool(forKey: "maps.downloadedOnly")
         generationTask = Task.detached(priority: .userInitiated) {
             let artifacts: DioramaTileArtifacts?
             let started = Date()
             let tile = DioramaTileID(latitude: config.seedLatitude, longitude: config.seedLongitude, zoom: config.tileZoom)
+            if bypassDisk { await DioramaDiskCache.shared.remove(tile: tile, config: config) }
             if let cached = DioramaTileGenerator.cached(tile, config: config, reduced: reduced) {
                 artifacts = cached
+            } else if let disk = await DioramaDiskCache.shared.read(tile: tile, config: config, reduced: reduced) {
+                artifacts = disk
             } else if let bundled = DioramaBundledTile.load(config: config), !bundled.isEmpty {
                 var data = DioramaMapboxData.resolveOwnership(bundled)
                 if let features = await DioramaMapboxData.load(tile: tile, token: token, offline: offline) {
@@ -316,7 +324,12 @@ final class DioramaTileManager {
                     // even when the diorama was off. Build lazily here, after checking the cache.
                     let library = DioramaPropLibrary(config: config)
                     print("[Diorama timing] bundle + prototypes: \(String(format: "%.3f", Date().timeIntervalSince(started)))s")
-                    artifacts = try DioramaTileGenerator.generate(data, config: config, library: library, reduced: reduced)
+                    var generated = try DioramaTileGenerator.generate(data, config: config, library: library, reduced: reduced)
+                    let encodingStarted = ProcessInfo.processInfo.systemUptime
+                    if let bytes = await DioramaDiskCache.shared.write(generated, config: config, reduced: reduced) {
+                        generated.stageTimings.append("lossless package write: \(String(format: "%.3f", ProcessInfo.processInfo.systemUptime - encodingStarted))s · \(String(format: "%.2f", Double(bytes) / 1_048_576)) MiB on disk")
+                    }
+                    artifacts = generated
                 } catch {
                     print("[Diorama] generate failed: \(error)")
                     artifacts = nil
@@ -342,6 +355,7 @@ final class DioramaTileManager {
     /// Drops the cached geometry and rebuilds it.
     func regenerate() {
         guard let map else { return }
+        bypassDiskOnNextGeneration = true
         generationRevision &+= 1
         generationTask?.cancel(); generationTask = nil
         DioramaTileGenerator.clearCache(for: tile, config: config)
@@ -365,6 +379,12 @@ final class DioramaTileManager {
                 groundRect: DioramaProjection(origin: tile.centre).rect(of: tile), visible: state.visibleCategories, timeOfDay: state.timeOfDay,
                 animates: animates, config: config, labels: artifacts.buildingLabels, displayScale: Float(UIScreen.main.scale)
             )
+            host.onFrameReport = { [weak self, weak host] report in
+                Task { @MainActor [weak self, weak host] in
+                    guard let self, let host, self.renderLayer === host, self.shown else { return }
+                    self.state.frameReport = report
+                }
+            }
             try map.addCustomLayer(withId: layerID, layerHost: host, layerPosition: nil)
             try map.setLayerProperty(for: layerID, property: "slot", value: "middle")
             var source = GeoJSONSource(id: clipSourceID)

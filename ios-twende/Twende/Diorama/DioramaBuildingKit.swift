@@ -99,6 +99,21 @@ nonisolated struct DioramaBuildingKit {
     /// Window unit: deep reveal, recessed dark pane (plus glow when lit), chunky frame, lintel and sill.
     func window(a: DV2, dir: DV2, out: DV2, u: Double, z0: Double, z1: Double, width: Double,
                 hasGrille: Bool, lit: Bool, into mesh: inout DioramaMesh, glow: inout DioramaMesh) {
+        if let registry = mesh.primitiveRegistry, abs(dir.length - 1) < 1e-9,
+           abs(out.length - 1) < 1e-9, abs(dir.dot(out)) < 1e-9 {
+            let sign = dir.cross(out) < 0 ? -1.0 : 1.0
+            let prototype = registry.prototype(kind: "complete windows (incl. frames)", parameters: [width, z1 - z0, detail, sign],
+                flags: [hasGrille ? 1 : 0], doubleSided: mesh.doubleSided) { model in
+                var unusedGlow = DioramaMesh()
+                window(a: .zero, dir: DV2(1, 0), out: DV2(0, sign), u: 0, z0: 0, z1: z1 - z0,
+                       width: width, hasGrille: hasGrille, lit: false, into: &model, glow: &unusedGlow)
+            }
+            mesh.architecturalInstance(prototype, .init(rotation: atan2(dir.y, dir.x), translation: DV3(a + dir * u, z0)))
+            if lit {
+                glow.facadeBox(a: a, dir: dir, out: out, u: u, width: width, z0: z0, z1: z1, depth: -0.18, .windowGlow, sides: false)
+            }
+            return
+        }
         reveal(a: a, dir: dir, out: out, u: u, width: width, z0: z0, z1: z1, into: &mesh)
         mesh.facadeBox(a: a, dir: dir, out: out, u: u, width: width, z0: z0, z1: z1, depth: -0.19, .glass, sides: false)
         if lit {
@@ -210,6 +225,13 @@ nonisolated struct DioramaBuildingKit {
 
     /// Rooftop water tank on a low stand.
     func waterTank(at p: DV2, z0: Double, color: DioramaSwatch, into mesh: inout DioramaMesh) {
+        if let registry = mesh.primitiveRegistry {
+            let prototype = registry.prototype(kind: "complete tanks", parameters: [detail], flags: [color.rawValue], doubleSided: mesh.doubleSided) { model in
+                waterTank(at: .zero, z0: 0, color: color, into: &model)
+            }
+            mesh.architecturalInstance(prototype, .init(translation: DV3(p, z0)))
+            return
+        }
         let radius = 0.62 * detail, height = 1.3 * detail
         mesh.box(centre: p, z0: z0, axis: DV2(1, 0), halfLength: radius * 1.1, halfWidth: radius * 1.1, height: 0.2, .trimWhite, bevel: 0.03)
         let base = DV3(p, z0 + 0.2)

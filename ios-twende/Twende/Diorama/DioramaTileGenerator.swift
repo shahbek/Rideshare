@@ -6,6 +6,8 @@ import simd
 nonisolated struct DioramaInstanceData: Sendable {
     var placement: SIMD4<Float>
     var scale: SIMD4<Float>
+    var tint: SIMD4<Float> = SIMD4(repeating: 1)
+    var grading: SIMD4<Float> = .zero
 
     static let identity = DioramaInstanceData(placement: SIMD4(0, 0, 0, 0), scale: SIMD4(1, 1, 1, 0))
 
@@ -57,6 +59,8 @@ nonisolated struct DioramaTileArtifacts: Sendable {
     let groundImage: DioramaGroundImage?
     var buildingLabels: [DioramaBuildingLabel] = []
     var hasMapboxCoverage: Bool = false
+    var optimizationReport: [String] = []
+    var stageTimings: [String] = []
 
     /// Unique triangles in the buffers (each prototype counted once, not per placement).
     var totalTriangles: Int { indices.count / 3 }
@@ -85,7 +89,7 @@ nonisolated enum DioramaTileGenerator {
     nonisolated(unsafe) private static var cache: [String: DioramaTileArtifacts] = [:]
 
     private static func cacheKey(_ tile: DioramaTileID, config: DioramaConfig, reduced: Bool) -> String {
-        "v\(config.generatorVersion)/\(tile.key)\(reduced ? "-lite" : "")"
+        "v\(config.generatorVersion)/\(tile.key)\(reduced ? "-lite" : "")\(config.instancesArchitecture ? "-instanced" : "-baked")"
     }
 
     static func cached(_ tile: DioramaTileID, config: DioramaConfig, reduced: Bool) -> DioramaTileArtifacts? {
@@ -108,10 +112,12 @@ nonisolated enum DioramaTileGenerator {
         if audit == nil, let cached = cached(data.tile, config: config, reduced: reduced) { return cached }
         let started = Date()
         var checkpoint = DioramaGenerationAudit.now
+        var stageTimings: [String] = []
         func timing(_ stage: String) {
             let now = DioramaGenerationAudit.now
             let seconds = now - checkpoint
             audit?.stage(stage, seconds: seconds)
+            stageTimings.append("\(stage): \(String(format: "%.3f", seconds))s")
             print("[Diorama timing] \(stage): \(String(format: "%.3f", seconds))s")
             checkpoint = now
         }
@@ -134,6 +140,16 @@ nonisolated enum DioramaTileGenerator {
         var propGlow = DioramaMesh()
         var shorelineDebug = DioramaMesh()
         var lights: [DioramaLight] = []
+        let registry = DioramaPrimitiveRegistry(firstID: library.prototypes.count)
+        if config.instancesArchitecture {
+            buildings.primitiveRegistry = registry
+            windowGlow.primitiveRegistry = registry
+            walls.primitiveRegistry = registry
+            ground.primitiveRegistry = registry
+            roadsMesh.primitiveRegistry = registry
+            props.primitiveRegistry = registry
+            propGlow.primitiveRegistry = registry
+        }
 
         let builder = DioramaBuildingGenerator(config: config, roads: roadIndex, terrain: terrain)
         var built: [DioramaBuilt] = []
@@ -189,12 +205,22 @@ nonisolated enum DioramaTileGenerator {
         let lightGrid = DioramaLightGrid.build(lights, rect: data.rect, cells: config.lightGridCells, perCell: config.lightsPerCell)
 
         timing("props + light grid")
+        let uniquePrimitives = Dictionary(uniqueKeysWithValues: registry.entries.filter { $0.placements == 1 }.map { ($0.prototype.id, $0.prototype) })
+        buildings.bakeUniquePrimitives(uniquePrimitives)
+        windowGlow.bakeUniquePrimitives(uniquePrimitives)
+        walls.bakeUniquePrimitives(uniquePrimitives)
+        ground.bakeUniquePrimitives(uniquePrimitives)
+        roadsMesh.bakeUniquePrimitives(uniquePrimitives)
+        props.bakeUniquePrimitives(uniquePrimitives)
+        propGlow.bakeUniquePrimitives(uniquePrimitives)
+        timing("unique primitive consolidation")
         // Order matters: opaque categories first, translucent halos (propGlow) last.
         let meshes: [(DioramaCategory, DioramaMesh)] = [
             (.ground, ground), (.roads, roadsMesh), (.buildings, buildings), (.walls, walls), (.vegetation, vegetation),
             (.props, props), (.water, water), (.windowGlow, windowGlow), (.propGlow, propGlow), (.shorelineDebug, shorelineDebug),
         ]
 
+        let prototypes = library.prototypes + registry.prototypes
         var vertices: [BuildingRenderVertex] = []
         var indices: [UInt32] = []
         var ranges: [DioramaRenderLayer.Range] = []
@@ -263,7 +289,7 @@ nonisolated enum DioramaTileGenerator {
                 return (start, indices.count - start)
             }
             let full = lay(prototype.full)
-            let light = lay(prototype.light)
+            let light = prototype.hasLightVariant ? lay(prototype.light) : full
             let result = (full.0, full.1, light.0, light.1)
             bakedPrototypes[key] = result
             return result
@@ -311,29 +337,56 @@ nonisolated enum DioramaTileGenerator {
             // Instances: one group per prototype, placements binned like triangles so distant groups cull.
             var placements: [Int: [Int: [DioramaInstanceData]]] = [:]
             for placement in mesh.instances {
-                guard placement.prototype < library.prototypes.count else { continue }
+                guard placement.prototype >= 0, placement.prototype < prototypes.count else { continue }
                 let t = placement.transform
                 guard t.translation.x.isFinite, t.translation.y.isFinite, t.translation.z.isFinite else { continue }
-                let prototype = library.prototypes[placement.prototype]
+                let prototype = prototypes[placement.prototype]
                 let radius = Float(prototype.radius * max(t.scale.x, max(t.scale.y, t.scale.z)))
                 let data = DioramaInstanceData(
                     placement: SIMD4(Float(t.translation.x), Float(t.translation.y), Float(t.translation.z), Float(t.rotation)),
-                    scale: SIMD4(Float(t.scale.x), Float(t.scale.y), Float(t.scale.z), radius))
+                    scale: SIMD4(Float(t.scale.x), Float(t.scale.y), Float(t.scale.z), radius),
+                    tint: SIMD4(placement.tint, 1), grading: placement.grading)
                 let bin = Int(floor(t.translation.x / Self.binSize)) + Int(floor(t.translation.y / Self.binSize)) * 10000
                 placements[placement.prototype, default: [:]][bin, default: []].append(data)
             }
             var instanceCount = 0
             for prototypeID in placements.keys.sorted() {
-                let prototype = library.prototypes[prototypeID]
+                let prototype = prototypes[prototypeID]
                 let (fullStart, fullCount, lightStart, lightCount) = prototypeRanges(prototype, category: category)
                 guard let bins = placements[prototypeID] else { continue }
+                let architectural = prototypeID >= library.prototypes.count
+                var prototypeLow = SIMD3<Float>(repeating: .greatestFiniteMagnitude)
+                var prototypeHigh = SIMD3<Float>(repeating: -.greatestFiniteMagnitude)
+                if architectural {
+                    for p in prototype.full.positions {
+                        let v = SIMD3<Float>(Float(p.x), Float(p.y), Float(p.z))
+                        prototypeLow = simd_min(prototypeLow, v)
+                        prototypeHigh = simd_max(prototypeHigh, v)
+                    }
+                }
                 for bin in bins.keys.sorted() {
                     guard let list = bins[bin], !list.isEmpty else { continue }
                     var low = SIMD3<Float>(repeating: .greatestFiniteMagnitude)
                     var high = SIMD3<Float>(repeating: -.greatestFiniteMagnitude)
                     for item in list {
-                        low = simd_min(low, item.centre - SIMD3(repeating: item.radius))
-                        high = simd_max(high, item.centre + SIMD3(repeating: item.radius))
+                        if architectural, prototypeLow.x.isFinite, prototypeLow.x <= prototypeHigh.x {
+                            // A ring band may span a whole building. A radius about its first corner
+                            // grossly inflates shadow/culling bounds; transform its actual box instead.
+                            let c = cos(item.placement.w), s = sin(item.placement.w)
+                            for x in [prototypeLow.x, prototypeHigh.x] {
+                                for y in [prototypeLow.y, prototypeHigh.y] {
+                                    for z in [prototypeLow.z, prototypeHigh.z] {
+                                        let sx = x * item.scale.x, sy = y * item.scale.y
+                                        let p = SIMD3(sx * c - sy * s, sx * s + sy * c, z * item.scale.z) + item.centre
+                                        low = simd_min(low, p - SIMD3(repeating: 2))
+                                        high = simd_max(high, p + SIMD3(repeating: 2))
+                                    }
+                                }
+                            }
+                        } else {
+                            low = simd_min(low, item.centre - SIMD3(repeating: item.radius))
+                            high = simd_max(high, item.centre + SIMD3(repeating: item.radius))
+                        }
                     }
                     groups.append(DioramaInstanceGroup(category: category, fullStart: fullStart, fullCount: fullCount,
                                                        lightStart: lightStart, lightCount: lightCount,
@@ -362,7 +415,8 @@ nonisolated enum DioramaTileGenerator {
             waterHeight: terrain.waterLevel, shorelineReport: DioramaShoreline.report(data.shorelines), generationSeconds: Date().timeIntervalSince(started),
             groundImage: image,
             buildingLabels: DioramaBuildingLabel.makeAll(built, data: data, terrain: terrain, config: config),
-            hasMapboxCoverage: data.hasMapboxCoverage
+            hasMapboxCoverage: data.hasMapboxCoverage,
+            optimizationReport: registry.report, stageTimings: stageTimings
         )
         try Task.checkCancellation()
         if audit == nil {

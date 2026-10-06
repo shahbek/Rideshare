@@ -15,11 +15,13 @@ nonisolated struct DioramaPrototype: Sendable {
     let light: DioramaMesh
     /// Bounding radius in prototype space, for per-instance frustum culling.
     let radius: Double
+    let hasLightVariant: Bool
 
     init(id: Int, full: DioramaMesh, light: DioramaMesh? = nil) {
         self.id = id
         self.full = full
         self.light = light ?? full
+        hasLightVariant = light != nil
         radius = full.positions.reduce(0) { max($0, $1.length) }
     }
 }
@@ -28,6 +30,9 @@ nonisolated struct DioramaPrototype: Sendable {
 nonisolated struct DioramaInstancePlacement: Sendable {
     let prototype: Int
     let transform: DioramaTransform
+    var tint: SIMD3<Float> = SIMD3(repeating: 1)
+    /// Nonzero w enables building-relative height grading; xyz are scale, offset and reserved.
+    var grading: SIMD4<Float> = .zero
 }
 
 /// Merged triangle mesh in local metres (x east, y north, z up). Every vertex points at a swatch of the
@@ -57,6 +62,7 @@ nonisolated struct DioramaMesh: Sendable {
     private(set) var doubleSidedTriangles: [Bool] = []
     /// Set while adding thin surfaces so their triangles are flagged double-sided.
     var doubleSided: Bool = false
+    var primitiveRegistry: DioramaPrimitiveRegistry?
 
     var hasDoubleSidedTriangles: Bool { doubleSidedTriangles.contains(true) }
     /// Added to the z of every vertex appended while set, so generators can build a house at z = 0 and
@@ -78,6 +84,35 @@ nonisolated struct DioramaMesh: Sendable {
         var transform = t
         transform.translation.z += baseZ
         instances.append(DioramaInstancePlacement(prototype: prototype.id, transform: transform))
+    }
+
+    /// Places architectural geometry with the current building tint and local height datum.
+    mutating func architecturalInstance(_ prototype: DioramaPrototype, _ t: DioramaTransform) {
+        var world = t
+        world.translation.z += baseZ
+        let grading = recordsHeight ? SIMD4<Float>(Float(t.scale.z), Float(t.translation.z), 0, 1) : .zero
+        instances.append(DioramaInstancePlacement(prototype: prototype.id, transform: world, tint: tint, grading: grading))
+    }
+
+    /// Unique recipes stay in baked bins rather than creating a draw call for a one-off prototype.
+    mutating func bakeUniquePrimitives(_ unique: [Int: DioramaPrototype]) {
+        let source = instances
+        instances.removeAll(keepingCapacity: true)
+        let savedBase = baseZ, savedTint = tint
+        baseZ = 0
+        defer { baseZ = savedBase; tint = savedTint }
+        for placement in source {
+            guard let prototype = unique[placement.prototype] else { instances.append(placement); continue }
+            let start = positions.count
+            tint = placement.tint
+            append(prototype.full, placement.transform)
+            if placement.grading.w > 0.5 {
+                for i in start..<positions.count {
+                    let local = prototype.full.positions[i - start].z
+                    attributes[i] = Float(local * Double(placement.grading.x) + Double(placement.grading.y)) + Self.heightAttributeOffset
+                }
+            }
+        }
     }
 
     /// Starts a new 16-bit chunk when the next shape would overflow the current one.
@@ -216,6 +251,15 @@ nonisolated struct DioramaMesh: Sendable {
 
     /// Horizontal band standing proud of a ring (floor lines, cornices, plinths). Follows the ring exactly.
     mutating func band(_ ring: [DV2], flags: [Bool]? = nil, offset d: Double, z0: Double, z1: Double, _ s: DioramaSwatch) {
+        if let registry = primitiveRegistry, let origin = ring.first, ring.count >= 3 {
+            let local = ring.map { $0 - origin }
+            let prototype = registry.prototype(kind: "cornice / ring bands", parameters: [d, z1 - z0] + local.flatMap { [$0.x, $0.y] },
+                flags: [s.rawValue] + (flags ?? Array(repeating: false, count: ring.count)).map { $0 ? 1 : 0 }, doubleSided: doubleSided) { model in
+                model.band(local, flags: flags, offset: d, z0: 0, z1: z1 - z0, s)
+            }
+            architecturalInstance(prototype, .init(translation: DV3(origin, z0)))
+            return
+        }
         let n = ring.count
         guard n >= 3, let outer = DioramaPolygon.offset(ring, by: d), outer.count == n else { return }
         for i in 0..<n where !(flags?[i] ?? false) {
@@ -251,6 +295,15 @@ nonisolated struct DioramaMesh: Sendable {
         centre: DV2, z0: Double, axis: DV2 = DV2(1, 0), halfLength: Double, halfWidth: Double, height: Double,
         _ s: DioramaSwatch, top: DioramaSwatch? = nil, ao: Double = 0, bevel: Double = 0, bottom: Bool = false
     ) {
+        if let registry = primitiveRegistry, ao == 0, halfLength > 0, halfWidth > 0, height > 0 {
+            let prototype = registry.prototype(kind: "boxes / rails / bands", parameters: [halfLength, halfWidth, height, bevel],
+                flags: [s.rawValue, (top ?? s).rawValue, bottom ? 1 : 0], doubleSided: doubleSided) { mesh in
+                mesh.box(centre: .zero, z0: 0, halfLength: halfLength, halfWidth: halfWidth, height: height,
+                         s, top: top, bevel: bevel, bottom: bottom)
+            }
+            architecturalInstance(prototype, .init(rotation: atan2(axis.y, axis.x), translation: DV3(centre, z0)))
+            return
+        }
         let rect = DioramaOrientedRect(centre: centre, axis: axis.normalized, halfLength: halfLength, halfWidth: halfWidth)
         let z1 = z0 + height
         let lid = top ?? s
@@ -278,6 +331,17 @@ nonisolated struct DioramaMesh: Sendable {
     /// Thin box standing proud of a facade. `out` is the facade's outward normal.
     mutating func facadeBox(a: DV2, dir: DV2, out: DV2, u: Double, width: Double, z0: Double, z1: Double, depth: Double,
                             _ s: DioramaSwatch, dark: Bool = false, sides: Bool = true) {
+        if let registry = primitiveRegistry, width > 0, z1 > z0,
+           abs(dir.length - 1) < 1e-9, abs(out.length - 1) < 1e-9, abs(dir.dot(out)) < 1e-9 {
+            let sign = dir.cross(out) < 0 ? -1.0 : 1.0
+            let prototype = registry.prototype(kind: "windows / frames", parameters: [width, z1 - z0, depth, sign],
+                flags: [s.rawValue, dark ? 1 : 0, sides ? 1 : 0], doubleSided: doubleSided) { mesh in
+                mesh.facadeBox(a: .zero, dir: DV2(1, 0), out: DV2(0, sign), u: 0, width: width,
+                               z0: 0, z1: z1 - z0, depth: depth, s, dark: dark, sides: sides)
+            }
+            architecturalInstance(prototype, .init(rotation: atan2(dir.y, dir.x), translation: DV3(a + dir * u, z0)))
+            return
+        }
         let l = a + dir * (u - width / 2), r = a + dir * (u + width / 2)
         let lf = l + out * depth, rf = r + out * depth
         quad(DV3(lf, z0), DV3(rf, z0), DV3(rf, z1), DV3(lf, z1), s, dark: dark, normal: DV3(out, 0))
@@ -292,6 +356,15 @@ nonisolated struct DioramaMesh: Sendable {
 
     /// Tapered tube between two points with smooth radial normals; optional lid at the far end.
     mutating func tube(from p0: DV3, to p1: DV3, r0: Double, r1: Double, sides: Int, _ s: DioramaSwatch, cap: Bool = true, dark: Bool = false) {
+        if let registry = primitiveRegistry, (p1 - p0).length > 1e-6, r0 > 0, r1 >= 0 {
+            let delta = p1 - p0
+            let prototype = registry.prototype(kind: "tubes / columns / posts", parameters: [delta.x, delta.y, delta.z, r0, r1],
+                flags: [sides, s.rawValue, cap ? 1 : 0, dark ? 1 : 0], doubleSided: doubleSided) { mesh in
+                mesh.tube(from: DV3(0, 0, 0), to: delta, r0: r0, r1: r1, sides: sides, s, cap: cap, dark: dark)
+            }
+            architecturalInstance(prototype, .init(translation: p0))
+            return
+        }
         let axis = (p1 - p0).normalized
         let helper = abs(axis.z) < 0.9 ? DV3.up : DV3(1, 0, 0)
         let u = axis.cross(helper).normalized
@@ -335,6 +408,13 @@ nonisolated struct DioramaMesh: Sendable {
     /// Smooth ellipsoid: distant stand-ins use 20 faces (detail -1), small details 80, visible
     /// rounded forms 320.
     mutating func sphere(centre: DV3, radii: DV3, _ s: DioramaSwatch, detail: Int = 1) {
+        if let registry = primitiveRegistry, radii.x >= 1e-4, radii.y >= 1e-4, radii.z >= 1e-4 {
+            let prototype = registry.prototype(kind: "spheres / reef", parameters: [], flags: [s.rawValue, detail], doubleSided: doubleSided) { mesh in
+                mesh.sphere(centre: DV3(0, 0, 0), radii: DV3(1, 1, 1), s, detail: detail)
+            }
+            architecturalInstance(prototype, .init(scale: radii, translation: centre))
+            return
+        }
         let shape = detail >= 1 ? DioramaIcosphere.level2 : (detail == 0 ? DioramaIcosphere.level1 : DioramaIcosphere.level0)
         reserve(shape.vertices.count)
         let uv = DioramaAtlas.uv(s, dark: false)
@@ -422,7 +502,7 @@ nonisolated struct DioramaMesh: Sendable {
                 rotation: inner.rotation + t.rotation,
                 scale: DV3(inner.scale.x * t.scale.x, inner.scale.y * t.scale.y, inner.scale.z * t.scale.z),
                 translation: DV3(x * c - y * s + t.translation.x, x * s + y * c + t.translation.y, inner.translation.z * t.scale.z + t.translation.z + baseZ))
-            instances.append(DioramaInstancePlacement(prototype: placement.prototype, transform: composed))
+            instances.append(DioramaInstancePlacement(prototype: placement.prototype, transform: composed, tint: placement.tint * tint, grading: placement.grading))
         }
     }
 }

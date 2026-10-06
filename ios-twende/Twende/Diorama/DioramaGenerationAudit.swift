@@ -24,7 +24,7 @@ nonisolated final class DioramaGenerationAudit: @unchecked Sendable {
         let geometry: [Geometry]
     }
 
-    /// Candidate CPU optimization stays audit-only until visual and timing gates pass.
+    /// Explicit audit override compares the legacy and optimized CPU paths; production uses caching.
     let usesCachedCutoutBounds: Bool
 
     init(usesCachedCutoutBounds: Bool = false) {

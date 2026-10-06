@@ -87,6 +87,8 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
     private var labelsReady: Bool = false
     private var acceptedLabels: Set<UInt64> = []
     var onLabelsChanged: (@Sendable (Set<UInt64>) -> Void)?
+    var onFrameReport: (@Sendable (String) -> Void)?
+    private let frameMetrics = DioramaFrameMetrics()
 
     private func publishLabels(_ ids: Set<UInt64>) {
         lock.lock()
@@ -268,12 +270,13 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
         let wireframe = self.wireframe
         let reveal = self.reveal
         lock.unlock()
+        let encodeStarted = CACurrentMediaTime()
         let glowOn = timeOfDay.showsLights
         let drawn = ranges.filter { range in
             guard range.count > 0, visible.contains(range.category) else { return false }
             return range.category.isEmissive ? glowOn : true
         }
-        guard !drawn.isEmpty else { publishLabels([]); return }
+        guard !drawn.isEmpty || groups.contains(where: { visible.contains($0.category) && (!$0.category.isEmissive || glowOn) }) else { publishLabels([]); return }
 
         var projection = matrix_identity_double4x4
         for column in 0..<4 {
@@ -448,6 +451,17 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
         } else { labelIDs = [] }
         publishLabels(labelIDs)
         encoder.endEncoding()
+        let triangles = mainRanges.reduce(0) { $0 + $1.count / 3 } + drawnGroups.reduce(0) { count, group in
+            let far = simd_distance((group.minimum + group.maximum) * 0.5, eye) > lodDistance && group.lightCount > 0
+            return count + (far ? group.lightCount : group.fullCount) / 3 * group.instances.count
+        }
+        let cpuMS = (CACurrentMediaTime() - encodeStarted) * 1000
+        let metrics = frameMetrics
+        let callback = onFrameReport
+        mtlCommandBuffer.addCompletedHandler { command in
+            let gpuMS = command.gpuEndTime > command.gpuStartTime ? (command.gpuEndTime - command.gpuStartTime) * 1000 : nil
+            if let report = metrics.record(triangles: triangles, cpuMS: cpuMS, gpuMS: gpuMS) { callback?(report) }
+        }
     }
 
     func renderingWillEnd() {

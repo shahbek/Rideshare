@@ -151,6 +151,8 @@ nonisolated enum DioramaShaderSource {
     struct DioramaInstance {
         float4 placement;
         float4 scale;
+        float4 tint;
+        float4 grading;
     };
 
     struct DioramaVarying {
@@ -224,6 +226,10 @@ nonisolated enum DioramaShaderSource {
                                                  const device DioramaInstance *instances [[buffer(3)]]) {
         DioramaInput v = vertices[id];
         DioramaInstance inst = instances[instanceID];
+        v.color.rgb = min(v.color.rgb * inst.tint.rgb, float3(1.0));
+        if (inst.grading.w > 0.5) {
+            v.appearance.z = (v.position.z * inst.grading.x + inst.grading.y) + 100.0;
+        }
         return dioramaShade(v, dioramaPlace(v.position.xyz, inst), dioramaPlaceNormal(v.normal.xyz, inst), matrix, u);
     }
 

@@ -88,6 +88,16 @@ struct DioramaDebugPanel: View {
                             .fixedSize(horizontal: false, vertical: true)
                     }
                     .font(TwendeFont.label)
+                    DisclosureGroup("Instancing savings and generation timings") {
+                        Text(optimizationSummary)
+                            .font(TwendeFont.label).foregroundStyle(TwendeColor.inkSecondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .textSelection(.enabled)
+                        ShareLink(item: summary + "\n\n" + optimizationSummary) {
+                            Label("Share performance report", systemImage: "square.and.arrow.up")
+                        }
+                    }
+                    .font(TwendeFont.label)
                     Text(summary)
                         .font(TwendeFont.label)
                         .foregroundStyle(TwendeColor.inkSecondary)
@@ -111,6 +121,13 @@ struct DioramaDebugPanel: View {
         }
         .toggleStyle(.button)
         .tint(TwendeColor.primary)
+    }
+
+    private var optimizationSummary: String {
+        ([state.frameReport] + state.loadedTiles.sorted { $0.key.key < $1.key.key }.flatMap { _, artifacts in
+            ["Measured packed-buffer savings (not fewer drawn triangles):"] + artifacts.optimizationReport
+                + ["Generation stages:"] + artifacts.stageTimings
+        }).joined(separator: "\n")
     }
 
     private var summary: String {

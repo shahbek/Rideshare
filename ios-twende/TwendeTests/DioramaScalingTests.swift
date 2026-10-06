@@ -18,7 +18,8 @@ final class DioramaScalingTests: XCTestCase {
 
     @MainActor
     private func compareColdGeneration(candidate: Bool) throws {
-        let config = DioramaConfig.slipway
+        var config = DioramaConfig.slipway
+        config.instancesArchitecture = false
         let bundled = try XCTUnwrap(DioramaBundledTile.load(config: config))
         let data = DioramaMapboxData.resolveOwnership(bundled)
         var reference: [String: String]?
@@ -83,7 +84,9 @@ final class DioramaScalingTests: XCTestCase {
             pieces.map { $0.flatMap { [$0.x.bitPattern, $0.y.bitPattern] } }
         }
         for ring in subjects {
-            let reference = cutouts.subtract(from: ring)
+            let reference = DioramaGenerationAudit.$current.withValue(DioramaGenerationAudit(usesCachedCutoutBounds: false)) {
+                cutouts.subtract(from: ring)
+            }
             let candidate = DioramaGenerationAudit.$current.withValue(DioramaGenerationAudit(usesCachedCutoutBounds: true)) {
                 cutouts.subtract(from: ring)
             }
