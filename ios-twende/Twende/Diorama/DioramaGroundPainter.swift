@@ -6,6 +6,7 @@ import Foundation
 nonisolated struct DioramaGroundImage: Sendable {
     let size: Int
     let rgba: [UInt8]
+    var paint: DioramaVectorPaint = .init()
 }
 
 /// Paints every flat finish of the tile (roads, pavements, lane paint, crossings, lawns, paving, sand,
@@ -23,6 +24,16 @@ nonisolated final class DioramaGroundPainter {
     private let color: CGContext
     private let material: CGContext
     private let config: DioramaConfig
+    private var paintRings: [(ring: [DV2], color: SIMD4<Float>)] = []
+
+    private func isVectorPaint(_ swatch: DioramaSwatch) -> Bool {
+        swatch == .marking || swatch == .crossing || swatch == .signYellow
+    }
+
+    private func record(_ ring: [DV2], _ swatch: DioramaSwatch) {
+        guard ring.count >= 3 else { return }
+        paintRings.append((ring, DioramaAtlas.color(swatch, dark: false, config: config)))
+    }
 
     init?(rect: DioramaRect, size: Int, config: DioramaConfig) {
         guard rect.width > 0, rect.height > 0, size >= 64,
@@ -94,6 +105,7 @@ nonisolated final class DioramaGroundPainter {
 
     /// Fills an outer ring with holes (even-odd), or several disjoint rings at once.
     func fill(_ rings: [[DV2]], _ swatch: DioramaSwatch) {
+        if isVectorPaint(swatch) { for ring in rings { record(ring, swatch) }; return }
         guard let path = Self.path(rings) else { return }
         set(swatch, stroke: false)
         for context in [color, material] {
@@ -121,6 +133,34 @@ nonisolated final class DioramaGroundPainter {
     /// Strokes a polyline with a width in metres; optional dash pattern (also metres).
     func stroke(_ line: [DV2], width: Double, _ swatch: DioramaSwatch, dashes: [Double]? = nil, phase: Double = 0, cap: CGLineCap = .round) {
         guard line.count >= 2, width > 0 else { return }
+        if isVectorPaint(swatch) {
+            let clean = DioramaLinearGeometry.simplified(line)
+            let dash = dashes?.filter { $0 > 0 } ?? []
+            let period = dash.reduce(0, +)
+            var station = 0.0
+            for (a, b) in zip(clean, clean.dropFirst()) {
+                let length = a.distance(to: b), dir = (b - a).normalized
+                var d = 0.0
+                while d < length - 0.00001 {
+                    var run = length - d
+                    var visible = true
+                    if period > 0 {
+                        var t = (station + d + phase).truncatingRemainder(dividingBy: period)
+                        if t < 0 { t += period }
+                        var index = 0
+                        while index < dash.count - 1 && t >= dash[index] { t -= dash[index]; index += 1 }
+                        run = min(run, max(0.00001, dash[index] - t)); visible = index % 2 == 0
+                    }
+                    if visible {
+                        let p = a + dir * d, q = a + dir * (d + run), n = dir.right * (width / 2)
+                        record([p - n, p + n, q + n, q - n], swatch)
+                    }
+                    d += run
+                }
+                station += length
+            }
+            return
+        }
         let path = CGMutablePath()
         path.move(to: CGPoint(x: line[0].x, y: line[0].y))
         for p in line.dropFirst() { path.addLine(to: CGPoint(x: p.x, y: p.y)) }
@@ -157,6 +197,6 @@ nonisolated final class DioramaGroundPainter {
         if let materialData = material.data?.assumingMemoryBound(to: UInt8.self) {
             for i in 0..<count { rgba[i * 4 + 3] = materialData[i] }
         }
-        return DioramaGroundImage(size: size, rgba: rgba)
+        return DioramaGroundImage(size: size, rgba: rgba, paint: DioramaVectorPaint(rings: paintRings, rect: rect))
     }
 }

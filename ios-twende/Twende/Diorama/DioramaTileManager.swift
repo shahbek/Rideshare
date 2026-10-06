@@ -85,7 +85,16 @@ final class DioramaTileManager {
     private var revealClock: Timer? = nil
     private var revealStarted: CFTimeInterval? = nil
     private var revealRequested: CFTimeInterval = 0
-    private var labelMaskCount: Int = -1
+    private var labelMaskIDs: Set<UInt64> = []
+    private var acceptedLabelIDs: Set<UInt64> = []
+    private var isRetracting: Bool = false
+    private var currentExtent: Double = 0.8
+    private var transitionFrom: Double = 0.8
+    private var retractionCompletion: (() -> Void)?
+    private var fullExtent: Double {
+        let rect = DioramaProjection(origin: tile.centre).rect(of: tile)
+        return max(rect.width, rect.height) * 0.5 + 12
+    }
     private var labelClipID: String { layerID + "-label-clip" }
     private var labelSourceID: String { layerID + "-label-mask" }
 
@@ -166,12 +175,16 @@ final class DioramaTileManager {
         shown = false
         revealClock?.invalidate()
         revealClock = nil
+        isRetracting = false
+        let completion = retractionCompletion
+        retractionCompletion = nil
         updateWaterClock()
         renderLayer = nil
         basemapTerrainSuppressed = false
         appliedCategories = []
         appliedTimeOfDay = nil
         appliedDebug = false
+        completion?()
     }
 
     func remove() {
@@ -222,11 +235,12 @@ final class DioramaTileManager {
     /// Shows the tile while the camera is near it and zoomed in; hides it otherwise.
     func update() {
         guard installed, let map else { return }
+        guard retractionCompletion == nil else { return }
         applyCategoryVisibility()
         applyDebug()
 
         if state.isBasemapOnly {
-            if shown { hide(on: map) }
+            if shown { beginRetraction() }
             state.status = "Basemap-only comparison · custom shoreline hidden"
             return
         }
@@ -234,12 +248,12 @@ final class DioramaTileManager {
         let centreTile = DioramaTileID(latitude: camera.center.latitude, longitude: camera.center.longitude, zoom: config.tileZoom)
         let near = abs(centreTile.x - tile.x) <= config.visibilityRadiusTiles && abs(centreTile.y - tile.y) <= config.visibilityRadiusTiles
         guard near else {
-            hide(on: map)
+            beginRetraction()
             state.status = "Fly to Slipway to see the diorama"
             return
         }
         guard camera.zoom >= config.minimumZoom else {
-            hide(on: map)
+            beginRetraction()
             state.status = "Zoom in to \(Int(config.minimumZoom)) to build the diorama"
             return
         }
@@ -250,6 +264,7 @@ final class DioramaTileManager {
             state.status = "Generating Slipway…"
         case .loaded(let artifacts):
             if !shown { show(artifacts, on: map) }
+            else if isRetracting { beginReveal(fromCurrent: true) }
         case .failed:
             state.status = "Diorama generation failed"
         }
@@ -351,7 +366,14 @@ final class DioramaTileManager {
             labelClip.clipLayerScope = .constant(["basemap"])
             labelClip.clipLayerTypes = .constant([.symbol])
             try map.addLayer(labelClip)
-            labelMaskCount = -1
+            labelMaskIDs = []; acceptedLabelIDs = []
+            host.onLabelsChanged = { [weak self, weak host] ids in
+                Task { @MainActor in
+                    guard let self, let host, self.renderLayer === host else { return }
+                    self.acceptedLabelIDs = ids
+                    self.updateLabelMask()
+                }
+            }
             renderLayer = host
             shown = true
             beginReveal()
@@ -376,23 +398,63 @@ final class DioramaTileManager {
         for id in [labelClipID, clipLayerID, layerID] where map.layerExists(withId: id) { try? map.removeLayer(withId: id) }
         if map.sourceExists(withId: clipSourceID) { try? map.removeSource(withId: clipSourceID) }
         if map.sourceExists(withId: labelSourceID) { try? map.removeSource(withId: labelSourceID) }
-        labelMaskCount = -1
+        labelMaskIDs = []; acceptedLabelIDs = []
         renderLayer = nil
         appliedWireframe = nil
         shown = false
+        isRetracting = false
         suppressBasemapTerrain(false)
         updateWaterClock()
+        let completion = retractionCompletion
+        retractionCompletion = nil
+        completion?()
     }
 
     /// One finite 30 Hz reveal, including cached tiles and explicit focus requests.
-    private func beginReveal() {
+    private func beginReveal(fromCurrent: Bool = false) {
+        isRetracting = false
+        transitionFrom = fromCurrent ? currentExtent : 0.8
+        currentExtent = transitionFrom
         revealClock?.invalidate()
         revealClock = nil
         guard shown, let renderLayer else { return }
         revealStarted = nil
         revealRequested = CACurrentMediaTime()
-        renderLayer.setReveal(SIMD4(0, 0, 0.8, 1))
-        setRevealClip(halfExtent: 0.8)
+        renderLayer.setReveal(SIMD4(0, 0, Float(currentExtent), 1))
+        setRevealClip(halfExtent: currentExtent)
+        let timer = Timer(timeInterval: 1.0 / 30, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.advanceReveal() }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        revealClock = timer
+        map?.triggerRepaint()
+    }
+
+    /// Keep this manager alive until the reverse square reaches zero, including settings-off.
+    func retract(completion: @escaping () -> Void) {
+        guard retractionCompletion == nil else { return }
+        retractionCompletion = completion
+        if shown { beginRetraction() }
+        else { retractionCompletion = nil; completion() }
+    }
+
+    func cancelRetraction() {
+        guard retractionCompletion != nil else { return }
+        retractionCompletion = nil
+        if isRetracting { beginReveal(fromCurrent: true) }
+    }
+
+    private func beginRetraction() {
+        guard shown, !isRetracting else { return }
+        guard !UIAccessibility.isReduceMotionEnabled, !reducesEffects, UIApplication.shared.applicationState == .active,
+              renderLayer?.diagnostic.hasPrefix("ready") == true else {
+            if let map { hide(on: map) }; return
+        }
+        revealClock?.invalidate()
+        isRetracting = true
+        transitionFrom = currentExtent
+        revealStarted = CACurrentMediaTime()
+        revealRequested = revealStarted ?? 0
         let timer = Timer(timeInterval: 1.0 / 30, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.advanceReveal() }
         }
@@ -416,10 +478,14 @@ final class DioramaTileManager {
         }
         if revealStarted == nil { revealStarted = now }
         let progress = finish ? 1 : min(1, max(0, (now - (revealStarted ?? now)) / 1.8))
-        let rect = DioramaProjection(origin: tile.centre).rect(of: tile)
-        let extent = 0.8 + (max(rect.width, rect.height) * 0.5 + 12) * (progress * progress * (3 - 2 * progress))
-        renderLayer.setReveal(progress >= 1 ? .zero : SIMD4(0, 0, Float(extent), 1))
-        setRevealClip(halfExtent: progress >= 1 ? nil : extent)
+        let eased = progress * progress * (3 - 2 * progress)
+        currentExtent = transitionFrom + ((isRetracting ? 0 : fullExtent) - transitionFrom) * eased
+        if isRetracting, progress >= 1 {
+            if let map { hide(on: map); map.triggerRepaint() }
+            return
+        }
+        renderLayer.setReveal(progress >= 1 ? .zero : SIMD4(0, 0, Float(currentExtent), 1))
+        setRevealClip(halfExtent: progress >= 1 ? nil : max(0.001, currentExtent))
         map?.triggerRepaint()
         if progress >= 1 { revealClock?.invalidate(); revealClock = nil }
     }
@@ -439,14 +505,21 @@ final class DioramaTileManager {
             }
         } else { coordinates = tile.outline }
         map.updateGeoJSONSource(withId: clipSourceID, geoJSON: .geometry(.polygon(Polygon([coordinates]))))
+        updateLabelMask()
+    }
+
+    private func updateLabelMask() {
+        guard let map else { return }
+        let projection = DioramaProjection(origin: tile.centre)
         if case .loaded(let artifacts) = status, map.sourceExists(withId: labelSourceID) {
             let labels = artifacts.buildingLabels.filter { label in
                 guard renderLayer?.hasCustomLabels == true, state.visibleCategories.contains(.buildings), !state.showsWireframe else { return false }
-                guard let extent = halfExtent else { return true }
-                return max(abs(Double(label.anchor.x)), abs(Double(label.anchor.y))) + 3 <= extent
+                guard acceptedLabelIDs.contains(label.id), !label.footprint.isEmpty else { return false }
+                return max(abs(Double(label.anchor.x)), abs(Double(label.anchor.y))) + 3 <= currentExtent
             }
-            if labelMaskCount != labels.count {
-                labelMaskCount = labels.count
+            let ids = Set(labels.map(\.id))
+            if labelMaskIDs != ids {
+                labelMaskIDs = ids
                 let features = labels.map { label in
                     let ring = (label.footprint + [label.footprint[0]]).map { p in
                         let c = projection.coordinate(p)

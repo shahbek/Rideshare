@@ -45,6 +45,8 @@ nonisolated struct DioramaAmenityGenerator {
             // inferred 8 m slab across its entire 65 m line and invent offshore sidewalls.
             case "slipway": break
             case "steps":
+                // Remove only the two rejected pale hotel flights; the clay courtyard stair is authored separately.
+                guard ![UInt64(1_128_219_564), 1_128_219_566].contains(path.sourceID ?? path.id) else { continue }
                 let stairRing = DioramaHotelGrounds.stairOutline(data: data)
                 if !path.line.contains(where: { DioramaPolygon.contains(stairRing, $0) || DioramaPolygon.distanceToRing(stairRing, $0) < 2 }) {
                     steps(path.line, ground: &ground)
@@ -238,53 +240,9 @@ nonisolated struct DioramaAmenityGenerator {
 
     private func fuelStation(_ ring: [DV2], areaID: UInt64, rng: inout DioramaRandom, ground: inout DioramaMesh, props: inout DioramaMesh, glow: inout DioramaMesh, lights: inout [DioramaLight]) {
         let base = terrain.foundationHeight(ring)
-        ownedSlab(ring, areaID: areaID, top: base + 0.1, side: .kerb, finish: .concrete, ground: &ground)
-        let box = DioramaPolygon.minimumAreaRectangle(ring)
-        let top = base + 0.1
-        // Canopy over the pump island, clear of any building on the plot.
-        var canopyCentre = box.centre
-        let blockers = buildings.filter { DioramaPolygon.contains(ring, $0.feature.centroid) }
-        if let shop = blockers.first {
-            let away = (box.centre - shop.feature.centroid).normalized
-            canopyCentre = shop.feature.centroid + away * (max(shop.box.halfLength, shop.box.halfWidth) + 7)
-            if !DioramaPolygon.contains(ring, canopyCentre) { canopyCentre = box.centre }
-        }
-        let canopy = DioramaOrientedRect(centre: canopyCentre, axis: box.axis, halfLength: min(box.halfLength * 0.55, 9), halfWidth: min(box.halfWidth * 0.5, 6))
-        let h = 5.2
-        props.box(centre: canopy.centre, z0: top + h, axis: canopy.axis, halfLength: canopy.halfLength, halfWidth: canopy.halfWidth, height: 0.7, .trimWhite, top: .roofConcrete, bevel: 0.1, bottom: true)
-        props.box(centre: canopy.centre, z0: top + h + 0.1, axis: canopy.axis, halfLength: canopy.halfLength + 0.05, halfWidth: canopy.halfWidth + 0.05, height: 0.3, .signRed, bottom: true)
-        glow.box(centre: canopy.centre, z0: top + h - 0.03, axis: canopy.axis, halfLength: canopy.halfLength - 0.6, halfWidth: canopy.halfWidth - 0.6, height: 0.02, .lampGlow, bottom: true)
-        for s in [-1.0, 1.0] {
-            let col = canopy.centre + canopy.axis * (s * (canopy.halfLength - 1.2))
-            props.box(centre: col, z0: top, axis: canopy.axis, halfLength: 0.3, halfWidth: 0.3, height: h, .trimWhite, bevel: 0.05)
-        }
-        // Pump island: raised kerb, pumps, a car filling up.
-        let island = DioramaOrientedRect(centre: canopy.centre, axis: canopy.axis, halfLength: canopy.halfLength - 2.0, halfWidth: 0.7)
-        ground.extrude(island.corners, z0: top, z1: top + 0.18, .kerb, top: .concrete)
-        let pumps = max(Int(island.halfLength / 2.6), 1)
-        for k in 0..<pumps {
-            let u = -island.halfLength + island.halfLength * 2 * (Double(k) + 0.5) / Double(pumps)
-            let p = island.centre + island.axis * u
-            props.box(centre: p, z0: top + 0.18, axis: island.axis, halfLength: 0.5, halfWidth: 0.3, height: 1.7, .trimWhite, top: .signRed, bevel: 0.04)
-            props.box(centre: p, z0: top + 0.9, axis: island.axis, halfLength: 0.52, halfWidth: 0.32, height: 0.35, .signRed)
-            props.box(centre: p, z0: top + 1.3, axis: island.axis, halfLength: 0.4, halfWidth: 0.33, height: 0.25, .glass)
-        }
-        if lights.count < config.maxLights {
-            lights.append(DioramaLight(position: DV3(canopy.centre, top + h - 0.2), color: SIMD3<Float>(1.0, 0.95, 0.82), radius: 14, intensity: 1.1))
-        }
-        let car = island.centre + island.across * 2.2
-        props.instance(rng.pick(library.cars), DioramaTransform(rotation: island.axis.angle, translation: DV3(car, top)))
-        // Price totem by the road.
-        if let road = roads.nearest(to: box.centre, within: 60) {
-            let toRoad = (road.point - box.centre).normalized
-            var totem = box.centre + toRoad * (max(box.halfLength, box.halfWidth) - 1.5)
-            if !DioramaPolygon.contains(ring, totem) { totem = box.centre + toRoad * 3 }
-            if DioramaPolygon.contains(ring, totem), !roads.isOnCarriageway(totem, margin: 1) {
-                props.box(centre: totem, z0: top, axis: road.direction, halfLength: 0.9, halfWidth: 0.25, height: 5.5, .trimWhite, bevel: 0.05)
-                props.box(centre: totem, z0: top + 4.0, axis: road.direction, halfLength: 0.95, halfWidth: 0.28, height: 1.4, .signRed)
-                glow.box(centre: totem, z0: top + 2.4, axis: road.direction, halfLength: 0.8, halfWidth: 0.3, height: 1.4, .shopGlow)
-            }
-        }
+        let pieces = ownedSlab(ring, areaID: areaID, top: base + 0.1, side: .kerb, finish: .concrete, ground: &ground)
+        DioramaFuelStation(config: config, terrain: terrain, roads: roads, library: library)
+            .build(ring: ring, pieces: pieces, top: base + 0.1, rng: &rng, props: &props, glow: &glow, lights: &lights)
     }
 
     // MARK: Pools and terraces
@@ -429,11 +387,7 @@ nonisolated struct DioramaAmenityGenerator {
     /// Wooden pier on piles over the bay with a railing.
     private func pier(_ line: [DV2], props: inout DioramaMesh) {
         guard line.count >= 2 else { return }
-        let endpoints = [line[0], line[line.count - 1]]
-        let dry = DioramaPolygon.densify(line, maxStep: 1).filter { !isWater($0) }
-        let dryTop = dry.map { terrain.height($0) + 0.18 }.max() ?? terrain.pierLevel
-        let deck = max(connectedBuildingLevel(near: endpoints, within: 30) ?? terrain.pierLevel,
-                       max(dryTop, terrain.pierLevel))
+        let deck = terrain.pierHeight(line)
         let half = 1.8
         // Orient from shore to sea regardless of the source way's ordering.
         let shoreFirst = terrain.height(line[0]) >= terrain.height(line[line.count - 1])

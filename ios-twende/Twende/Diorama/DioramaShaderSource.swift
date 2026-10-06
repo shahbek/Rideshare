@@ -93,8 +93,7 @@ nonisolated enum DioramaLighting {
 ///   0 solid lit surface · 1 water · 4 emissive (lit windows, lanterns) · 5 camera-facing halo sprite.
 /// Lighting is a hemisphere sky term, one directional sun and point lights looked up through a 2D grid,
 /// so street lamps and lit facades really pool light on the pavement and walls beside them.
-/// Bay water has distance-based colour, quiet broken foam and translucent shallows. Literal scene
-/// reflections are deliberately disabled to avoid sharp umbrella/building ghosts.
+/// Bay water combines translucent shallows with softened, ripple-distorted planar scene reflections.
 nonisolated enum DioramaShaderSource {
     static let source: String = """
     #include <metal_stdlib>
@@ -305,12 +304,17 @@ nonisolated enum DioramaShaderSource {
         return sum;
     }
 
+    struct DioramaPaintTriangle { float4 edge0; float4 edge1; float4 edge2; float4 color; };
+
     fragment float4 dioramaFragment(DioramaVarying in [[stage_in]],
                                     bool isFront [[front_facing]],
                                     constant DioramaUniforms &u [[buffer(0)]],
                                     const device DioramaLight *lights [[buffer(1)]],
                                     const device uint2 *lightTable [[buffer(2)]],
                                     const device uint *lightIndices [[buffer(3)]],
+                                    const device DioramaPaintTriangle *paint [[buffer(4)]],
+                                    const device uint2 *paintTable [[buffer(5)]],
+                                    const device uint *paintIndices [[buffer(6)]],
                                     texture2d<float> reflection [[texture(0)]],
                                     depth2d<float> shadowMap [[texture(1)]],
                                     texture2d<float> groundImage [[texture(2)]],
@@ -372,6 +376,25 @@ nonisolated enum DioramaShaderSource {
             // Codes are categorical: interpolating white paint (0) into asphalt (3) invents
             // grass (1), incorrectly applying coastal pigment inside road markings.
             tex = floor(groundImage.sample(materialSampler, guv, level(0.0)).a * 255.0 / 32.0 + 0.5);
+            // Resolution-independent lane paint, spatially indexed into 64×64 cells.
+            // Only asphalt receives it: later water/natural paint still owns the coastline.
+            if (tex > 2.5 && tex < 3.5) {
+                int2 cell = clamp(int2((wp - u.groundImage.xy) * u.groundImage.zw * 64.0), int2(0), int2(63));
+                uint2 entry = paintTable[cell.y * 64 + cell.x];
+                float aa = max(0.003, min(0.5, length(fwidth(wp)) * 0.65));
+                float white = 0.0, yellow = 0.0;
+                float3 whiteColor = float3(0.98, 0.96, 0.92), yellowColor = float3(0.96, 0.77, 0.19);
+                for (uint k = 0; k < entry.y; k++) {
+                    DioramaPaintTriangle t = paint[paintIndices[entry.x + k]];
+                    float3 p = float3(wp, 1.0);
+                    float distance = min(dot(t.edge0.xyz, p), min(dot(t.edge1.xyz, p), dot(t.edge2.xyz, p)));
+                    float coverage = smoothstep(-aa, aa, distance);
+                    if (t.color.b < 0.5) { yellow += coverage; yellowColor = t.color.rgb; }
+                    else { white += coverage; whiteColor = t.color.rgb; }
+                }
+                albedo = mix(albedo, whiteColor, saturate(white));
+                albedo = mix(albedo, yellowColor, saturate(yellow));
+            }
             if (tex > 0.5 && tex < 1.5) {
                 // Natural coast pigment is interpolated on the same mesh as the land and seabed.
                 // Hard finishes retain their painted color and never become a second surface.
@@ -494,7 +517,20 @@ nonisolated enum DioramaShaderSource {
             color = body * (ambient * 0.35 + float3(0.72) + u.sunColor.rgb * 0.22);
             color = mix(color, float3(0.78, 0.87, 0.83), foam);
             color += pointLight * glow * 0.15 + u.sunColor.rgb * glint * 0.22;
-            // Shallow water reveals the actual submerged sand/rocks; opaque deep water hides the plate.
+            if (u.water.y > 0.5 && u.shoreline.z < 0.5) {
+                constexpr sampler mirrorSampler(coord::normalized, address::clamp_to_edge, filter::linear);
+                float2 uv = in.position.xy / u.water.zw + slope * 0.009;
+                float2 texel = 1.0 / float2(reflection.get_width(), reflection.get_height());
+                float4 reflected = reflection.sample(mirrorSampler, uv) * 0.4;
+                reflected += reflection.sample(mirrorSampler, uv + texel * float2(1.5, 0.5)) * 0.15;
+                reflected += reflection.sample(mirrorSampler, uv - texel * float2(1.5, 0.5)) * 0.15;
+                reflected += reflection.sample(mirrorSampler, uv + texel * float2(0.5, 1.5)) * 0.15;
+                reflected += reflection.sample(mirrorSampler, uv - texel * float2(0.5, 1.5)) * 0.15;
+                float fresnel = 0.20 + 0.48 * pow(1.0 - saturate(dot(waveNormal, view)), 3.0);
+                float edgeFade = smoothstep(0.0, 0.025, min(min(uv.x, uv.y), min(1.0 - uv.x, 1.0 - uv.y)));
+                color = mix(color, reflected.rgb / max(reflected.a, 0.001), fresnel * reflected.a * edgeFade * (1.0 - foam));
+            }
+            // Shallow water still reveals submerged sand and coral beneath the reflection.
             return float4(color, mix(1.0, 0.48, shallow));
         }
 

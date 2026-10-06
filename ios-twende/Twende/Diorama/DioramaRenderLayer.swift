@@ -9,7 +9,7 @@ import simd
 /// per frame without rebuilding anything.
 ///
 /// Directional shadows are cached. Spatial batches outside the camera frustum never draw;
-/// only water/halos blend. There is no planar reflection pass.
+/// only water/halos blend. Water samples a cached, reduced-resolution reflected scene.
 nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
     nonisolated struct Range: Sendable {
         let category: DioramaCategory
@@ -53,6 +53,10 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
     private let groundImage: DioramaGroundImage?
     private let groundRect: DioramaRect
     private var groundTexture: MTLTexture?
+    private var paintBuffer: MTLBuffer?
+    private var paintTableBuffer: MTLBuffer?
+    private var paintIndexBuffer: MTLBuffer?
+    private var reflectionPass: DioramaReflection?
     /// Whether the water animates (false when Reduce Motion is on: waves then freeze mid-roll).
     private let animates: Bool
     private let startTime: CFTimeInterval = CACurrentMediaTime()
@@ -81,6 +85,16 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
     private var diagnosticText: String = "not started"
     private var reveal: SIMD4<Float> = .zero
     private var labelsReady: Bool = false
+    private var acceptedLabels: Set<UInt64> = []
+    var onLabelsChanged: (@Sendable (Set<UInt64>) -> Void)?
+
+    private func publishLabels(_ ids: Set<UInt64>) {
+        lock.lock()
+        let changed = acceptedLabels != ids
+        acceptedLabels = ids
+        lock.unlock()
+        if changed { onLabelsChanged?(ids) }
+    }
 
     var hasCustomLabels: Bool {
         lock.lock(); defer { lock.unlock() }
@@ -178,6 +192,7 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
             glowPipeline = try metalDevice.makeRenderPipelineState(descriptor: descriptor(color: colorFormat, depth: depthFormat, stencil: true, blended: true))
             instancedPipeline = try metalDevice.makeRenderPipelineState(descriptor: descriptor(color: colorFormat, depth: depthFormat, stencil: true, instanced: true))
             instancedGlowPipeline = try metalDevice.makeRenderPipelineState(descriptor: descriptor(color: colorFormat, depth: depthFormat, stencil: true, blended: true, instanced: true))
+            reflectionPass = DioramaReflection(device: metalDevice, library: library)
             shadowMap = DioramaShadowMap(device: metalDevice, library: library, vertices: vertices, instances: instances)
             postProcess = DioramaPostProcess(device: metalDevice, library: library, colorFormat: colorFormat, depthFormat: depthFormat)
             depthState = metalDevice.makeDepthStencilState(descriptor: depth)
@@ -197,6 +212,10 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
             vertexBuffer = upload(vertices, fallback: vertices[0])
             indexBuffer = upload(indices, fallback: 0)
             instanceBuffer = upload(instances, fallback: .identity)
+            let paint = groundImage?.paint ?? DioramaVectorPaint()
+            paintBuffer = upload(paint.triangles, fallback: DioramaPaintTriangle.empty)
+            paintTableBuffer = upload(paint.table, fallback: SIMD2<UInt32>(0, 0))
+            paintIndexBuffer = upload(paint.indices, fallback: UInt32(0))
 
             if let groundImage {
                 let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba8Unorm, width: groundImage.size, height: groundImage.size, mipmapped: true)
@@ -239,9 +258,9 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
 
     func render(_ parameters: CustomLayerRenderParameters, mtlCommandBuffer: MTLCommandBuffer, mtlRenderPassDescriptor: MTLRenderPassDescriptor) {
         guard let pipeline, let vertexBuffer, let indexBuffer, let lightBuffer, let lightTableBuffer, let lightIndexBuffer,
-              let depthState, let noWriteDepthState,
+              let depthState, let noWriteDepthState, let paintBuffer, let paintTableBuffer, let paintIndexBuffer,
               let texture = mtlRenderPassDescriptor.colorAttachments[0].texture,
-              parameters.projectionMatrix.count == 16 else { return }
+              parameters.projectionMatrix.count == 16 else { publishLabels([]); return }
         lock.lock()
         let visible = self.visible
         let timeOfDay = self.timeOfDay
@@ -254,7 +273,7 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
             guard range.count > 0, visible.contains(range.category) else { return false }
             return range.category.isEmissive ? glowOn : true
         }
-        guard !drawn.isEmpty else { return }
+        guard !drawn.isEmpty else { publishLabels([]); return }
 
         var projection = matrix_identity_double4x4
         for column in 0..<4 {
@@ -281,7 +300,7 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
             if group.category.isEmissive, !glowOn { return false }
             return Range(category: group.category, start: 0, count: 0, minimum: group.minimum, maximum: group.maximum).intersects(matrix)
         }
-        guard !mainRanges.isEmpty || !drawnGroups.isEmpty else { return }
+        guard !mainRanges.isEmpty || !drawnGroups.isEmpty else { publishLabels([]); return }
         let eyeH = simd_inverse(transform) * SIMD4<Double>(0, 0, 1, 0)
         guard abs(eyeH.w) > 0.00000001 else { return }
         let eye = SIMD3<Float>(Float(eyeH.x / eyeH.w), Float(eyeH.y / eyeH.w), Float(eyeH.z / eyeH.w))
@@ -316,8 +335,18 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
             uniforms.shadowParams = SIMD4(1, 1.0 / 2048.0, 0.00006, 0)
         }
 
-        // Only the real scene: no literal planar reflections or additional water render target.
         uniforms.water = SIMD4<Float>(waterHeight, 0, Float(texture.width), Float(texture.height))
+        var reflected: MTLTexture?
+        if !reducedEffects, !wireframe, mainRanges.contains(where: { $0.category == .water }), let reflectionPass {
+            let reflectionGroups = groups.filter { visible.contains($0.category) && (!$0.category.isEmissive || glowOn) }
+            reflected = reflectionPass.encode(command: mtlCommandBuffer, width: texture.width, height: texture.height,
+                depthRange: (Double(parameters.depthRange.min), Double(parameters.depthRange.max)), matrix: matrix, uniforms: uniforms,
+                signature: timeOfDay.rawValue + visible.map(\.rawValue).sorted().joined(),
+                vertices: vertexBuffer, indices: indexBuffer, instances: instanceBuffer,
+                fragmentBuffers: [lightBuffer, lightTableBuffer, lightIndexBuffer, paintBuffer, paintTableBuffer, paintIndexBuffer],
+                textures: [blankReflection, shadowMap?.texture, groundTexture ?? blankReflection, blankReflection], ranges: drawn, groups: reflectionGroups)
+        }
+        uniforms.water.y = reflected == nil ? 0 : 1
 
         // Screen-space passes first: occlusion the main pass samples, bloom added at the end.
         // Reduced effects (Low Power, thermal) drop them entirely; geometry is unchanged.
@@ -357,7 +386,10 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
         encoder.setFragmentBuffer(lightBuffer, offset: 0, index: 1)
         encoder.setFragmentBuffer(lightTableBuffer, offset: 0, index: 2)
         encoder.setFragmentBuffer(lightIndexBuffer, offset: 0, index: 3)
-        encoder.setFragmentTexture(blankReflection, index: 0)
+        encoder.setFragmentBuffer(paintBuffer, offset: 0, index: 4)
+        encoder.setFragmentBuffer(paintTableBuffer, offset: 0, index: 5)
+        encoder.setFragmentBuffer(paintIndexBuffer, offset: 0, index: 6)
+        encoder.setFragmentTexture(reflected ?? blankReflection, index: 0)
         encoder.setFragmentTexture(shadowMap?.texture, index: 1)
         encoder.setFragmentTexture(groundTexture ?? blankReflection, index: 2)
         encoder.setFragmentTexture(postProcess?.occlusion ?? blankReflection, index: 3)
@@ -410,9 +442,11 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
             encoder.setTriangleFillMode(.fill)
             postProcess.composite(bloomLevels, into: encoder, strength: bloomStrength)
         }
+        let labelIDs: Set<UInt64>
         if visible.contains(.buildings), !wireframe {
-            labelRenderer?.draw(encoder: encoder, matrix: matrix, width: texture.width, height: texture.height, zoom: parameters.zoom, reveal: reveal)
-        }
+            labelIDs = labelRenderer?.draw(encoder: encoder, matrix: matrix, width: texture.width, height: texture.height, zoom: parameters.zoom, reveal: reveal) ?? []
+        } else { labelIDs = [] }
+        publishLabels(labelIDs)
         encoder.endEncoding()
     }
 
@@ -432,9 +466,12 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
         lightIndexBuffer = nil
         blankReflection = nil
         groundTexture = nil
+        paintBuffer = nil; paintTableBuffer = nil; paintIndexBuffer = nil
+        reflectionPass = nil
         shadowMap = nil
         postProcess = nil
         labelRenderer = nil
+        publishLabels([])
         lock.lock(); labelsReady = false; lock.unlock()
     }
 

@@ -499,12 +499,17 @@ extension TripMapView {
                 dioramaFly = state.cameraFlyRequest
                 dioramaRegenerate = state.regenerateRequest
             } else if !state.isEnabled, let manager = diorama {
-                manager.remove()
-                diorama = nil
-                dioramaOwnsGround = false
-                applyTerrain()
+                manager.retract { [weak self, weak manager] in
+                    guard let self, let manager, self.diorama === manager else { return }
+                    manager.remove()
+                    self.diorama = nil
+                    self.dioramaOwnsGround = false
+                    self.applyTerrain()
+                }
+                return
             }
             guard let diorama else { return }
+            if state.isEnabled { diorama.cancelRetraction() }
             if state.regenerateRequest != dioramaRegenerate {
                 dioramaRegenerate = state.regenerateRequest
                 diorama.regenerate()

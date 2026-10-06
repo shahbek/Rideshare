@@ -25,6 +25,7 @@ nonisolated struct DioramaTerrain: Sendable {
     /// Bundled snapshot heights in real metres, row-major from south to north.
     let values: [Double]
     var attachedFootprints: [UInt64: [[DV2]]] = [:]
+    private var pierDeckLevels: [(point: DV2, height: Double)] = []
     /// Vertical scale of the snapshot. 1 keeps real metres; the Slipway uses a gentler relief that
     /// stays readable yet short enough to ease into the flat basemap at the tile edge.
     var relief: Double = 1
@@ -106,8 +107,30 @@ nonisolated struct DioramaTerrain: Sendable {
             }
             result.attach(dry, reach: 30, data: data)
         }
+        for path in data.paths where path.kind == "pier" {
+            guard let first = path.line.first else { continue }
+            let samples = DioramaPolygon.densify(path.line, maxStep: 1)
+            let dry = samples.filter { p in !data.water.contains { DioramaPolygon.contains(polygon: $0.rings, p) } }
+            var level = max(result.pierLevel + configDeckClearance, dry.map { result.height($0) + 0.18 }.max() ?? result.pierLevel)
+            // Authored correction: the mapped southern pier references the nearby Lido deck,
+            // rather than an unrelated building picked by its offshore endpoint.
+            if (path.sourceID ?? path.id) == 1_387_736_908,
+               let dock = data.landuse.first(where: { $0.id == 1_321_652_461 })?.rings.first {
+                var dockTop = max(result.foundationHeight(dock), result.pierLevel)
+                if let host = data.buildings.min(by: { a, b in
+                    (dock.map { DioramaPolygon.distanceToRing(a.ring, $0) }.min() ?? .infinity) < (dock.map { DioramaPolygon.distanceToRing(b.ring, $0) }.min() ?? .infinity)
+                }), dock.contains(where: { DioramaPolygon.distanceToRing(host.ring, $0) <= 4 }) {
+                    dockTop = max(dockTop, result.buildingHeight(host))
+                }
+                level = max(level, dockTop + configDeckClearance)
+            }
+            result.pierDeckLevels.append((first, level))
+        }
         return result
     }
+
+    // Deck underside clears the connected landing; the framing stays dry too.
+    private var configDeckClearance: Double { max(0.08, DioramaConfig.slipway.deckThickness) + 0.16 }
 
     private mutating func attach(_ points: [DV2], reach: Double, data: DioramaTileData) {
         guard !points.isEmpty else { return }
@@ -174,7 +197,9 @@ nonisolated struct DioramaTerrain: Sendable {
     }
 
     func pierHeight(_ line: [DV2]) -> Double {
-        max(pierLevel, line.first.map { height($0) + 0.1 } ?? pierLevel)
+        guard let first = line.first else { return pierLevel }
+        return pierDeckLevels.first(where: { $0.point.distance(to: first) < 0.1 })?.height
+            ?? max(pierLevel, line.map { height($0) + 0.18 }.max() ?? pierLevel)
     }
 
     /// All support queries interpolate the exact same connected land–sea mesh.

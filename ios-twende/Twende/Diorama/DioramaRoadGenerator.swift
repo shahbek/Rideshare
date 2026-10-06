@@ -77,7 +77,7 @@ nonisolated struct DioramaRoadGenerator {
             if road.width >= 6 {
                 for side in [-1.0, 1.0] {
                     let offset = (road.width / 2 - 0.38) * side
-                    painter.stroke(run.map { $0.point + $0.direction.right * offset }, width: 0.25, .marking, cap: .butt)
+                    painter.stroke(run.map { $0.point + $0.direction.right * offset }, width: 0.25, .signYellow, cap: .butt)
                 }
             }
         }
