@@ -21,6 +21,7 @@ final class AppEnvironment {
 
     init() {
         offlineMaps = OfflineMapService(network: network)
+        DioramaDownloadService.shared.configure(maps: offlineMaps)
         payments = MobileMoneyCoordinator(store: store)
         trips = TripCoordinator(drivers: drivers, store: store, network: network, payments: payments)
         flow = BookingFlow(drivers: drivers, store: store, location: location, trips: trips)
@@ -100,6 +101,7 @@ final class AppEnvironment {
 
     /// Suspends timer-driven simulation so no work runs after the system backgrounds the app.
     func enterBackground() {
+        DioramaDownloadService.shared.pause()
         offlineMaps.pause()
         drivers.pauseLiveUpdates()
     }

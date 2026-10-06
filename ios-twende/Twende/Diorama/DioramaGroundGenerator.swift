@@ -22,6 +22,24 @@ nonisolated struct DioramaGroundGenerator {
         water(into: &waterMesh)
     }
 
+    /// Context tiles share the exact terrain skin but omit reef geometry and small surface detail.
+    func generateContext(into mesh: inout DioramaMesh, water waterMesh: inout DioramaMesh) {
+        plate(into: &mesh)
+        parks()
+        for road in data.roads {
+            painter.stroke(road.line, width: road.width + config.pavementWidth * 2, .pavement)
+            painter.stroke(road.line, width: road.width, road.isPaved ? .asphalt : .earth)
+        }
+        for area in data.water {
+            guard let outer = area.rings.first else { continue }
+            let ring = DioramaPolygon.clipPolygon(outer, to: data.rect)
+            for piece in DioramaGroundCutouts(polygons: Array(area.rings.dropFirst())).subtract(from: ring) {
+                waterMesh.polygon(piece, z: terrain.waterLevel, .sea, attribute: Float(config.shallowWaterDistance))
+            }
+        }
+        paintWater()
+    }
+
     /// Small exposed-earth patches in unoccupied inland ground; never repaint formal gardens or beach.
     private func earthPatches() {
         var rng = DioramaRandom(seed: 30, salt: 717)

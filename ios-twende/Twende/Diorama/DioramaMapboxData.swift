@@ -7,13 +7,8 @@ nonisolated enum DioramaMapboxData {
               var url = URLComponents(string: "https://api.mapbox.com/v4/mapbox.mapbox-streets-v8/\(tile.z)/\(tile.x)/\(tile.y).vector.pbf") else { return nil }
         url.queryItems = [URLQueryItem(name: "access_token", value: token)]
         guard let address = url.url else { return nil }
-        let request = URLRequest(url: address, cachePolicy: offline ? .returnCacheDataDontLoad : .useProtocolCachePolicy, timeoutInterval: 12)
         do {
-            let (bytes, response) = try await URLSession.shared.data(for: request)
-            guard (response as? HTTPURLResponse)?.statusCode == 200 else {
-                print("[Diorama coverage] Mapbox tile unavailable; using bundled geometry")
-                return nil
-            }
+            let bytes = try await DioramaSourceStore.shared.data(url: address, key: "streets-\(tile.z)-\(tile.x)-\(tile.y).pbf", offline: offline)
             let features = try DioramaVectorTile.decode(bytes, includesEnvironment: includesEnvironment)
             guard !features.isEmpty else { return nil }
             return features

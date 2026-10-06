@@ -24,8 +24,8 @@ nonisolated final class DioramaReflection {
             return d
         }
         do {
-            pipeline = try device.makeRenderPipelineState(descriptor: descriptor(false))
-            instancedPipeline = try device.makeRenderPipelineState(descriptor: descriptor(true))
+            pipeline = try DioramaPipelineCache.shared.state(device: device, descriptor: descriptor(false))
+            instancedPipeline = try DioramaPipelineCache.shared.state(device: device, descriptor: descriptor(true))
             let d = MTLDepthStencilDescriptor(); d.depthCompareFunction = .lessEqual; d.isDepthWriteEnabled = true
             guard let state = device.makeDepthStencilState(descriptor: d) else { return nil }
             depthState = state

@@ -27,7 +27,7 @@ nonisolated final class DioramaShadowMap {
             descriptor.label = label
             descriptor.vertexFunction = vertex
             descriptor.depthAttachmentPixelFormat = .depth32Float
-            return try? device.makeRenderPipelineState(descriptor: descriptor)
+            return try? DioramaPipelineCache.shared.state(device: device, descriptor: descriptor)
         }
         guard let pipeline = make(function, label: "Diorama directional shadow depth"),
               let instancedPipeline = make(instanced, label: "Diorama instanced shadow depth") else { return nil }

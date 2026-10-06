@@ -54,7 +54,7 @@ nonisolated struct DioramaBuildingGenerator {
     @discardableResult
     func build(_ f: DioramaBuildingFeature, into mesh: inout DioramaMesh, glow: inout DioramaMesh, lights: Bool, pointLights: inout [DioramaLight]) -> DioramaBuilt {
         if !f.occupiedPieces.isEmpty {
-            return DioramaClippedBuilding.build(f, terrain: terrain, config: config, mesh: &mesh)
+            return DioramaClippedBuilding.build(f, terrain: terrain, config: config, mesh: &mesh, glow: &glow, lights: lights)
         }
         let ground = terrain.buildingHeight(f)
         if f.id == 165_397_124 {

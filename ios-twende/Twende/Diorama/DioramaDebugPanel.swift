@@ -28,11 +28,14 @@ struct DioramaDebugPanel: View {
             }
             .buttonStyle(.pressableCard)
 
-            if isExpanded {
+            if !DioramaDownloadService.shared.canView {
+                ScrollView { DioramaDownloadView().padding(14) }
+                    .frame(maxHeight: 340)
+            } else if isExpanded {
                 ScrollView {
                   VStack(alignment: .leading, spacing: 12) {
                     RowDivider(leading: 0)
-                    Text("Full-detail camera-follow preview · one resident tile. Pan across Masaki; new tiles require online map and elevation data.")
+                    Text("Prepared offline detail with up to eight coarse neighbours (64 MiB packed budget). No network fetches or geometry generation during viewing. Idle water animation is off.")
                         .font(TwendeFont.label)
                         .foregroundStyle(TwendeColor.inkSecondary)
                     Picker("Time of day", selection: $state.timeOfDay) {
@@ -63,7 +66,7 @@ struct DioramaDebugPanel: View {
                     }
 
                     HStack(spacing: 8) {
-                        Button("Regenerate tile") {
+                        Button("Reload saved tile") {
                             Haptics.tap()
                             state.regenerateRequest += 1
                         }

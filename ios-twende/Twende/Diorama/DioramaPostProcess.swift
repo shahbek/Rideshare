@@ -63,7 +63,7 @@ nonisolated final class DioramaPostProcess {
                 d.colorAttachments[2].sourceAlphaBlendFactor = .one
                 d.colorAttachments[2].destinationAlphaBlendFactor = .one
             }
-            return try? device.makeRenderPipelineState(descriptor: d)
+            return try? DioramaPipelineCache.shared.state(device: device, descriptor: d)
         }
         func screen(_ fragment: MTLFunction, format: MTLPixelFormat, label: String) -> MTLRenderPipelineState? {
             let d = MTLRenderPipelineDescriptor()
@@ -71,7 +71,7 @@ nonisolated final class DioramaPostProcess {
             d.vertexFunction = fullscreen
             d.fragmentFunction = fragment
             d.colorAttachments[0].pixelFormat = format
-            return try? device.makeRenderPipelineState(descriptor: d)
+            return try? DioramaPipelineCache.shared.state(device: device, descriptor: d)
         }
         guard let gbufferPipeline = geometry(vertex, gbuffer, emissive: false),
               let gbufferInstancedPipeline = geometry(instancedVertex, gbuffer, emissive: false),
@@ -94,7 +94,7 @@ nonisolated final class DioramaPostProcess {
         compositeDescriptor.colorAttachments[0].destinationAlphaBlendFactor = .one
         compositeDescriptor.depthAttachmentPixelFormat = depthFormat
         compositeDescriptor.stencilAttachmentPixelFormat = depthFormat
-        guard let compositePipeline = try? device.makeRenderPipelineState(descriptor: compositeDescriptor) else { return nil }
+        guard let compositePipeline = try? DioramaPipelineCache.shared.state(device: device, descriptor: compositeDescriptor) else { return nil }
 
         let depthDescriptor = MTLDepthStencilDescriptor()
         depthDescriptor.depthCompareFunction = .lessEqual

@@ -140,10 +140,16 @@ nonisolated enum DioramaShaderSource {
     float3 dioramaGrade(float3 color, float3 worldPosition, constant DioramaUniforms &u);
 
     float dioramaRevealDistance(float3 p, constant DioramaUniforms &u) {
+        if (u.reveal.w > 2.5) return u.reveal.z - dot(p.xy, u.reveal.xy);
+        if (u.reveal.w > 1.5) return dot(p.xy, u.reveal.xy) - u.reveal.z;
         float2 delta = abs(p.xy - u.reveal.xy);
         return max(delta.x, delta.y) - u.reveal.z;
     }
     void dioramaRevealClip(float3 p, constant DioramaUniforms &u) {
+        if (u.shoreline.w > 0.5) {
+            float2 uv = (p.xy - u.groundImage.xy) * u.groundImage.zw;
+            if (any(uv < float2(0.0)) || any(uv >= float2(1.0))) discard_fragment();
+        }
         if (u.reveal.w > 0.5 && dioramaRevealDistance(p, u) > 0.0) discard_fragment();
     }
 
@@ -330,7 +336,8 @@ nonisolated enum DioramaShaderSource {
         float glow = u.params.x;
         bool mirrored = u.params.w > 0.5;
 
-        if (u.reveal.w > 0.5) {
+        if (mirrored && (in.clipHeight < -0.05 || (code > 0.5 && code < 1.5))) discard_fragment();
+        if (u.reveal.w > 0.5 && !(code > 4.5 && code < 5.5)) {
             float edge = -dioramaRevealDistance(in.worldPosition, u);
             if (edge < 1.4) {
                 float heat = 1.0 - smoothstep(0.0, 1.4, edge);

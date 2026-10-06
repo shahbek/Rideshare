@@ -117,7 +117,12 @@ nonisolated final class DioramaLabelRenderer {
         let w = Float(width), h = Float(height)
         for label in labels {
             guard label.isNamed || zoom >= 17.8, occupied.count < 18, let image = images[label.title] else { continue }
-            if reveal.w > 0.5, max(abs(label.anchor.x - reveal.x), abs(label.anchor.y - reveal.y)) + 3 > reveal.z { continue }
+            if reveal.w > 0.5 {
+                let distance = reveal.w > 1.5
+                    ? label.anchor.x * reveal.x + label.anchor.y * reveal.y
+                    : max(abs(label.anchor.x - reveal.x), abs(label.anchor.y - reveal.y))
+                if distance + 3 > reveal.z { continue }
+            }
             let roof = matrix * SIMD4(label.anchor, 1)
             let lift: Float = label.isNamed ? 5.5 : 3.5
             let p = matrix * SIMD4(label.anchor + SIMD3(0, 0, lift), 1)

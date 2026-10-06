@@ -66,6 +66,7 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
     private var paintIndexBuffer: MTLBuffer?
     private var reflectionPass: DioramaReflection?
     /// Whether the water animates (false when Reduce Motion is on: waves then freeze mid-roll).
+    private let contextOnly: Bool
     private let animates: Bool
     private let startTime: CFTimeInterval = CACurrentMediaTime()
     private var vertexBuffer: MTLBuffer?
@@ -92,6 +93,17 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
     private var timeOfDay: DioramaTimeOfDay
     private var diagnosticText: String = "not started"
     private var reveal: SIMD4<Float> = .zero
+    private var completedReveal: SIMD4<Float>?
+
+    /// GPU completion, not a claim that the drawable has reached the display.
+    func hasCompleted(reveal value: SIMD4<Float>) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        return completedReveal == value
+    }
+
+    private func didComplete(_ value: SIMD4<Float>) {
+        lock.lock(); completedReveal = value; lock.unlock()
+    }
     private var labelsReady: Bool = false
     private var acceptedLabels: Set<UInt64> = []
     var onLabelsChanged: (@Sendable (Set<UInt64>) -> Void)?
@@ -126,7 +138,8 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
         lock.lock(); reveal = value; lock.unlock()
     }
 
-    init(origin: CLLocationCoordinate2D, vertices: [BuildingRenderVertex], indices: [UInt32], ranges: [Range], groups: [DioramaInstanceGroup] = [], instances: [DioramaInstanceData] = [], lightGrid: DioramaLightGrid, waterHeight: Double, groundImage: DioramaGroundImage?, groundRect: DioramaRect, visible: Set<DioramaCategory>, timeOfDay: DioramaTimeOfDay, animates: Bool, config: DioramaConfig = .slipway, labels: [DioramaBuildingLabel] = [], displayScale: Float = 3) {
+    init(origin: CLLocationCoordinate2D, vertices: [BuildingRenderVertex], indices: [UInt32], ranges: [Range], groups: [DioramaInstanceGroup] = [], instances: [DioramaInstanceData] = [], lightGrid: DioramaLightGrid, waterHeight: Double, groundImage: DioramaGroundImage?, groundRect: DioramaRect, visible: Set<DioramaCategory>, timeOfDay: DioramaTimeOfDay, animates: Bool, config: DioramaConfig = .slipway, labels: [DioramaBuildingLabel] = [], displayScale: Float = 3, contextOnly: Bool = false) {
+        self.contextOnly = contextOnly
         self.origin = origin
         self.labels = labels
         self.displayScale = displayScale
@@ -208,14 +221,16 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
         noWrite.depthCompareFunction = .lessEqual
         noWrite.isDepthWriteEnabled = false
         do {
-            pipeline = try metalDevice.makeRenderPipelineState(descriptor: descriptor(color: colorFormat, depth: depthFormat, stencil: true))
-            waterPipeline = try metalDevice.makeRenderPipelineState(descriptor: descriptor(color: colorFormat, depth: depthFormat, stencil: true, blended: true))
-            glowPipeline = try metalDevice.makeRenderPipelineState(descriptor: descriptor(color: colorFormat, depth: depthFormat, stencil: true, blended: true))
-            instancedPipeline = try metalDevice.makeRenderPipelineState(descriptor: descriptor(color: colorFormat, depth: depthFormat, stencil: true, instanced: true))
-            instancedGlowPipeline = try metalDevice.makeRenderPipelineState(descriptor: descriptor(color: colorFormat, depth: depthFormat, stencil: true, blended: true, instanced: true))
-            reflectionPass = DioramaReflection(device: metalDevice, library: library)
-            shadowMap = DioramaShadowMap(device: metalDevice, library: library, vertices: vertices, instances: instances)
-            postProcess = DioramaPostProcess(device: metalDevice, library: library, colorFormat: colorFormat, depthFormat: depthFormat)
+            pipeline = try DioramaPipelineCache.shared.state(device: metalDevice, descriptor: descriptor(color: colorFormat, depth: depthFormat, stencil: true))
+            waterPipeline = try DioramaPipelineCache.shared.state(device: metalDevice, descriptor: descriptor(color: colorFormat, depth: depthFormat, stencil: true, blended: true))
+            glowPipeline = waterPipeline
+            instancedPipeline = try DioramaPipelineCache.shared.state(device: metalDevice, descriptor: descriptor(color: colorFormat, depth: depthFormat, stencil: true, instanced: true))
+            instancedGlowPipeline = try DioramaPipelineCache.shared.state(device: metalDevice, descriptor: descriptor(color: colorFormat, depth: depthFormat, stencil: true, blended: true, instanced: true))
+            if !contextOnly {
+                reflectionPass = DioramaReflection(device: metalDevice, library: library)
+                shadowMap = DioramaShadowMap(device: metalDevice, library: library, vertices: vertices, instances: instances)
+                postProcess = DioramaPostProcess(device: metalDevice, library: library, colorFormat: colorFormat, depthFormat: depthFormat)
+            }
             depthState = metalDevice.makeDepthStencilState(descriptor: depth)
             noWriteDepthState = metalDevice.makeDepthStencilState(descriptor: noWrite)
 
@@ -328,7 +343,13 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
         }
         let mainRanges = selectedRanges
         let drawnGroups = selectedGroups
-        guard !mainRanges.isEmpty || !drawnGroups.isEmpty else { publishLabels([]); return }
+        guard !mainRanges.isEmpty || !drawnGroups.isEmpty else {
+            publishLabels([])
+            mtlCommandBuffer.addCompletedHandler { [weak self] command in
+                if command.status == .completed { self?.didComplete(reveal) }
+            }
+            return
+        }
         let eyeH = simd_inverse(transform) * SIMD4<Double>(0, 0, 1, 0)
         guard abs(eyeH.w) > 0.00000001 else { return }
         let eye = SIMD3<Float>(Float(eyeH.x / eyeH.w), Float(eyeH.y / eyeH.w), Float(eyeH.z / eyeH.w))
@@ -338,6 +359,7 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
         uniforms.reveal = reveal
         uniforms.shoreline = shorelineSettings
         uniforms.shoreline.z = reducedEffects ? 1 : 0
+        uniforms.shoreline.w = contextOnly ? 1 : 0
         uniforms.waterDeep = waterDeepTint
         uniforms.waterShallow = waterShallowTint
         uniforms.groundImage = SIMD4<Float>(Float(groundRect.minX), Float(groundRect.minY), Float(1 / max(groundRect.width, 1)), Float(1 / max(groundRect.height, 1)))
@@ -487,7 +509,9 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
         let cpuMS = (CACurrentMediaTime() - encodeStarted) * 1000
         let metrics = frameMetrics
         let callback = onFrameReport
-        mtlCommandBuffer.addCompletedHandler { command in
+        mtlCommandBuffer.addCompletedHandler { [weak self] command in
+            guard command.status == .completed else { return }
+            self?.didComplete(reveal)
             let gpuMS = command.gpuEndTime > command.gpuStartTime ? (command.gpuEndTime - command.gpuStartTime) * 1000 : nil
             if let report = metrics.record(triangles: triangles, cpuMS: cpuMS, gpuMS: gpuMS, drawCalls: drawCalls, unmergedDrawCalls: unmergedDrawCalls) { callback?(report) }
         }

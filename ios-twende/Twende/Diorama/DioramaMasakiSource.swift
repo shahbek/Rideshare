@@ -17,12 +17,17 @@ nonisolated enum DioramaMasakiSource {
         if tile == slipway {
             guard let bundled = DioramaBundledTile.load(config: config) else { return nil }
             var data = DioramaMapboxData.resolveOwnership(bundled)
-            if let features = await DioramaMapboxData.load(tile: tile, token: token, offline: offline) {
+            if let features = await DioramaMapboxData.load(tile: tile, token: token, offline: offline, includesEnvironment: true) {
+                data = DioramaPoolRecognition.merge(features, into: data)
                 data = DioramaMapboxData.merge(features, into: data)
+            } else {
+                data = DioramaPoolRecognition.merge([], into: data)
             }
+            data.shorelines = DioramaShoreline.classify(data: data, config: config, overrides: DioramaShorelineOverrides.load())
+            data.shorelineLandMasks = DioramaShoreline.landMasks(data.shorelines, config: config)
             return data
         }
-        guard contains(latitude: tile.centre.latitude, longitude: tile.centre.longitude),
+        guard DioramaOfflineStore.tiles.contains(tile),
               let features = await DioramaMapboxData.load(tile: tile, token: token, offline: offline, includesEnvironment: true),
               !Task.isCancelled else { return nil }
         let projection = DioramaProjection(origin: tile.centre)
@@ -66,6 +71,7 @@ nonisolated enum DioramaMasakiSource {
                 if kind == "water" { data.water.append(area) } else { data.landuse.append(area) }
             }
         }
+        data = DioramaPoolRecognition.merge(features, into: data)
         data = DioramaMapboxData.merge(features, into: data)
         data.shorelines = DioramaShoreline.classify(data: data, config: config, overrides: [])
         data.shorelineLandMasks = DioramaShoreline.landMasks(data.shorelines, config: config)
@@ -82,10 +88,13 @@ nonisolated enum DioramaMasakiSource {
         components.queryItems = [URLQueryItem(name: "access_token", value: token)]
         guard let url = components.url else { return nil }
         do {
-            let request = URLRequest(url: url, cachePolicy: offline ? .returnCacheDataDontLoad : .useProtocolCachePolicy, timeoutInterval: 15)
-            let (bytes, response) = try await URLSession.shared.data(for: request)
-            guard (response as? HTTPURLResponse)?.statusCode == 200,
-                  let source = CGImageSourceCreateWithData(bytes as CFData, nil),
+            let bytes = try await DioramaSourceStore.shared.data(url: url, key: "terrain-\(z)-\(parentX)-\(parentY).png", offline: offline)
+            // Mapbox documents this exact Terrain-RGB response for all-ocean tiles as elevation 0.
+            if (try? JSONDecoder().decode([String: String].self, from: bytes)["message"]) == "Tile does not exist" {
+                return DioramaTerrain(rect: rect, columns: 2, rows: 2, values: [0, 0, 0, 0],
+                    relief: config.terrainRelief, edgeEase: config.terrainEdgeEase, midTideDatum: config.waterLevel)
+            }
+            guard let source = CGImageSourceCreateWithData(bytes as CFData, nil),
                   let image = CGImageSourceCreateImageAtIndex(source, 0, nil),
                   image.bitsPerComponent == 8, [24, 32].contains(image.bitsPerPixel),
                   image.width <= 1024, image.height <= 1024,

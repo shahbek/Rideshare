@@ -32,7 +32,7 @@ nonisolated struct DioramaAmenityGenerator {
             case "pitch": court(ring, areaID: area.id, sport: area.sport, rng: &rng, ground: &ground, props: &props)
             case "parking": carPark(ring, areaID: area.id, rng: &rng, ground: &ground, props: &props)
             case "fuel": fuelStation(ring, areaID: area.id, rng: &rng, ground: &ground, props: &props, glow: &glow, lights: &lights)
-            case "pool": pool(ring, areaID: area.id, isPrivate: area.sport == "private", rng: &rng, ground: &ground, props: &props)
+            case "pool": pool(ring, holes: Array(area.rings.dropFirst()), areaID: area.id, isPrivate: area.sport == "private", rng: &rng, ground: &ground, props: &props)
             case "terrace": terrace(ring, areaID: area.id, rng: &rng, ground: &ground, props: &props, glow: &glow, lights: &lights)
             default: break
             }
@@ -254,7 +254,7 @@ nonisolated struct DioramaAmenityGenerator {
     /// Swimming pool: pale coping deck, a tiled basin and turquoise water (the shader adds the caustic
     /// shimmer). Hotel pools get rows of loungers and parasols; the small private garden pools surveyed
     /// from satellite imagery get a narrow deck and a lounger or two.
-    private func pool(_ sourceRing: [DV2], areaID: UInt64, isPrivate: Bool, rng: inout DioramaRandom, ground: inout DioramaMesh, props: inout DioramaMesh) {
+    private func pool(_ sourceRing: [DV2], holes: [[DV2]], areaID: UInt64, isPrivate: Bool, rng: inout DioramaRandom, ground: inout DioramaMesh, props: inout DioramaMesh) {
         let ring = DioramaPolygon.rounded(sourceRing, flags: Array(repeating: false, count: sourceRing.count),
                                           radius: isPrivate ? 0.45 : 0.8, segments: 12).points
         let deckWidth = isPrivate ? 1.1 : 2.2
@@ -274,8 +274,16 @@ nonisolated struct DioramaAmenityGenerator {
         func onDeck(_ p: DV2) -> Bool { deckPieces.contains { DioramaPolygon.contains($0, p) } }
         // Basin walls in pale tile, the floor a step lower, then the water sheet just under the coping.
         ground.extrude(ring, z0: base - 0.5, z1: deckTop + 0.01, .skyBlue, top: nil)
-        ground.polygon(ring, z: base - 0.5, .skyBlue)
-        ground.polygon(ring, z: deckTop - 0.08, .poolBlue)
+        for hole in holes {
+            let inner = DioramaPolygon.counterClockwise(hole)
+            for i in inner.indices {
+                ground.wall(inner[(i + 1) % inner.count], inner[i], z0: base - 0.5, z1: deckTop, .skyBlue)
+            }
+        }
+        for piece in DioramaGroundCutouts(polygons: holes).subtract(from: ring) {
+            ground.polygon(piece, z: base - 0.5, .skyBlue)
+            ground.polygon(piece, z: deckTop - 0.08, .poolBlue, attribute: -1)
+        }
         // Rounded coping lip so the edge catches the light.
         // A rounded swept lip, open in the centre; never cap the basin with a solid slab.
         ground.band(ring, offset: 0.18, z0: deckTop, z1: deckTop + 0.05, .trimWhite)

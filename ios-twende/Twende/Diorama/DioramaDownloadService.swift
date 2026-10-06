@@ -1,0 +1,168 @@
+import Foundation
+import Observation
+import UIKit
+import MapboxMaps
+
+/// Explicit foreground preparation; no downloading or meshing is started by the map camera.
+@Observable @MainActor
+final class DioramaDownloadService {
+    static let shared = DioramaDownloadService()
+    private(set) var isPrepared: Bool = false
+    private(set) var isRunning: Bool = false
+    private(set) var completed: Int = 0
+    private(set) var bytes: Int64 = 0
+    private(set) var message: String = "Download and prepare Masaki before viewing."
+    private(set) var stage: String = ""
+    var total: Int { DioramaOfflineStore.tiles.count }
+    var progress: Double { Double(completed) / Double(max(1, total)) }
+    var canView: Bool { isPrepared && !isRunning && maps?.isReady(Self.area) == true && maps?.downloadedOnly == true }
+    var basemapReady: Bool { maps?.isReady(Self.area) == true }
+    private weak var maps: OfflineMapService?
+    @ObservationIgnored private var task: Task<Void, Never>?
+    @ObservationIgnored private var policyTimer: Timer?
+    private static var area: OfflineMapArea { OfflineMapArea.areas[1] }
+
+    func configure(maps: OfflineMapService) {
+        self.maps = maps
+        refresh()
+    }
+    func refresh() {
+        guard !isRunning else { return }
+        Task {
+            let inventory = await DioramaOfflineStore.shared.inventory()
+            guard !isRunning else { return }
+            completed = inventory.complete; bytes = inventory.bytes
+            isPrepared = completed == total
+            notify()
+        }
+    }
+    func viewOffline() {
+        guard isPrepared, basemapReady, let maps else { return }
+        maps.downloadedOnly = true
+        DioramaState.shared.isEnabled = true
+        message = "Masaki ready · map network disabled · prepared geometry only"
+        notify()
+        DioramaState.shared.cameraFlyRequest += 1
+    }
+    func invalidate() {
+        isPrepared = false
+        message = "A saved tile is missing or damaged. Resume preparation to repair it."
+        notify()
+    }
+    func start() {
+        guard task == nil, let maps, maps.activeID == nil else { return }
+        guard maps.canDownload else { message = "Connect to Wi-Fi and turn off ‘Use downloaded maps only’ to prepare Masaki."; return }
+        guard UIApplication.shared.applicationState == .active,
+              !ProcessInfo.processInfo.isLowPowerModeEnabled,
+              ProcessInfo.processInfo.thermalState.rawValue < ProcessInfo.ThermalState.serious.rawValue else {
+            message = "Preparation paused for power or temperature. Turn off Low Power Mode and resume when cool."; return
+        }
+        isRunning = true; isPrepared = false; message = "Preparing Masaki. Keep the app open; charging is recommended."
+        notify()
+        policyTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                if UIApplication.shared.applicationState != .active || self.maps?.canDownload != true
+                    || ProcessInfo.processInfo.isLowPowerModeEnabled
+                    || ProcessInfo.processInfo.thermalState.rawValue >= ProcessInfo.ThermalState.serious.rawValue {
+                    self.pause()
+                }
+            }
+        }
+        let token = MapboxOptions.accessToken
+        task = Task { [weak self] in
+            guard let self else { return }
+            var ownsBasemapDownload = false
+            defer {
+                if ownsBasemapDownload && maps.activeID == Self.area.id { maps.pause() }
+                self.isRunning = false; self.task = nil
+                self.policyTimer?.invalidate(); self.policyTimer = nil
+                self.notify()
+            }
+            do {
+                try await DioramaOfflineStore.shared.checkSpace()
+                try Task.checkCancellation()
+                if !maps.isReady(Self.area) {
+                    stage = "Downloading peninsula basemap and style…"
+                    try Task.checkCancellation()
+                    ownsBasemapDownload = true
+                    maps.download(Self.area)
+                    let deadline = Date().addingTimeInterval(1800)
+                    while !maps.isReady(Self.area) {
+                        try Task.checkCancellation()
+                        guard Date() < deadline else { throw DioramaOfflineStore.Failure.source }
+                        if maps.activeID == nil {
+                            // Completion refresh is asynchronous; allow its local inventory callback.
+                            try await Task.sleep(for: .seconds(1))
+                            guard maps.isReady(Self.area) else { throw DioramaOfflineStore.Failure.source }
+                        } else { try await Task.sleep(for: .milliseconds(300)) }
+                    }
+                }
+                completed = 0
+                for tile in DioramaOfflineStore.tiles {
+                    try Task.checkCancellation()
+                    stage = "Preparing tile \(completed + 1) of \(total) · full detail + surroundings"
+                    let job = Task.detached(priority: .utility) {
+                        try await Self.prepare(tile, token: token)
+                    }
+                    try await withTaskCancellationHandler { try await job.value } onCancel: { job.cancel() }
+                    completed += 1
+                    if completed % 10 == 0 || completed == total {
+                        let inventory = await DioramaOfflineStore.shared.inventory()
+                        bytes = inventory.bytes
+                    }
+                }
+                try Task.checkCancellation()
+                isPrepared = true
+                maps.downloadedOnly = true
+                message = "Ready offline. No downloads or geometry generation while viewing."
+                stage = "All \(total) tiles prepared"
+            } catch is CancellationError {
+                message = "Paused. Completed tiles are kept; resume when ready."
+            } catch {
+                message = (error as? DioramaOfflineStore.Failure)?.errorDescription ?? "Preparation could not finish. Check connection and free storage, then resume."
+            }
+        }
+    }
+    nonisolated private static func prepare(_ tile: DioramaTileID, token: String) async throws {
+        let store = DioramaOfflineStore.shared
+        let fullExists = await store.isVerified(tile, context: false)
+        let contextExists = await store.isVerified(tile, context: true)
+        if fullExists && contextExists { return }
+        try Task.checkCancellation()
+        guard let data = await DioramaMasakiSource.load(tile: tile, config: .slipway, token: token, offline: false), data.hasMapboxCoverage else {
+            try Task.checkCancellation()
+            throw DioramaOfflineStore.Failure.source
+        }
+        if !contextExists {
+            let context = try await DioramaGenerationQueue.shared.generateContext(data, config: .slipway)
+            try await store.save(context, context: true)
+        }
+        if !fullExists {
+            defer { DioramaTileGenerator.clearCache(for: tile, config: .slipway) }
+            let full = try await DioramaGenerationQueue.shared.generate(data, config: .slipway)
+            try await store.save(full, context: false)
+        }
+    }
+    func pause() {
+        guard isRunning else { return }
+        task?.cancel()
+        maps?.pause()
+    }
+    func remove() {
+        guard task == nil else { return }
+        isPrepared = false; notify()
+        task = Task {
+            defer { task = nil }
+            do {
+                try await DioramaOfflineStore.shared.removeAll()
+                completed = 0; bytes = 0
+                message = "Masaki 3D files removed. Shared basemap downloads are managed separately."
+            } catch { message = "Could not remove saved files. Try again." }
+            notify()
+        }
+    }
+    private func notify() {
+        NotificationCenter.default.post(name: DioramaState.renderSettingsChanged, object: DioramaState.shared)
+    }
+}

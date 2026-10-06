@@ -79,7 +79,7 @@ struct SettingsView: View {
             RowDivider(leading: 0)
 
             Toggle(isOn: Bindable(DioramaState.shared).isEnabled) {
-                IconRow(icon: .house, title: "Masaki 3D diorama", subtitle: "Experimental full-detail, one-tile camera-follow preview") { EmptyView() }
+                IconRow(icon: .house, title: "Masaki 3D diorama", subtitle: "Prepare all Masaki in Offline maps before viewing") { EmptyView() }
             }
             .tint(TwendeColor.primary)
             .accessibilityIdentifier("settings.diorama")
