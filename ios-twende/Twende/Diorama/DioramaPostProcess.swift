@@ -152,7 +152,7 @@ nonisolated final class DioramaPostProcess {
     func encode(command: MTLCommandBuffer, targetWidth: Int, targetHeight: Int,
                 vertices: MTLBuffer, indices: MTLBuffer, instances: MTLBuffer?,
                 opaqueRanges: [DioramaRenderLayer.Range], emissiveRanges: [DioramaRenderLayer.Range],
-                opaqueGroups: [DioramaInstanceGroup], emissiveGroups: [DioramaInstanceGroup],
+                opaqueGroups: [DioramaDrawPlan.Instance], emissiveGroups: [DioramaDrawPlan.Instance],
                 matrix: simd_float4x4, uniforms: DioramaShaderUniforms, eye: SIMD3<Float>,
                 aoRadius: Float, aoStrength: Float, bloomStrength: Float, lodDistance: Float) -> [MTLTexture] {
         resize(width: targetWidth, height: targetHeight)
@@ -186,15 +186,12 @@ nonisolated final class DioramaPostProcess {
             let wanted: MTLCullMode = doubleSided ? .none : .back
             if wanted != cullMode { g.setCullMode(wanted); cullMode = wanted }
         }
-        func drawGroup(_ group: DioramaInstanceGroup) {
-            let centre = (group.minimum + group.maximum) * 0.5
-            let far = simd_distance(centre, eye) > lodDistance && group.lightCount > 0
-            let start = far ? group.lightStart : group.fullStart
-            let count = far ? group.lightCount : group.fullCount
-            guard count > 0 else { return }
+        func drawGroup(_ group: DioramaDrawPlan.Instance) {
+            let start = group.start
+            let count = group.count
             cull(group.doubleSided)
             g.drawIndexedPrimitives(type: .triangle, indexCount: count, indexType: .uint32, indexBuffer: indices,
-                                    indexBufferOffset: start * MemoryLayout<UInt32>.stride, instanceCount: group.instances.count,
+                                    indexBufferOffset: start * MemoryLayout<UInt32>.stride, instanceCount: group.instanceCount,
                                     baseVertex: 0, baseInstance: group.firstInstance)
         }
         g.setDepthStencilState(depthState)

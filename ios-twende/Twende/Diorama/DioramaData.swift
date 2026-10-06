@@ -13,6 +13,8 @@ nonisolated struct DioramaTileData: Sendable {
     /// Individually mapped trees (OSM `natural=tree`).
     var trees: [DV2] = []
     var hasMapboxCoverage: Bool = false
+    /// Addressed height data for non-bundled tiles. Never substitute the Slipway snapshot.
+    var sourceTerrain: DioramaTerrain? = nil
     /// Footways, steps, the pier walkway and the slipway ramp.
     var paths: [DioramaPathFeature] = []
     /// Point features worth a model: masts, playgrounds, artwork, the mosque.

@@ -22,17 +22,25 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
 
         func intersects(_ matrix: simd_float4x4, mirrorHeight: Float? = nil) -> Bool {
             guard minimum.x > -.greatestFiniteMagnitude else { return true }
-            var outside = [Bool](repeating: true, count: 6)
-            for x in [minimum.x, maximum.x] { for y in [minimum.y, maximum.y] { for z in [minimum.z, maximum.z] {
+            var outside: UInt8 = 15
+            for corner in 0..<8 {
+                let x = corner & 4 == 0 ? minimum.x : maximum.x
+                let y = corner & 2 == 0 ? minimum.y : maximum.y
+                let z = corner & 1 == 0 ? minimum.z : maximum.z
                 let height = mirrorHeight.map { 2 * $0 - z } ?? z
                 let p = matrix * SIMD4(x, y, height, 1)
                 // Near-camera boxes and non-finite projections cannot safely be CPU-rejected.
                 guard p.x.isFinite, p.y.isFinite, p.w.isFinite, p.w > 0.00001 else { return true }
                 // Mapbox owns depth-range mapping; only reject lateral/behind-camera planes.
-                let planes = [p.x < -p.w, p.x > p.w, p.y < -p.w, p.y > p.w, p.w <= 0, false]
-                for i in 0..<6 { outside[i] = outside[i] && planes[i] }
-            } } }
-            return !outside.contains(true)
+                var mask: UInt8 = 0
+                if p.x < -p.w { mask |= 1 }
+                if p.x > p.w { mask |= 2 }
+                if p.y < -p.w { mask |= 4 }
+                if p.y > p.w { mask |= 8 }
+                outside &= mask
+                if outside == 0 { return true }
+            }
+            return outside == 0
         }
     }
 
@@ -89,6 +97,17 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
     var onLabelsChanged: (@Sendable (Set<UInt64>) -> Void)?
     var onFrameReport: (@Sendable (String) -> Void)?
     private let frameMetrics = DioramaFrameMetrics()
+    // Render-thread-only preparation cache. Water/reveal uniforms still update every frame.
+    private var selectionVisible: Set<DioramaCategory>?
+    private var selectionGlow: Bool = false
+    private var eligibleRanges: [Range] = []
+    private var eligibleGroups: [DioramaInstanceGroup] = []
+    private var eligibleCasters: [DioramaInstanceGroup] = []
+    private var selectionTransform: simd_double4x4?
+    private var selectedRanges: [Range] = []
+    private var selectedGroups: [DioramaInstanceGroup] = []
+    private var selectedRangeDraws: [Range] = []
+    private var selectedInstanceDraws: [DioramaDrawPlan.Instance] = []
 
     private func publishLabels(_ ids: Set<UInt64>) {
         lock.lock()
@@ -272,11 +291,14 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
         lock.unlock()
         let encodeStarted = CACurrentMediaTime()
         let glowOn = timeOfDay.showsLights
-        let drawn = ranges.filter { range in
-            guard range.count > 0, visible.contains(range.category) else { return false }
-            return range.category.isEmissive ? glowOn : true
+        if selectionVisible != visible || selectionGlow != glowOn {
+            eligibleRanges = ranges.filter { $0.count > 0 && visible.contains($0.category) && (!$0.category.isEmissive || glowOn) }
+            eligibleGroups = groups.filter { !$0.instances.isEmpty && visible.contains($0.category) && (!$0.category.isEmissive || glowOn) }
+            eligibleCasters = eligibleGroups.filter { !$0.category.isEmissive }
+            selectionVisible = visible; selectionGlow = glowOn; selectionTransform = nil
         }
-        guard !drawn.isEmpty || groups.contains(where: { visible.contains($0.category) && (!$0.category.isEmissive || glowOn) }) else { publishLabels([]); return }
+        let drawn = eligibleRanges
+        guard !drawn.isEmpty || !eligibleGroups.isEmpty else { publishLabels([]); return }
 
         var projection = matrix_identity_double4x4
         for column in 0..<4 {
@@ -297,12 +319,15 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
             SIMD4<Float>(transform.columns.0), SIMD4<Float>(transform.columns.1),
             SIMD4<Float>(transform.columns.2), SIMD4<Float>(transform.columns.3)
         ))
-        let mainRanges = drawn.filter { $0.intersects(matrix) }
-        let drawnGroups = groups.filter { group in
-            guard !group.instances.isEmpty, visible.contains(group.category) else { return false }
-            if group.category.isEmissive, !glowOn { return false }
-            return Range(category: group.category, start: 0, count: 0, minimum: group.minimum, maximum: group.maximum).intersects(matrix)
+        let selectionChanged = selectionTransform != transform
+        if selectionChanged {
+            selectedRanges = drawn.filter { $0.intersects(matrix) }
+            selectedGroups = eligibleGroups.filter { group in
+                Range(category: group.category, start: 0, count: 0, minimum: group.minimum, maximum: group.maximum).intersects(matrix)
+            }
         }
+        let mainRanges = selectedRanges
+        let drawnGroups = selectedGroups
         guard !mainRanges.isEmpty || !drawnGroups.isEmpty else { publishLabels([]); return }
         let eyeH = simd_inverse(transform) * SIMD4<Double>(0, 0, 1, 0)
         guard abs(eyeH.w) > 0.00000001 else { return }
@@ -330,7 +355,7 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
         for group in drawnGroups {
             viewLow = simd_min(viewLow, group.minimum); viewHigh = simd_max(viewHigh, group.maximum)
         }
-        let castingGroups = groups.filter { !$0.instances.isEmpty && visible.contains($0.category) && !$0.category.isEmissive }
+        let castingGroups = eligibleCasters
         if reveal.w < 0.5, let shadowMap, let shadowMatrix = shadowMap.update(command: mtlCommandBuffer, vertices: vertexBuffer, indices: indexBuffer, instances: instanceBuffer,
             ranges: drawn, groups: castingGroups, focus: viewLow.x.isFinite && viewHigh.x > viewLow.x ? (viewLow, viewHigh) : nil,
             sun: SIMD3(uniforms.sunDirection.x, uniforms.sunDirection.y, uniforms.sunDirection.z), preset: timeOfDay) {
@@ -341,7 +366,7 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
         uniforms.water = SIMD4<Float>(waterHeight, 0, Float(texture.width), Float(texture.height))
         var reflected: MTLTexture?
         if !reducedEffects, !wireframe, mainRanges.contains(where: { $0.category == .water }), let reflectionPass {
-            let reflectionGroups = groups.filter { visible.contains($0.category) && (!$0.category.isEmissive || glowOn) }
+            let reflectionGroups = eligibleGroups
             reflected = reflectionPass.encode(command: mtlCommandBuffer, width: texture.width, height: texture.height,
                 depthRange: (Double(parameters.depthRange.min), Double(parameters.depthRange.max)), matrix: matrix, uniforms: uniforms,
                 signature: timeOfDay.rawValue + visible.map(\.rawValue).sorted().joined(),
@@ -358,15 +383,22 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
         let bloomStrength: Float = effectsOn && glowOn ? postSettings.bloom : 0
         uniforms.post = SIMD4<Float>(aoStrength, bloomStrength, postSettings.grade, postSettings.haze)
         let lodDistance: Float = 140
+        if selectionChanged {
+            selectedRangeDraws = DioramaDrawPlan.ranges(mainRanges)
+            selectedInstanceDraws = DioramaDrawPlan.instances(drawnGroups, eye: eye, lodDistance: lodDistance)
+            selectionTransform = transform
+        }
+        let submittedRanges = selectedRangeDraws
+        let submittedGroups = selectedInstanceDraws
         var bloomLevels: [MTLTexture] = []
         if let postProcess, aoStrength > 0 || bloomStrength > 0 {
             bloomLevels = postProcess.encode(
                 command: mtlCommandBuffer, targetWidth: texture.width, targetHeight: texture.height,
                 vertices: vertexBuffer, indices: indexBuffer, instances: instanceBuffer,
-                opaqueRanges: mainRanges.filter { $0.category != .water && $0.category != .propGlow && !$0.category.isEmissive },
-                emissiveRanges: mainRanges.filter { $0.category.isEmissive },
-                opaqueGroups: drawnGroups.filter { !$0.category.isEmissive },
-                emissiveGroups: drawnGroups.filter { $0.category.isEmissive },
+                opaqueRanges: submittedRanges.filter { $0.category != .water && $0.category != .propGlow && !$0.category.isEmissive },
+                emissiveRanges: submittedRanges.filter { $0.category.isEmissive },
+                opaqueGroups: submittedGroups.filter { !$0.category.isEmissive },
+                emissiveGroups: submittedGroups.filter { $0.category.isEmissive },
                 matrix: matrix, uniforms: uniforms, eye: eye,
                 aoRadius: postSettings.aoRadius, aoStrength: aoStrength, bloomStrength: bloomStrength, lodDistance: lodDistance)
         }
@@ -403,43 +435,40 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
             let wanted: MTLCullMode = doubleSided ? .none : .back
             if wanted != cullMode { encoder.setCullMode(wanted); cullMode = wanted }
         }
-        let opaqueRanges = mainRanges.filter { $0.category != .water && $0.category != .propGlow }
+        let opaqueRanges = submittedRanges.filter { $0.category != .water && $0.category != .propGlow }
         encoder.setDepthStencilState(depthState)
         for range in opaqueRanges {
             cull(range.doubleSided)
             encoder.drawIndexedPrimitives(type: .triangle, indexCount: range.count, indexType: .uint32, indexBuffer: indexBuffer, indexBufferOffset: range.start * MemoryLayout<UInt32>.stride)
         }
         // Instanced prototypes: full detail near the eye, light tessellation beyond `lodDistance`.
-        func drawGroup(_ group: DioramaInstanceGroup) {
-            let centre = (group.minimum + group.maximum) * 0.5
-            let far = simd_distance(centre, eye) > lodDistance && group.lightCount > 0
-            let start = far ? group.lightStart : group.fullStart
-            let count = far ? group.lightCount : group.fullCount
-            guard count > 0 else { return }
+        func drawGroup(_ group: DioramaDrawPlan.Instance) {
+            let start = group.start
+            let count = group.count
             cull(group.doubleSided)
             encoder.drawIndexedPrimitives(type: .triangle, indexCount: count, indexType: .uint32, indexBuffer: indexBuffer,
-                                          indexBufferOffset: start * MemoryLayout<UInt32>.stride, instanceCount: group.instances.count,
+                                          indexBufferOffset: start * MemoryLayout<UInt32>.stride, instanceCount: group.instanceCount,
                                           baseVertex: 0, baseInstance: group.firstInstance)
         }
         if let instanceBuffer, let instancedPipeline {
             encoder.setVertexBuffer(instanceBuffer, offset: 0, index: 3)
             encoder.setRenderPipelineState(instancedPipeline)
-            for group in drawnGroups where group.category != .propGlow { drawGroup(group) }
+            for group in submittedGroups where group.category != .propGlow { drawGroup(group) }
         }
         encoder.setDepthStencilState(noWriteDepthState)
         encoder.setRenderPipelineState(waterPipeline ?? pipeline)
         cull(true)
-        for range in mainRanges where range.category == .water {
+        for range in submittedRanges where range.category == .water {
             encoder.drawIndexedPrimitives(type: .triangle, indexCount: range.count, indexType: .uint32, indexBuffer: indexBuffer, indexBufferOffset: range.start * MemoryLayout<UInt32>.stride)
         }
         encoder.setRenderPipelineState(glowPipeline ?? pipeline)
-        for range in mainRanges where range.category == .propGlow {
+        for range in submittedRanges where range.category == .propGlow {
             encoder.drawIndexedPrimitives(type: .triangle, indexCount: range.count, indexType: .uint32, indexBuffer: indexBuffer, indexBufferOffset: range.start * MemoryLayout<UInt32>.stride)
         }
         if let instanceBuffer, let instancedGlowPipeline {
             encoder.setVertexBuffer(instanceBuffer, offset: 0, index: 3)
             encoder.setRenderPipelineState(instancedGlowPipeline)
-            for group in drawnGroups where group.category == .propGlow { drawGroup(group) }
+            for group in submittedGroups where group.category == .propGlow { drawGroup(group) }
         }
         if !bloomLevels.isEmpty, let postProcess {
             encoder.setTriangleFillMode(.fill)
@@ -451,16 +480,16 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
         } else { labelIDs = [] }
         publishLabels(labelIDs)
         encoder.endEncoding()
-        let triangles = mainRanges.reduce(0) { $0 + $1.count / 3 } + drawnGroups.reduce(0) { count, group in
-            let far = simd_distance((group.minimum + group.maximum) * 0.5, eye) > lodDistance && group.lightCount > 0
-            return count + (far ? group.lightCount : group.fullCount) / 3 * group.instances.count
-        }
+        let triangles = submittedRanges.reduce(0) { $0 + $1.count / 3 }
+            + submittedGroups.reduce(0) { $0 + $1.count / 3 * $1.instanceCount }
+        let drawCalls = submittedRanges.count + submittedGroups.count
+        let unmergedDrawCalls = mainRanges.count + drawnGroups.count
         let cpuMS = (CACurrentMediaTime() - encodeStarted) * 1000
         let metrics = frameMetrics
         let callback = onFrameReport
         mtlCommandBuffer.addCompletedHandler { command in
             let gpuMS = command.gpuEndTime > command.gpuStartTime ? (command.gpuEndTime - command.gpuStartTime) * 1000 : nil
-            if let report = metrics.record(triangles: triangles, cpuMS: cpuMS, gpuMS: gpuMS) { callback?(report) }
+            if let report = metrics.record(triangles: triangles, cpuMS: cpuMS, gpuMS: gpuMS, drawCalls: drawCalls, unmergedDrawCalls: unmergedDrawCalls) { callback?(report) }
         }
     }
 

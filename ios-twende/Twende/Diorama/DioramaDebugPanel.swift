@@ -15,7 +15,7 @@ struct DioramaDebugPanel: View {
                 HStack(spacing: 10) {
                     Image(systemName: "cube.transparent")
                         .font(.system(size: 15, weight: .semibold))
-                    Text("Slipway diorama")
+                    Text("Masaki diorama")
                         .font(TwendeFont.headline)
                     Spacer(minLength: 8)
                     Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
@@ -32,6 +32,9 @@ struct DioramaDebugPanel: View {
                 ScrollView {
                   VStack(alignment: .leading, spacing: 12) {
                     RowDivider(leading: 0)
+                    Text("Full-detail camera-follow preview · one resident tile. Pan across Masaki; new tiles require online map and elevation data.")
+                        .font(TwendeFont.label)
+                        .foregroundStyle(TwendeColor.inkSecondary)
                     Picker("Time of day", selection: $state.timeOfDay) {
                         ForEach(DioramaTimeOfDay.allCases) { time in
                             Text(time.rawValue.capitalized).tag(time)

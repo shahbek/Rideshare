@@ -10,7 +10,13 @@ nonisolated final class DioramaShadowMap {
     private let instancedPipeline: MTLRenderPipelineState
     private let depth: MTLDepthStencilState
     private let corners: [SIMD3<Float>]
-    private var cachedKey: String?
+    private struct CacheKey: Equatable {
+        let preset: DioramaTimeOfDay
+        let categories: Set<DioramaCategory>
+        let low: SIMD3<Float>?
+        let high: SIMD3<Float>?
+    }
+    private var cachedKey: CacheKey?
     private var matrix: simd_float4x4 = matrix_identity_float4x4
 
     init?(device: MTLDevice, library: MTLLibrary, vertices: [BuildingRenderVertex], instances: [DioramaInstanceData]) {
@@ -68,16 +74,14 @@ nonisolated final class DioramaShadowMap {
         let casters = ranges.filter { !$0.category.isEmissive && $0.category != .water }
         let castingGroups = groups.filter { !$0.category.isEmissive }
         let snap: Float = 8
-        var focusCorners: [SIMD3<Float>] = []
-        var focusKey = ""
-        if let focus {
-            let lo = floor(focus.0 / snap) * snap, hi = ceil(focus.1 / snap) * snap
-            for x in [lo.x, hi.x] { for y in [lo.y, hi.y] { for z in [lo.z - 2, hi.z + 2] { focusCorners.append(SIMD3(x, y, z)) } } }
-            focusKey = "\(lo.x),\(lo.y),\(lo.z),\(hi.x),\(hi.y),\(hi.z)"
-        }
-        let key = preset.rawValue + casters.map { $0.category.rawValue }.sorted().joined(separator: "/")
-            + "|" + Set(castingGroups.map { $0.category.rawValue }).sorted().joined(separator: "/") + "|" + focusKey
+        let low = focus.map { floor($0.0 / snap) * snap }
+        let high = focus.map { ceil($0.1 / snap) * snap }
+        let key = CacheKey(preset: preset, categories: Set(casters.map(\.category)).union(castingGroups.map(\.category)), low: low, high: high)
         if cachedKey == key { return matrix }
+        var focusCorners: [SIMD3<Float>] = []
+        if let lo = low, let hi = high {
+            for x in [lo.x, hi.x] { for y in [lo.y, hi.y] { for z in [lo.z - 2, hi.z + 2] { focusCorners.append(SIMD3(x, y, z)) } } }
+        }
         let forward = -simd_normalize(sun)
         let right = simd_normalize(simd_cross(SIMD3<Float>(0, 0, 1), sun))
         let up = simd_normalize(simd_cross(sun, right))
@@ -119,17 +123,22 @@ nonisolated final class DioramaShadowMap {
         encoder.setDepthBias(0.4, slopeScale: 1.0, clamp: 0.001)
         encoder.setVertexBuffer(vertices, offset: 0, index: 0)
         encoder.setVertexBytes(&candidate, length: MemoryLayout<simd_float4x4>.stride, index: 1)
-        for range in casters {
+        for range in DioramaDrawPlan.ranges(casters.filter { $0.intersects(candidate) }) {
             encoder.drawIndexedPrimitives(type: .triangle, indexCount: range.count, indexType: .uint32,
                                           indexBuffer: indices, indexBufferOffset: range.start * MemoryLayout<UInt32>.stride)
         }
         if let instances, !castingGroups.isEmpty {
             encoder.setRenderPipelineState(instancedPipeline)
             encoder.setVertexBuffer(instances, offset: 0, index: 3)
-            for group in castingGroups where group.fullCount > 0 && !group.instances.isEmpty {
-                encoder.drawIndexedPrimitives(type: .triangle, indexCount: group.lightCount > 0 ? group.lightCount : group.fullCount, indexType: .uint32,
-                                              indexBuffer: indices, indexBufferOffset: (group.lightCount > 0 ? group.lightStart : group.fullStart) * MemoryLayout<UInt32>.stride,
-                                              instanceCount: group.instances.count, baseVertex: 0, baseInstance: group.firstInstance)
+            // Light-space culling, not camera culling: offscreen objects still cast into view.
+            let retained = castingGroups.filter {
+                $0.fullCount > 0 && DioramaRenderLayer.Range(category: $0.category, start: 0, count: 0,
+                    minimum: $0.minimum, maximum: $0.maximum).intersects(candidate)
+            }
+            for group in DioramaDrawPlan.instances(retained) {
+                encoder.drawIndexedPrimitives(type: .triangle, indexCount: group.count, indexType: .uint32,
+                    indexBuffer: indices, indexBufferOffset: group.start * MemoryLayout<UInt32>.stride,
+                    instanceCount: group.instanceCount, baseVertex: 0, baseInstance: group.firstInstance)
             }
         }
         encoder.endEncoding()

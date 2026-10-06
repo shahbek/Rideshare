@@ -44,7 +44,7 @@ final class DioramaState {
     }
 }
 
-/// Lifecycle of the single Slipway tile on one map. The whole thing is built from the bundled OSM
+/// Lifecycle of a camera-following full-detail tile across the Masaki peninsula. The whole thing is built from the bundled OSM
 /// extract and height snapshot on a background thread, then shown through one custom Metal layer,
 /// exactly like the destination buildings and city landmarks. Mapbox is asked for three things: a
 /// custom layer slot, a clip layer that hides Standard's own 3D buildings under the toy town, and to
@@ -66,7 +66,12 @@ final class DioramaTileManager {
         case failed
     }
 
-    private let tile: DioramaTileID
+    private var tile: DioramaTileID
+    private var requestedTile: DioramaTileID?
+    private var selectionTask: Task<Void, Never>?
+    private var packageTask: Task<Void, Never>?
+    private var lifecycleObservers: [NSObjectProtocol] = []
+    private var areaName: String { tile == DioramaMasakiSource.slipway ? "Slipway" : "Masaki" }
     private var status: Status = .idle
     private var shown: Bool = false
     private var installed: Bool = false
@@ -137,9 +142,9 @@ final class DioramaTileManager {
             }
         }
         for name in [UIApplication.didBecomeActiveNotification, UIApplication.willResignActiveNotification] {
-            NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+            lifecycleObservers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated { self?.updateWaterClock() }
-            }
+            })
         }
     }
 
@@ -191,6 +196,13 @@ final class DioramaTileManager {
     func remove() {
         generationRevision &+= 1
         generationTask?.cancel(); generationTask = nil
+        packageTask?.cancel(); packageTask = nil
+        selectionTask?.cancel(); selectionTask = nil
+        for observer in lifecycleObservers { NotificationCenter.default.removeObserver(observer) }
+        lifecycleObservers.removeAll()
+        if let thermalObserver { NotificationCenter.default.removeObserver(thermalObserver) }
+        if let powerObserver { NotificationCenter.default.removeObserver(powerObserver) }
+        thermalObserver = nil; powerObserver = nil
         pendingUpdate?.cancel()
         pendingUpdate = nil
         if let settingsObserver { NotificationCenter.default.removeObserver(settingsObserver) }
@@ -222,7 +234,7 @@ final class DioramaTileManager {
             return CameraOptions(center: CLLocationCoordinate2D(latitude: coordinate.latitude, longitude: coordinate.longitude),
                                  zoom: 18, bearing: config.cameraBearing, pitch: config.cameraPitch)
         }
-        return CameraOptions(center: tile.centre, zoom: config.cameraZoom, bearing: config.cameraBearing, pitch: config.cameraPitch)
+        return CameraOptions(center: DioramaMasakiSource.slipway.centre, zoom: config.cameraZoom, bearing: config.cameraBearing, pitch: config.cameraPitch)
     }
 
     // MARK: Updates
@@ -243,48 +255,87 @@ final class DioramaTileManager {
         applyDebug()
 
         if state.isBasemapOnly {
+            selectionTask?.cancel(); selectionTask = nil; requestedTile = nil
             if shown { beginRetraction() }
             state.status = "Basemap-only comparison · custom shoreline hidden"
             return
         }
         let camera = map.cameraState
         let centreTile = DioramaTileID(latitude: camera.center.latitude, longitude: camera.center.longitude, zoom: config.tileZoom)
-        let near = abs(centreTile.x - tile.x) <= config.visibilityRadiusTiles && abs(centreTile.y - tile.y) <= config.visibilityRadiusTiles
-        guard near else {
+        let withinCoverage = DioramaMasakiSource.contains(latitude: camera.center.latitude, longitude: camera.center.longitude)
+        guard withinCoverage else {
+            selectionTask?.cancel(); selectionTask = nil; requestedTile = nil
             beginRetraction()
-            state.status = "Fly to Slipway to see the diorama"
+            state.status = "Masaki coverage · pan back to the peninsula"
             return
         }
         guard camera.zoom >= config.minimumZoom else {
+            selectionTask?.cancel(); selectionTask = nil; requestedTile = nil
             beginRetraction()
             state.status = "Zoom in to \(Int(config.minimumZoom)) to build the diorama"
             return
+        }
+        // Hysteresis avoids rebuilding when a resting camera straddles an exact tile boundary.
+        let local = DioramaProjection(origin: tile.centre)
+        let inside = local.rect(of: tile).expanded(by: 45).contains(local.local(longitude: camera.center.longitude, latitude: camera.center.latitude))
+        if centreTile != tile, !inside {
+            requestTile(centreTile)
+        } else {
+            selectionTask?.cancel(); selectionTask = nil; requestedTile = nil
         }
         switch status {
         case .idle:
             generate()
         case .generating:
-            state.status = "Generating Slipway…"
+            state.status = "Generating \(areaName)… · full detail"
         case .loaded(let artifacts):
             if !shown { show(artifacts, on: map) }
             else if isRetracting { beginReveal(fromCurrent: true) }
         case .failed:
-            state.status = "Diorama generation failed"
+            state.status = "Tile unavailable · basemap retained. Regenerate online to retry."
         }
     }
 
     private func updateEffectStatus() {
         guard shown else { return }
         if thermalReduced {
-            state.status = "Slipway loaded · bloom/AO off (thermal)"
+            state.status = "\(areaName) loaded · bloom/AO off (thermal)"
         } else if ProcessInfo.processInfo.isLowPowerModeEnabled {
-            state.status = "Slipway loaded · bloom/AO off (Low Power)"
+            state.status = "\(areaName) loaded · bloom/AO off (Low Power)"
         } else {
             if case .loaded(let artifacts) = status, !artifacts.hasMapboxCoverage {
                 state.status = "Full effects · bundled coverage only. Regenerate online for Mapbox names/geometry."
             } else {
-                state.status = "Slipway loaded · full effects · Mapbox coverage"
+                state.status = "\(areaName) loaded · full effects · Mapbox coverage"
             }
+        }
+    }
+
+    /// Bounded full-detail residency: visit any covered tile without retaining the whole city.
+    /// This is a one-tile preview, not yet a seamless multi-tile renderer.
+    private func requestTile(_ next: DioramaTileID) {
+        guard requestedTile != next else { return }
+        selectionTask?.cancel()
+        requestedTile = next
+        selectionTask = Task { [weak self] in
+            do { try await Task.sleep(for: .seconds(0.65)) } catch { return }
+            guard let self, let map = self.map, self.installed, self.retractionCompletion == nil,
+                  self.requestedTile == next, !self.state.isBasemapOnly,
+                  map.cameraState.zoom >= self.config.minimumZoom,
+                  DioramaTileID(latitude: map.cameraState.center.latitude, longitude: map.cameraState.center.longitude, zoom: self.config.tileZoom) == next else { return }
+            self.generationRevision &+= 1
+            self.generationTask?.cancel(); self.generationTask = nil
+            self.packageTask?.cancel(); self.packageTask = nil
+            self.hide(on: map)
+            DioramaTileGenerator.clearCache(for: self.tile, config: self.config)
+            self.state.loadedTiles.removeAll()
+            self.state.frameReport = "Waiting for the new tile's frame measurements."
+            self.tile = next
+            self.bypassDiskOnNextGeneration = false
+            self.status = .idle
+            self.requestedTile = nil
+            self.selectionTask = nil
+            self.generate()
         }
     }
 
@@ -295,41 +346,31 @@ final class DioramaTileManager {
 
     private func generate() {
         status = .generating
-        state.status = "Generating Slipway…"
+        state.status = "Generating \(areaName)… · full detail"
         generationRevision &+= 1
         let revision = generationRevision
         let config = self.config
-        let reduced = thermalReduced
+        // Power policy may disable effects, but never change the city's generated detail.
+        let reduced = false
+        let tile = self.tile
         let bypassDisk = bypassDiskOnNextGeneration
         bypassDiskOnNextGeneration = false
         let token = MapboxOptions.accessToken
         let offline = UserDefaults.standard.bool(forKey: "maps.downloadedOnly")
         generationTask = Task.detached(priority: .userInitiated) {
             let artifacts: DioramaTileArtifacts?
+            var needsPackage = false
             let started = Date()
-            let tile = DioramaTileID(latitude: config.seedLatitude, longitude: config.seedLongitude, zoom: config.tileZoom)
             if bypassDisk { await DioramaDiskCache.shared.remove(tile: tile, config: config) }
             if let cached = DioramaTileGenerator.cached(tile, config: config, reduced: reduced) {
                 artifacts = cached
             } else if let disk = await DioramaDiskCache.shared.read(tile: tile, config: config, reduced: reduced) {
                 artifacts = disk
-            } else if let bundled = DioramaBundledTile.load(config: config), !bundled.isEmpty {
-                var data = DioramaMapboxData.resolveOwnership(bundled)
-                if let features = await DioramaMapboxData.load(tile: tile, token: token, offline: offline) {
-                    data = DioramaMapboxData.merge(features, into: data)
-                }
+            } else if let data = await DioramaMasakiSource.load(tile: tile, config: config, token: token, offline: offline), !data.isEmpty {
                 guard !Task.isCancelled else { return }
                 do {
-                    // Prototype construction used to block the main thread at map-manager init,
-                    // even when the diorama was off. Build lazily here, after checking the cache.
-                    let library = DioramaPropLibrary(config: config)
-                    print("[Diorama timing] bundle + prototypes: \(String(format: "%.3f", Date().timeIntervalSince(started)))s")
-                    var generated = try DioramaTileGenerator.generate(data, config: config, library: library, reduced: reduced)
-                    let encodingStarted = ProcessInfo.processInfo.systemUptime
-                    if let bytes = await DioramaDiskCache.shared.write(generated, config: config, reduced: reduced) {
-                        generated.stageTimings.append("lossless package write: \(String(format: "%.3f", ProcessInfo.processInfo.systemUptime - encodingStarted))s · \(String(format: "%.2f", Double(bytes) / 1_048_576)) MiB on disk")
-                    }
-                    artifacts = generated
+                    artifacts = try await DioramaGenerationQueue.shared.generate(data, config: config)
+                    needsPackage = true
                 } catch {
                     print("[Diorama] generate failed: \(error)")
                     artifacts = nil
@@ -337,17 +378,45 @@ final class DioramaTileManager {
             } else {
                 artifacts = nil
             }
+            guard !Task.isCancelled else { return }
+            let shouldWrite = needsPackage
+            let readySeconds = Date().timeIntervalSince(started)
             await MainActor.run {
                 guard self.generationRevision == revision, case .generating = self.status else { return }
                 self.generationTask = nil
-                guard let artifacts else {
+                guard var artifacts else {
                     self.status = .failed
-                    self.state.status = "Diorama generation failed"
+                    self.state.status = "Tile unavailable · basemap retained. Regenerate online to retry."
                     return
                 }
+                artifacts.stageTimings.append("source/cache → renderer-ready: \(String(format: "%.3f", readySeconds))s (not first visible)")
+                if tile != DioramaMasakiSource.slipway {
+                    artifacts.stageTimings.append("Masaki camera-follow preview · one resident tile · mapped footprints/water/land use + Terrain-RGB")
+                }
                 self.status = .loaded(artifacts)
+                if shouldWrite { self.persistAfterPresentation(artifacts, revision: revision) }
                 print("[Diorama] \(artifacts.tile): \(artifacts.totalTriangles) unique tris, \(artifacts.lightDrawnTriangles)–\(artifacts.drawnTriangles) drawn (light–full LOD), \(artifacts.totalInstances) instances, \(artifacts.totalBytes / 1024) KB in \(String(format: "%.2f", artifacts.generationSeconds))s")
                 self.scheduleUpdate(delay: 0.05)
+            }
+        }
+    }
+
+    /// Publication no longer waits for compression. Writes still run off-main and carry the
+    /// generation revision so a late completion cannot replace a newer tile's diagnostics.
+    private func persistAfterPresentation(_ artifacts: DioramaTileArtifacts, revision: UInt) {
+        packageTask?.cancel()
+        let config = self.config
+        packageTask = Task.detached(priority: .utility) { [weak self] in
+            do { try await Task.sleep(for: .seconds(0.5)) } catch { return }
+            let started = ProcessInfo.processInfo.systemUptime
+            guard let bytes = await DioramaDiskCache.shared.write(artifacts, config: config, reduced: false), !Task.isCancelled else { return }
+            let line = "background lossless package write: \(String(format: "%.3f", ProcessInfo.processInfo.systemUptime - started))s · \(String(format: "%.2f", Double(bytes) / 1_048_576)) MiB on disk"
+            await MainActor.run { [weak self] in
+                guard let self, self.generationRevision == revision, case .loaded(var current) = self.status else { return }
+                current.stageTimings.append(line)
+                self.status = .loaded(current)
+                if self.shown { self.state.loadedTiles[current.tile] = current }
+                self.packageTask = nil
             }
         }
     }
@@ -356,6 +425,7 @@ final class DioramaTileManager {
     func regenerate() {
         guard let map else { return }
         bypassDiskOnNextGeneration = true
+        packageTask?.cancel(); packageTask = nil
         generationRevision &+= 1
         generationTask?.cancel(); generationTask = nil
         DioramaTileGenerator.clearCache(for: tile, config: config)
@@ -461,6 +531,7 @@ final class DioramaTileManager {
     /// Keep this manager alive until the reverse square reaches zero, including settings-off.
     func retract(completion: @escaping () -> Void) {
         guard retractionCompletion == nil else { return }
+        selectionTask?.cancel(); selectionTask = nil; requestedTile = nil
         retractionCompletion = completion
         if shown { beginRetraction() }
         else { retractionCompletion = nil; completion() }

@@ -2,7 +2,7 @@ import Foundation
 
 /// Fetches the entire tile, not just visible/decluttered features. Bundled authored scenery wins conflicts.
 nonisolated enum DioramaMapboxData {
-    static func load(tile: DioramaTileID, token: String, offline: Bool) async -> [DioramaVectorTile.Feature]? {
+    static func load(tile: DioramaTileID, token: String, offline: Bool, includesEnvironment: Bool = false) async -> [DioramaVectorTile.Feature]? {
         guard !token.isEmpty,
               var url = URLComponents(string: "https://api.mapbox.com/v4/mapbox.mapbox-streets-v8/\(tile.z)/\(tile.x)/\(tile.y).vector.pbf") else { return nil }
         url.queryItems = [URLQueryItem(name: "access_token", value: token)]
@@ -14,7 +14,7 @@ nonisolated enum DioramaMapboxData {
                 print("[Diorama coverage] Mapbox tile unavailable; using bundled geometry")
                 return nil
             }
-            let features = try DioramaVectorTile.decode(bytes)
+            let features = try DioramaVectorTile.decode(bytes, includesEnvironment: includesEnvironment)
             guard !features.isEmpty else { return nil }
             return features
         } catch {

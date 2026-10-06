@@ -113,7 +113,8 @@ nonisolated enum DioramaTileGenerator {
         let started = Date()
         var checkpoint = DioramaGenerationAudit.now
         var stageTimings: [String] = []
-        func timing(_ stage: String) {
+        func timing(_ stage: String) throws {
+            try Task.checkCancellation()
             let now = DioramaGenerationAudit.now
             let seconds = now - checkpoint
             audit?.stage(stage, seconds: seconds)
@@ -123,12 +124,15 @@ nonisolated enum DioramaTileGenerator {
         }
 
         let roadIndex = DioramaRoadIndex(roads: data.roads, pavementWidth: config.pavementWidth)
-        let terrain = DioramaTerrain.load(rect: data.rect, config: config).resolvingSurfaces(in: data)
+        guard data.tile == DioramaMasakiSource.slipway || data.sourceTerrain != nil else {
+            throw NSError(domain: "Diorama", code: 3, userInfo: [NSLocalizedDescriptionKey: "This tile needs its own elevation source"])
+        }
+        let terrain = (data.sourceTerrain ?? DioramaTerrain.load(rect: data.rect, config: config)).resolvingSurfaces(in: data)
         let streetLayout = DioramaStreetLayout(data: data, config: config)
         guard let painter = DioramaGroundPainter(rect: data.rect, size: reduced ? config.reducedGroundImageSize : config.groundImageSize, config: config) else {
             throw NSError(domain: "Diorama", code: 2, userInfo: [NSLocalizedDescriptionKey: "ground image could not be created"])
         }
-        timing("terrain + street layout + painter")
+        try timing("terrain + street layout + painter")
         var buildings = DioramaMesh()
         var windowGlow = DioramaMesh()
         var walls = DioramaMesh()
@@ -170,32 +174,34 @@ nonisolated enum DioramaTileGenerator {
             }
         }
 
-        timing("buildings")
+        try timing("buildings")
         let wallGenerator = DioramaCompoundWallGenerator(config: config, roads: roadIndex, buildings: built, tileRect: data.rect, terrain: terrain, landuse: data.landuse)
         let compounds = wallGenerator.generate(into: &walls)
-        timing("compounds")
+        try timing("compounds")
 
         // Paint order matters: base grass and lawns, then footways and hotel paving, then roads over
         // everything, then the sea floor so coastal paint stops at the mapped water edge.
         let groundGenerator = DioramaGroundGenerator(config: config, data: data, roads: roadIndex, terrain: terrain, painter: painter)
         groundGenerator.generate(compounds: compounds, into: &ground, water: &water)
-        timing("connected ground + water + reef")
+        try timing("connected ground + water + reef")
 
         DioramaShorelineGenerator(config: config, data: data, terrain: terrain, library: library)
             .generate(ground: &ground, props: &props, vegetation: &vegetation, debug: &shorelineDebug)
 
-        timing("shore structures")
+        try timing("shore structures")
         let amenities = DioramaAmenityGenerator(config: config, data: data, roads: roadIndex, library: library, buildings: built, terrain: terrain, painter: painter)
         amenities.generate(ground: &ground, props: &props, glow: &propGlow, lights: &lights)
 
-        timing("amenities")
-        DioramaHotelGrounds(data: data, terrain: terrain, library: library, roads: roadIndex, streetPolygons: streetLayout.corridor.polygons, painter: painter)
-            .generate(ground: &ground, props: &props, vegetation: &vegetation, glow: &propGlow, lights: &lights)
+        try timing("amenities")
+        if data.tile == DioramaMasakiSource.slipway {
+            DioramaHotelGrounds(data: data, terrain: terrain, library: library, roads: roadIndex, streetPolygons: streetLayout.corridor.polygons, painter: painter)
+                .generate(ground: &ground, props: &props, vegetation: &vegetation, glow: &propGlow, lights: &lights)
+        }
 
-        timing("hotel grounds")
+        try timing("hotel grounds")
         DioramaRoadGenerator(config: config, data: data, roads: roadIndex, terrain: terrain, layout: streetLayout, compounds: compounds, painter: painter).generate(into: &roadsMesh)
         groundGenerator.paintWater()
-        timing("roads + coastal paint")
+        try timing("roads + coastal paint")
 
         let placer = DioramaPropPlacer(config: config, data: data, roads: roadIndex, library: library, buildings: built, compounds: compounds, reduceDetail: reduced, terrain: terrain)
         placer.vegetation(into: &vegetation)
@@ -204,7 +210,7 @@ nonisolated enum DioramaTileGenerator {
         for light in porchLights where lights.count < config.maxLights { lights.append(light) }
         let lightGrid = DioramaLightGrid.build(lights, rect: data.rect, cells: config.lightGridCells, perCell: config.lightsPerCell)
 
-        timing("props + light grid")
+        try timing("props + light grid")
         let uniquePrimitives = Dictionary(uniqueKeysWithValues: registry.entries.filter { $0.placements == 1 }.map { ($0.prototype.id, $0.prototype) })
         buildings.bakeUniquePrimitives(uniquePrimitives)
         windowGlow.bakeUniquePrimitives(uniquePrimitives)
@@ -213,7 +219,7 @@ nonisolated enum DioramaTileGenerator {
         roadsMesh.bakeUniquePrimitives(uniquePrimitives)
         props.bakeUniquePrimitives(uniquePrimitives)
         propGlow.bakeUniquePrimitives(uniquePrimitives)
-        timing("unique primitive consolidation")
+        try timing("unique primitive consolidation")
         // Order matters: opaque categories first, translucent halos (propGlow) last.
         let meshes: [(DioramaCategory, DioramaMesh)] = [
             (.ground, ground), (.roads, roadsMesh), (.buildings, buildings), (.walls, walls), (.vegetation, vegetation),
@@ -404,7 +410,7 @@ nonisolated enum DioramaTileGenerator {
         }
 
         let image = painter.image()
-        timing("packing + image export")
+        try timing("packing + image export")
         for (category, mesh) in meshes {
             audit?.record(mesh, category: category)
             print("[Diorama geometry] \(category): \(mesh.triangleCount) baked triangles, \(mesh.instances.count) instances")
@@ -421,6 +427,9 @@ nonisolated enum DioramaTileGenerator {
         try Task.checkCancellation()
         if audit == nil {
             cacheLock.lock()
+            // A whole-city dictionary retained hundreds of MB per visited tile indefinitely.
+            // Disk holds revisits; keep only the most recent CPU artifact in memory.
+            cache.removeAll(keepingCapacity: true)
             cache[cacheKey(data.tile, config: config, reduced: reduced)] = artifacts
             cacheLock.unlock()
         }

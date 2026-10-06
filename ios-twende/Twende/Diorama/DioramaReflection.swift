@@ -67,19 +67,24 @@ nonisolated final class DioramaReflection {
         for (i, buffer) in fragmentBuffers.enumerated() { e.setFragmentBuffer(buffer, offset: 0, index: i + 1) }
         for (i, texture) in textures.enumerated() { e.setFragmentTexture(texture, index: i) }
         e.setRenderPipelineState(pipeline)
-        for range in ranges where range.category != .water && range.category != .propGlow && range.category != .shorelineDebug && range.intersects(matrix, mirrorHeight: uniforms.water.x) {
+        let reflectedRanges = DioramaDrawPlan.ranges(ranges.filter {
+            $0.category != .water && $0.category != .propGlow && $0.category != .shorelineDebug
+                && $0.intersects(matrix, mirrorHeight: uniforms.water.x)
+        })
+        for range in reflectedRanges {
             e.setCullMode(range.doubleSided ? .none : .back)
             e.drawIndexedPrimitives(type: .triangle, indexCount: range.count, indexType: .uint32, indexBuffer: indices, indexBufferOffset: range.start * 4)
         }
         if let instances {
             e.setVertexBuffer(instances, offset: 0, index: 3); e.setRenderPipelineState(instancedPipeline)
-            for group in groups where group.category != .propGlow {
-                let bounds = DioramaRenderLayer.Range(category: group.category, start: 0, count: 0, minimum: group.minimum, maximum: group.maximum)
-                guard bounds.intersects(matrix, mirrorHeight: uniforms.water.x) else { continue }
+            let reflectedGroups = groups.filter { group in
+                group.category != .propGlow && DioramaRenderLayer.Range(category: group.category, start: 0, count: 0,
+                    minimum: group.minimum, maximum: group.maximum).intersects(matrix, mirrorHeight: uniforms.water.x)
+            }
+            for group in DioramaDrawPlan.instances(reflectedGroups) {
                 e.setCullMode(group.doubleSided ? .none : .back)
-                let light = group.lightCount > 0
-                e.drawIndexedPrimitives(type: .triangle, indexCount: light ? group.lightCount : group.fullCount, indexType: .uint32, indexBuffer: indices,
-                    indexBufferOffset: (light ? group.lightStart : group.fullStart) * 4, instanceCount: group.instances.count, baseVertex: 0, baseInstance: group.firstInstance)
+                e.drawIndexedPrimitives(type: .triangle, indexCount: group.count, indexType: .uint32, indexBuffer: indices,
+                    indexBufferOffset: group.start * 4, instanceCount: group.instanceCount, baseVertex: 0, baseInstance: group.firstInstance)
             }
         }
         e.endEncoding()

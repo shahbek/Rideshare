@@ -106,13 +106,15 @@ nonisolated enum DioramaVectorTile {
         if !path.isEmpty { paths.append(path) }
         return paths
     }
-    static func decode(_ data: Data) throws -> [Feature] {
+    static func decode(_ data: Data, includesEnvironment: Bool = false) throws -> [Feature] {
         guard data.count <= 12_000_000 else { throw Invalid.data }
         var result: [Feature] = []
         for layerField in try fields(Array(data)) where layerField.number == 3 {
             let layer = try fields(layerField.bytes)
             let name = String(decoding: layer.first(where: { $0.number == 1 })?.bytes ?? [], as: UTF8.self)
-            guard ["building", "road", "poi_label"].contains(name) else { continue }
+            let accepted = ["building", "road", "poi_label"].contains(name)
+                || (includesEnvironment && ["water", "landuse", "landuse_overlay"].contains(name))
+            guard accepted else { continue }
             let extent = Double(layer.first(where: { $0.number == 5 })?.integer ?? 4096)
             guard extent > 0 else { throw Invalid.data }
             let keys = layer.filter { $0.number == 3 }.map { String(decoding: $0.bytes, as: UTF8.self) }

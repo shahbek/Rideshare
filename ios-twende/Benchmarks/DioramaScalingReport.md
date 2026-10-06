@@ -1,6 +1,19 @@
 # Dar diorama scaling — initial audit, 2026-10-06
 
-Status: V32 architectural instancing, CPU cutout acceleration, lossless disk packages and live diagnostics are implemented and enabled for preview. City ingestion, certified LOD and CDN streaming remain incomplete. This is not a city-scale completion report.
+Status: V33 adds draw batching/preparation caching and a geographically addressed, one-resident-tile Masaki preview to V32 instancing and disk packages. Seamless simultaneous city rendering, certified LOD and CDN streaming remain incomplete. This is not a city-scale completion report.
+
+## User-supplied live V32 report
+
+Tile 16/39917/34000, Mapbox coverage/full effects: 2,225,616 unique triangles, 36,920 instances, 308397 KB, geometry 32.14 s. Main pass: 2,219,439 triangles. CPU encode p50/p95: 19.39/24.97 ms. Shared command-buffer GPU p50/p95: 9.97/21.95 ms, 120 samples. Archive: 33.86 MiB, 1.261 s write. Shore structures 7.417 s; buildings 4.580 s; connected ground/water/reef 4.472 s; packing/image export 4.411 s. Against the separate live V31 report: unique triangles −29.8%, counted storage −20.3%, geometry time −4.5%; not a controlled benchmark. Main triangles remain ~6.3× the 350k goal. These are V32 observations, not V33 measurements.
+
+## V33 implementation and limits
+
+- Coalesce consecutive compatible index ranges and contiguous instance spans only after culling and original per-bin LOD selection. Main and G-buffer reuse the selected draw plan; reflections/shadows batch their own eligible lists. Triangle order, materials, tint, shader code, bloom/AO passes and reflection settings remain unchanged. Main report includes merged versus original draw counts.
+- Cache selection by exact camera transform and category/light eligibility, preserving animated uniforms/reveal. Frustum checks avoid temporary arrays. Shadow cache uses a typed key; light-frustum culling retains off-camera casters that can affect visible receivers. Pixel equivalence and CPU speedup require new measurements.
+- Renderer-ready publication no longer awaits lossless compression; utility-priority writing reports its cost separately. Source/cache-to-renderer-ready is explicitly NOT first-visible latency.
+- Masaki source ingestion uses each addressed Streets tile's water, supported land use, building footprints, driving roads and actual names, with an independently addressed Terrain-RGB parent decoded without colour conversion into a local height grid. Slipway retains its own bundle/DEM and old decoding selection. Missing sources leave Standard visible; downloaded-only requests never initiate network fetches. Neither data completeness nor elevation accuracy is guaranteed by build success.
+- Enabled camera-follow preview visits the peninsula working envelope (−6.785…−6.730 latitude, 39.260…39.305 longitude), not an asserted administrative boundary. It keeps ONE full-detail tile resident, debounces selection and serializes mesh builds; in-memory artifact storage no longer grows with every visited tile. This is NOT seamless simultaneous Masaki coverage. Existing 36 m outer edge ease remains; cross-tile ground/building/shadow ownership and multi-tile postprocessing remain outstanding. No copied Slipway terrain, no unverified simplifier, no reduced bloom to mask performance cost.
+- Simulator build validation passes for the source/manager integration. No tests were requested or run in this pass; V32 passing tests below are historical, not validation of these new changes. V33 visual comparisons, runtime source decoding, warm timings, physical-device/session reports and the real 3×3 benchmark are still unverified.
 
 ## V32 enabled implementation
 

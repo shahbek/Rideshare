@@ -34,7 +34,9 @@ nonisolated struct DioramaCoast: Sendable {
         }
     }
 
-    var isEmpty: Bool { edges.isEmpty }
+    // An offshore tile may contain water but no coastline. Keep its water mask so it
+    // receives seabed instead of an above-water terrain plate.
+    var isEmpty: Bool { edges.isEmpty && water.isEmpty }
 
     /// Nearest classified shore within `reach` metres, or nil when the coast is further away.
     func nearest(_ p: DV2, within reach: Double) -> Nearest? {
