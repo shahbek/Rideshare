@@ -38,7 +38,7 @@ final class DioramaDownloadService {
             completed = inventory.complete; bytes = inventory.bytes
             isPrepared = completed == total
             if !isPrepared && bytes > 0 && message == "Download and prepare Masaki before viewing." {
-                message = "Updated 3D scenery needs preparation. Saved source downloads will be reused where available; tap Download or Resume."
+                message = "Your saved scenery is kept across app updates. Resume only to finish missing tiles; completed tiles and saved sources are reused."
             }
             notify()
         }

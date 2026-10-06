@@ -860,7 +860,7 @@ extension TripMapView {
         private func syncVehicles() {
             guard let mapView else { return }
             var poses = nearbyVehicles.mapValues(\.pose)
-            if let driverShown, !driverEyeCamera.isActive { poses[Self.driverModelID] = driverShown }
+            if let driverShown { poses[Self.driverModelID] = driverShown }
             let staleIDs = vehicleMarkers.keys.filter { poses[$0] == nil }
             for id in staleIDs {
                 vehicleMarkers.removeValue(forKey: id)?.remove()
@@ -954,8 +954,12 @@ extension TripMapView {
                 return
             }
             let wasActive = driverEyeCamera.isActive
-            let ground = diorama?.groundHeight(at: pose.point)
+            let rear = driverEyeCamera.cameraPoint(for: pose.point, heading: pose.heading)
+            let vehicleGround = diorama?.groundHeight(at: pose.point)
                 ?? mapView.mapboxMap.elevation(at: pose.point.coordinate)
+            let rearGround = diorama?.groundHeight(at: rear)
+                ?? mapView.mapboxMap.elevation(at: rear.coordinate)
+            let ground = [vehicleGround, rearGround].compactMap { $0 }.filter(\.isFinite).max()
             driverEyeCamera.update(point: pose.point, heading: pose.heading, ground: ground, on: mapView)
             if wasActive != driverEyeCamera.isActive { syncVehicles() }
             // Continuous driving must not perpetually postpone the normal camera-settle debounce.

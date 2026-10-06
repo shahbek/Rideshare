@@ -29,17 +29,19 @@ actor DioramaOfflineStore {
         guard free > 900 * 1_048_576 else { throw Failure.storage }
     }
     func read(_ tile: DioramaTileID, context: Bool = false) -> DioramaTileArtifacts? {
-        let name = key(tile, context: context)
-        let directory = root.appendingPathComponent(name)
-        do {
-            let artifact = try DioramaTileArchive.read(from: directory, key: name)
-            guard artifact.tile == tile else { throw Failure.package }
-            return artifact
-        } catch {
-            // Quarantine by removal so inventory/resume cannot resurrect a known-bad package.
-            if !Task.isCancelled { try? FileManager.default.removeItem(at: directory) }
-            return nil
+        for name in candidateNames(tile, context: context) {
+            if Task.isCancelled { return nil }
+            let directory = root.appendingPathComponent(name)
+            do {
+                let artifact = try DioramaTileArchive.read(from: directory, key: name)
+                guard artifact.tile == tile else { continue }
+                return artifact
+            } catch {
+                // Keep user-owned bytes on transient I/O/decode failure; try an older compatible copy.
+                continue
+            }
         }
+        return nil
     }
     func save(_ artifact: DioramaTileArtifacts, context: Bool) throws {
         try checkSpace()
@@ -65,8 +67,9 @@ actor DioramaOfflineStore {
         }
     }
     func isVerified(_ tile: DioramaTileID, context: Bool) -> Bool {
-        let name = key(tile, context: context)
-        return verifiedFiles(directory: root.appendingPathComponent(name), name: name)
+        candidateNames(tile, context: context).contains { name in
+            verifiedFiles(directory: root.appendingPathComponent(name), name: name)
+        }
     }
     private func verifiedFiles(directory: URL, name: String) -> Bool {
         guard let bytes = try? Data(contentsOf: directory.appendingPathComponent("manifest.json")),
@@ -100,8 +103,25 @@ actor DioramaOfflineStore {
         }
         return (count, bytes)
     }
+    // Generator revisions change scenery, not archive compatibility. Never require a region-wide
+    // download/rebuild just because the installed app has a newer generator.
+    private func candidateNames(_ tile: DioramaTileID, context: Bool) -> [String] {
+        let current = key(tile, context: context)
+        let suffix = String(current.drop(while: { $0 != "-" }))
+        let entries = (try? FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)) ?? []
+        let older = entries.map(\.lastPathComponent).filter { name in
+            guard name != current, name.hasPrefix("v"), name.hasSuffix(suffix),
+                  let prefix = name.split(separator: "-").first,
+                  let version = Int(prefix.dropFirst()) else { return false }
+            return version <= DioramaConfig.slipway.generatorVersion
+        }.sorted { $0.compare($1, options: .numeric) == .orderedDescending }
+        return [current] + older
+    }
     private func validFiles(_ tile: DioramaTileID, context: Bool) -> Bool {
-        let name = key(tile, context: context), directory = root.appendingPathComponent(key(tile, context: context))
+        candidateNames(tile, context: context).contains { validFiles(name: $0) }
+    }
+    private func validFiles(name: String) -> Bool {
+        let directory = root.appendingPathComponent(name)
         guard let bytes = try? Data(contentsOf: directory.appendingPathComponent("manifest.json")),
               let manifest = try? JSONDecoder().decode(DioramaTileArchive.Manifest.self, from: bytes),
               manifest.key == name, manifest.format == DioramaTileArchive.format,

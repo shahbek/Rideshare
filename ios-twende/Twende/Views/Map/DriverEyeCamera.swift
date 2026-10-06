@@ -1,7 +1,7 @@
 import MapboxMaps
 import UIKit
 
-/// Owns only an explicitly enabled driver's-eye session. Uses the existing interpolated trip pose.
+/// Third-person chase session, driven by the existing interpolated trip pose.
 @MainActor
 final class DriverEyeCamera {
     private(set) var isActive: Bool = false
@@ -10,6 +10,15 @@ final class DriverEyeCamera {
     private var lastPoint: GeoPoint?
     private var lastHeading: Double?
     private var lastGround: Double?
+    private var lastAltitude: Double?
+
+    /// Directly behind the vehicle, with no lateral orbit or bird's-eye offset.
+    func cameraPoint(for point: GeoPoint, heading: Double) -> GeoPoint {
+        let radians = heading * .pi / 180
+        let metresPerDegree = 111_320.0
+        return GeoPoint(latitude: point.latitude - cos(radians) * 22 / metresPerDegree,
+                        longitude: point.longitude - sin(radians) * 22 / (metresPerDegree * max(0.01, cos(point.latitude * .pi / 180))))
+    }
 
     func update(point: GeoPoint, heading: Double, ground: Double?, on view: MapView) {
         guard UIApplication.shared.applicationState == .active,
@@ -25,14 +34,15 @@ final class DriverEyeCamera {
             isActive = true
         }
         let knownGround = ground.flatMap { $0.isFinite ? $0 : nil }
-        // Missing terrain is not assumed flat at eye level; use an elevated fallback until available.
-        let floor = (knownGround ?? lastGround ?? 0) + (knownGround == nil ? 18 : 0)
-        guard point != lastPoint || heading != lastHeading || floor != lastGround else { return }
+        let floor = knownGround ?? lastGround ?? 0
+        let altitude = max(0.3, floor + 9)
+        guard point != lastPoint || heading != lastHeading || altitude != lastAltitude else { return }
         lastPoint = point; lastHeading = heading; lastGround = knownGround ?? lastGround
+        lastAltitude = altitude
         let camera = view.mapboxMap.freeCameraOptions
-        camera.location = point.coordinate
-        camera.altitude = max(0.3, floor + 2.4)
-        camera.setPitchBearingForPitch(82, bearing: heading)
+        camera.location = cameraPoint(for: point, heading: heading).coordinate
+        camera.altitude = altitude
+        camera.setPitchBearingForPitch(72, bearing: heading)
         view.mapboxMap.freeCameraOptions = camera
     }
 
@@ -42,6 +52,6 @@ final class DriverEyeCamera {
         view.camera.cancelAnimations()
         if let savedBounds { try? view.mapboxMap.setCameraBounds(with: savedBounds) }
         if restore, let savedCamera { view.mapboxMap.setCamera(to: savedCamera) }
-        savedCamera = nil; savedBounds = nil; lastPoint = nil; lastHeading = nil; lastGround = nil
+        savedCamera = nil; savedBounds = nil; lastPoint = nil; lastHeading = nil; lastGround = nil; lastAltitude = nil
     }
 }

@@ -2,6 +2,12 @@
 
 Status: Geometry v36 supersedes the Sea Cliff traced model with photo-composed architecture and adds Settings-only diorama controls plus a driver's-eye camera; v35 pool/cemetery/effect optimizations remain. Seam-certified city rendering, certified 1-pixel LOD and CDN streaming remain incomplete. This is not a city-scale completion or measured battery report.
 
+## Retained downloads and chase-camera correction
+
+- Supersedes the version-specific preparation requirements below: inventory, verified resume and archive reads now discover compatible older generator packages, matching tile/detail/layout/archive format. Existing scenery remains viewable without a region-wide rebuild. Source bytes and SDK basemap are retained. Failed reads no longer delete user files; older compatible copies are tried. Missing/damaged resources still need repair; existing scenery may have the older appearance.
+- Third-person camera replaces first-person framing: visible assigned vehicle, camera directly 22 m behind and 9 m above available ground, heading aligned, pitch 72° (18° down). Ground samples include the rear position. Prior camera restoration/gesture exit remain. No generator bump.
+- Simulator build passed. Actual retained 1.3 GB installation, camera/panel framing, slopes and cold offline coverage were not available for verification; prior performance/visual acceptance remains open.
+
 ## V36 photo sculpt and driver-eye integration
 
 - Sea Cliff now uses a dedicated photo-space plan, anchored near −6.73958, 39.28415 and scaled against the mapped envelope. Six masses replace the two clipped extrusions/distance roofs: three-storey spine, return wing, open restaurant galleries, lower wing and garden pavilion. Long ridges/four continuous hip planes, eaves and low-relief tile courses replace recursively tessellated roof surfaces. Full/context use the same composition; context omits room detailing/courses. Floors are capped and restaurant deck is supported; planting clusters leave the central lawn open. Stair/terrace dimensions and hidden elevations remain photo estimates.
