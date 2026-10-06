@@ -134,7 +134,7 @@ nonisolated final class DioramaLabelRenderer {
             let delta = SIMD2((p.x / p.w - roof.x / roof.w) * w, (p.y / p.w - roof.y / roof.w) * h)
             let length = simd_length(delta)
             let normal = length > 0.01 ? SIMD2(-delta.y, delta.x) / length : SIMD2<Float>(1, 0)
-            for (thickness, uv) in [(3.2 * scale, Float(-2)), (1.25 * scale, Float(-1))] {
+            for (thickness, uv) in [(1.25 * scale, Float(-1))] {
                 func end(_ point: SIMD4<Float>, _ side: Float) -> Vertex {
                     Vertex(position: SIMD4(point.x + normal.x * thickness * side / w * point.w, point.y + normal.y * thickness * side / h * point.w, point.z, point.w), uv: SIMD2(uv, 0))
                 }
@@ -144,6 +144,20 @@ nonisolated final class DioramaLabelRenderer {
                 }
                 encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6)
             }
+            // Solid attached endpoint, with no contrasting outline around dot or stem.
+            var dot: [Vertex] = []
+            func dotVertex(_ angle: Float, radius: Float) -> Vertex {
+                Vertex(position: SIMD4(roof.x + cos(angle) * radius * 2 / w * roof.w,
+                                       roof.y + sin(angle) * radius * 2 / h * roof.w, roof.z, roof.w), uv: SIMD2(-1, 0))
+            }
+            for i in 0..<20 {
+                dot += [dotVertex(0, radius: 0), dotVertex(Float(i) * .pi / 10, radius: 3 * scale),
+                        dotVertex(Float(i + 1) * .pi / 10, radius: 3 * scale)]
+            }
+            dot.withUnsafeMutableBytes { bytes in
+                if let base = bytes.baseAddress { encoder.setVertexBytes(base, length: bytes.count, index: 0) }
+            }
+            encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: dot.count)
             func v(_ dx: Float, _ dy: Float, _ u: Float, _ t: Float) -> Vertex {
                 Vertex(position: SIMD4(p.x + dx * 2 / w * p.w, p.y + dy * 2 / h * p.w, p.z, p.w), uv: SIMD2(u, t))
             }

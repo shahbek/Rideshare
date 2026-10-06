@@ -56,6 +56,7 @@ nonisolated struct DioramaTileArtifacts: Sendable {
     /// Top-down painted ground (roads, lawns, paving, sand) sampled by the terrain skin.
     let groundImage: DioramaGroundImage?
     var buildingLabels: [DioramaBuildingLabel] = []
+    var hasMapboxCoverage: Bool = false
 
     /// Unique triangles in the buffers (each prototype counted once, not per placement).
     var totalTriangles: Int { indices.count / 3 }
@@ -101,6 +102,7 @@ nonisolated enum DioramaTileGenerator {
 
     /// Generates (or returns the in-memory copy of) one tile. Call from any thread.
     static func generate(_ data: DioramaTileData, config: DioramaConfig, library: DioramaPropLibrary, reduced: Bool) throws -> DioramaTileArtifacts {
+        try Task.checkCancellation()
         if let cached = cached(data.tile, config: config, reduced: reduced) { return cached }
         let started = Date()
         var checkpoint = started
@@ -352,8 +354,10 @@ nonisolated enum DioramaTileGenerator {
             parts: parts, lights: lights, lightGrid: lightGrid,
             waterHeight: terrain.waterLevel, shorelineReport: DioramaShoreline.report(data.shorelines), generationSeconds: Date().timeIntervalSince(started),
             groundImage: image,
-            buildingLabels: built.map { DioramaBuildingLabel.make($0, terrain: terrain, config: config) }
+            buildingLabels: DioramaBuildingLabel.makeAll(built, data: data, terrain: terrain, config: config),
+            hasMapboxCoverage: data.hasMapboxCoverage
         )
+        try Task.checkCancellation()
         cacheLock.lock()
         cache[cacheKey(data.tile, config: config, reduced: reduced)] = artifacts
         cacheLock.unlock()

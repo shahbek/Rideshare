@@ -70,6 +70,8 @@ final class DioramaTileManager {
     private var shown: Bool = false
     private var installed: Bool = false
     private var pendingUpdate: Task<Void, Never>? = nil
+    private var generationTask: Task<Void, Never>? = nil
+    private var generationRevision: UInt = 0
     private var appliedCategories: Set<DioramaCategory> = []
     private var appliedTimeOfDay: DioramaTimeOfDay? = nil
     private var appliedDebug: Bool = false
@@ -85,8 +87,6 @@ final class DioramaTileManager {
     private var revealClock: Timer? = nil
     private var revealStarted: CFTimeInterval? = nil
     private var revealRequested: CFTimeInterval = 0
-    private var labelMaskIDs: Set<UInt64> = []
-    private var acceptedLabelIDs: Set<UInt64> = []
     private var isRetracting: Bool = false
     private var currentExtent: Double = 0.8
     private var transitionFrom: Double = 0.8
@@ -188,6 +188,8 @@ final class DioramaTileManager {
     }
 
     func remove() {
+        generationRevision &+= 1
+        generationTask?.cancel(); generationTask = nil
         pendingUpdate?.cancel()
         pendingUpdate = nil
         if let settingsObserver { NotificationCenter.default.removeObserver(settingsObserver) }
@@ -277,26 +279,38 @@ final class DioramaTileManager {
         } else if ProcessInfo.processInfo.isLowPowerModeEnabled {
             state.status = "Slipway loaded · bloom/AO off (Low Power)"
         } else {
-            state.status = "Slipway loaded · full effects"
+            if case .loaded(let artifacts) = status, !artifacts.hasMapboxCoverage {
+                state.status = "Full effects · bundled coverage only. Regenerate online for Mapbox names/geometry."
+            } else {
+                state.status = "Slipway loaded · full effects · Mapbox coverage"
+            }
         }
     }
 
     // MARK: Generation
 
-    /// Builds the tile from bundled data only. Nothing is read from the live map, so the result is
-    /// the same every session and needs no terrain-loading wait.
+    /// Bundled terrain remains authoritative; one whole Mapbox tile supplements coverage and names.
     private func generate() {
         status = .generating
         state.status = "Generating Slipway…"
+        generationRevision &+= 1
+        let revision = generationRevision
         let config = self.config
         let reduced = thermalReduced
-        Task.detached(priority: .userInitiated) {
+        let token = MapboxOptions.accessToken
+        let offline = UserDefaults.standard.bool(forKey: "maps.downloadedOnly")
+        generationTask = Task.detached(priority: .userInitiated) {
             let artifacts: DioramaTileArtifacts?
             let started = Date()
             let tile = DioramaTileID(latitude: config.seedLatitude, longitude: config.seedLongitude, zoom: config.tileZoom)
             if let cached = DioramaTileGenerator.cached(tile, config: config, reduced: reduced) {
                 artifacts = cached
-            } else if let data = DioramaBundledTile.load(config: config), !data.isEmpty {
+            } else if let bundled = DioramaBundledTile.load(config: config), !bundled.isEmpty {
+                var data = DioramaMapboxData.resolveOwnership(bundled)
+                if let features = await DioramaMapboxData.load(tile: tile, token: token, offline: offline) {
+                    data = DioramaMapboxData.merge(features, into: data)
+                }
+                guard !Task.isCancelled else { return }
                 do {
                     // Prototype construction used to block the main thread at map-manager init,
                     // even when the diorama was off. Build lazily here, after checking the cache.
@@ -311,7 +325,8 @@ final class DioramaTileManager {
                 artifacts = nil
             }
             await MainActor.run {
-                guard case .generating = self.status else { return }
+                guard self.generationRevision == revision, case .generating = self.status else { return }
+                self.generationTask = nil
                 guard let artifacts else {
                     self.status = .failed
                     self.state.status = "Diorama generation failed"
@@ -327,6 +342,8 @@ final class DioramaTileManager {
     /// Drops the cached geometry and rebuilds it.
     func regenerate() {
         guard let map else { return }
+        generationRevision &+= 1
+        generationTask?.cancel(); generationTask = nil
         DioramaTileGenerator.clearCache(for: tile, config: config)
         hide(on: map)
         status = .idle
@@ -366,14 +383,6 @@ final class DioramaTileManager {
             labelClip.clipLayerScope = .constant(["basemap"])
             labelClip.clipLayerTypes = .constant([.symbol])
             try map.addLayer(labelClip)
-            labelMaskIDs = []; acceptedLabelIDs = []
-            host.onLabelsChanged = { [weak self, weak host] ids in
-                Task { @MainActor in
-                    guard let self, let host, self.renderLayer === host else { return }
-                    self.acceptedLabelIDs = ids
-                    self.updateLabelMask()
-                }
-            }
             renderLayer = host
             shown = true
             beginReveal()
@@ -398,7 +407,6 @@ final class DioramaTileManager {
         for id in [labelClipID, clipLayerID, layerID] where map.layerExists(withId: id) { try? map.removeLayer(withId: id) }
         if map.sourceExists(withId: clipSourceID) { try? map.removeSource(withId: clipSourceID) }
         if map.sourceExists(withId: labelSourceID) { try? map.removeSource(withId: labelSourceID) }
-        labelMaskIDs = []; acceptedLabelIDs = []
         renderLayer = nil
         appliedWireframe = nil
         shown = false
@@ -505,30 +513,10 @@ final class DioramaTileManager {
             }
         } else { coordinates = tile.outline }
         map.updateGeoJSONSource(withId: clipSourceID, geoJSON: .geometry(.polygon(Polygon([coordinates]))))
-        updateLabelMask()
-    }
-
-    private func updateLabelMask() {
-        guard let map else { return }
-        let projection = DioramaProjection(origin: tile.centre)
-        if case .loaded(let artifacts) = status, map.sourceExists(withId: labelSourceID) {
-            let labels = artifacts.buildingLabels.filter { label in
-                guard renderLayer?.hasCustomLabels == true, state.visibleCategories.contains(.buildings), !state.showsWireframe else { return false }
-                guard acceptedLabelIDs.contains(label.id), !label.footprint.isEmpty else { return false }
-                return max(abs(Double(label.anchor.x)), abs(Double(label.anchor.y))) + 3 <= currentExtent
-            }
-            let ids = Set(labels.map(\.id))
-            if labelMaskIDs != ids {
-                labelMaskIDs = ids
-                let features = labels.map { label in
-                    let ring = (label.footprint + [label.footprint[0]]).map { p in
-                        let c = projection.coordinate(p)
-                        return CLLocationCoordinate2D(latitude: c.latitude, longitude: c.longitude)
-                    }
-                    return Feature(geometry: .polygon(Polygon([ring])))
-                }
-                map.updateGeoJSONSource(withId: labelSourceID, geoJSON: .featureCollection(FeatureCollection(features: features)))
-            }
+        // All native symbols inside the active square are suppressed, including unnamed POIs,
+        // road/place labels and icons. Outside the tile and on retraction Standard is unchanged.
+        if map.sourceExists(withId: labelSourceID) {
+            map.updateGeoJSONSource(withId: labelSourceID, geoJSON: .geometry(.polygon(Polygon([coordinates]))))
         }
     }
 

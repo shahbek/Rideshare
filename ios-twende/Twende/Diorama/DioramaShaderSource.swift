@@ -410,6 +410,10 @@ nonisolated enum DioramaShaderSource {
             albedo *= 0.98 + 0.04 * (dioramaNoise(wp * 0.4) - 0.5);
         } else if (tex > 3.5 && tex < 4.5) {
             albedo *= 0.98 + 0.04 * (dioramaNoise(wp * 0.6) - 0.5);
+        } else if (tex > 5.5 && tex < 6.5 && in.appearance.y > 8.5) {
+            // Inland compacted earth: quiet ochre/brown clods, distinct from fine coastal sand.
+            float clods = dioramaNoise(wp * 1.7) * 0.65 + dioramaNoise(wp * 0.18) * 0.35;
+            albedo *= 0.96 + 0.10 * (clods - 0.5);
         }
 
         if (tex > 6.5 && tex < 7.5 && abs(n.z) > 0.7) {
@@ -534,7 +538,7 @@ nonisolated enum DioramaShaderSource {
             return float4(color, mix(1.0, 0.48, shallow));
         }
 
-        if (tex > 5.5 && tex < 6.5) {
+        if (tex > 5.5 && tex < 6.5 && in.appearance.y < 8.5) {
             // Glass has a quiet sky reflection, unlike matte plaster; never a white plastic highlight.
             float fresnel = 0.08 + 0.32 * pow(1.0 - saturate(dot(n, view)), 4.0);
             color = mix(color, u.skyColor.rgb * 0.8, fresnel);

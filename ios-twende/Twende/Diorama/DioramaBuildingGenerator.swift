@@ -53,8 +53,25 @@ nonisolated struct DioramaBuildingGenerator {
     /// Buildings follow their site datum without changing the underlying landform.
     @discardableResult
     func build(_ f: DioramaBuildingFeature, into mesh: inout DioramaMesh, glow: inout DioramaMesh, lights: Bool, pointLights: inout [DioramaLight]) -> DioramaBuilt {
+        if !f.occupiedPieces.isEmpty {
+            return DioramaClippedBuilding.build(f, terrain: terrain, config: config, mesh: &mesh)
+        }
         let ground = terrain.buildingHeight(f)
-        terrain.foundation(f.ring, top: ground, swatch: .concrete, into: &mesh)
+        if f.id == 165_397_124 {
+            // Open timber undercroft; the pavilion floor meets the walkway's finished deck.
+            mesh.extrude(f.ring, z0: ground - 0.28, z1: ground, .pierWood, top: .deckWood)
+            let support = DioramaPolygon.minimumAreaRectangle(f.ring)
+            for u in stride(from: -support.halfLength + 0.4, through: support.halfLength - 0.4, by: 3) {
+                for v in stride(from: -support.halfWidth + 0.4, through: support.halfWidth - 0.4, by: 3) {
+                    let p = support.centre + support.axis * u + support.across * v
+                    guard DioramaPolygon.contains(f.ring, p) else { continue }
+                    mesh.cylinder(centre: p, z0: terrain.seabed(p) - 0.5, z1: ground - 0.18,
+                                  r0: 0.22, r1: 0.18, sides: 8, .pierWood)
+                }
+            }
+        } else {
+            terrain.foundation(f.ring, top: ground, swatch: .concrete, into: &mesh)
+        }
         let savedMesh = mesh.baseZ, savedGlow = glow.baseZ
         mesh.baseZ = ground
         glow.baseZ = ground

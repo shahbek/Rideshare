@@ -202,37 +202,40 @@ nonisolated struct DioramaAmenityGenerator {
     // MARK: Car park
 
     private func carPark(_ ring: [DV2], areaID: UInt64, rng: inout DioramaRandom, ground: inout DioramaMesh, props: inout DioramaMesh) {
-        let base = terrain.foundationHeight(ring)
-        let pieces = ownedSlab(ring, areaID: areaID, top: base + 0.1, side: .kerb, finish: .asphalt, ground: &ground)
+        let masks = DioramaGroundCutouts(data: data, pavementWidth: config.pavementWidth,
+            additionalMasks: data.water.compactMap { $0.rings.first }, excludedAreaIDs: [areaID])
+        let pieces = masks.subtract(from: ring)
+        painter.fillPieces(pieces, .asphalt)
         func onParking(_ p: DV2) -> Bool { pieces.contains { DioramaPolygon.contains($0, p) } }
-        let box = DioramaPolygon.minimumAreaRectangle(ring)
-        let top = base + 0.1 + DioramaSurfaceLevel.structuralPaintClearance
-        // Bays 2.6 m wide along both long sides, nose-in from a central aisle.
-        let bayDepth = min(box.halfWidth - 0.5, 5.0)
-        guard bayDepth > 2.5 else { return }
-        let a = box.axis, c = box.across
-        var u = -box.halfLength + 1.5
-        while u <= box.halfLength - 1.5 {
-            for s in [-1.0, 1.0] {
-                let p0 = box.centre + a * u + c * (s * box.halfWidth), p1 = box.centre + a * u + c * (s * (box.halfWidth - bayDepth))
-                guard DioramaPolygon.contains(ring, p0 + c * (-s * 0.3)), DioramaPolygon.contains(ring, p1) else { continue }
-                let n = c * 0.06
-                if [p0 - n, p1 - n, p1 + n, p0 + n].allSatisfy(onParking) {
-                    ground.quad(DV3(p0 - n, top), DV3(p1 - n, top), DV3(p1 + n, top), DV3(p0 + n, top), .marking, normal: .up)
-                }
-                let bayCentre = box.centre + a * (u + 1.3) + c * (s * (box.halfWidth - bayDepth / 2))
-                if u + 2.6 <= box.halfLength - 1.5, DioramaOrientedRect(centre: bayCentre, axis: c, halfLength: 2.2, halfWidth: 1.0).corners.allSatisfy(onParking), rng.chance(0.55) {
-                    let heading = (c * -s).angle + rng.range(-0.04...0.04)
-                    props.instance(rng.pick(library.cars), DioramaTransform(rotation: heading, translation: DV3(bayCentre, top)))
+        let box = DioramaPolygon.minimumAreaRectangle(ring).expanded(by: -0.35)
+        // Full-size 2.6 × 5 m bays and a 6 m manoeuvring aisle, never a platform or planter.
+        let width = box.halfWidth * 2
+        if width < 11 {
+            // Narrow lots use parallel bays rather than shrinking cars or blocking the access aisle.
+            guard width >= 6.1 else { return }
+            let sides: [Double] = width >= 8.7 ? [-1, 1] : [1]
+            for u in stride(from: -box.halfLength + 0.3, through: box.halfLength - 6.3, by: 6) {
+                for side in sides {
+                    let back = box.centre + box.axis * u + box.across * (side * box.halfWidth)
+                    let front = back - box.across * (side * 2.6)
+                    let bay = [back, front, front + box.axis * 6, back + box.axis * 6]
+                    let aisle = front - box.across * (side * 1.75) + box.axis * 3
+                    guard (DioramaPolygon.densify(bay + [bay[0]], maxStep: 0.5) + [aisle]).allSatisfy(onParking) else { continue }
+                    painter.stroke([front, back, back + box.axis * 6, front + box.axis * 6], width: 0.12, .marking)
                 }
             }
-            u += 2.6
+            return
         }
-        // A planter island with a tree in the middle of long car parks.
-        if box.halfLength > 14 {
-            let island = DioramaOrientedRect(centre: box.centre, axis: a, halfLength: 2.0, halfWidth: 0.9)
-            ground.extrude(island.corners, z0: top, z1: top + 0.25, .kerb, top: .soil)
-            props.instance(library.trees[8], DioramaTransform(rotation: rng.range(0...6.28), translation: DV3(box.centre, top + 0.25)))
+        let sides: [Double] = width >= 16 ? [-1, 1] : [1]
+        for u in stride(from: -box.halfLength + 0.3, through: box.halfLength - 2.9, by: 2.6) {
+            for side in sides {
+                let back = box.centre + box.axis * u + box.across * (side * box.halfWidth)
+                let front = back - box.across * (side * 5)
+                let bay = [back, front, front + box.axis * 2.6, back + box.axis * 2.6]
+                let aisle = front - box.across * (side * 3) + box.axis * 1.3
+                guard (DioramaPolygon.densify(bay + [bay[0]], maxStep: 0.5) + [aisle]).allSatisfy(onParking) else { continue }
+                painter.stroke([front, back, back + box.axis * 2.6, front + box.axis * 2.6], width: 0.12, .marking)
+            }
         }
     }
 

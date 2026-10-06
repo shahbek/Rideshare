@@ -18,7 +18,32 @@ nonisolated struct DioramaGroundGenerator {
         reef(into: &mesh)
         parks()
         compoundGround(compounds)
+        earthPatches()
         water(into: &waterMesh)
+    }
+
+    /// Small exposed-earth patches in unoccupied inland ground; never repaint formal gardens or beach.
+    private func earthPatches() {
+        var rng = DioramaRandom(seed: 30, salt: 717)
+        let cutouts = DioramaGroundCutouts(data: data, pavementWidth: config.pavementWidth,
+            additionalMasks: data.water.compactMap { $0.rings.first } + data.landuse.flatMap(\.rings)
+                + [data.hotelCourtyardOutline, data.hotelDiningOutline])
+        for y in stride(from: data.rect.minY + 14, to: data.rect.maxY - 14, by: 27) {
+            for x in stride(from: data.rect.minX + 14, to: data.rect.maxX - 14, by: 27) {
+                guard rng.chance(0.38) else { continue }
+                let centre = DV2(x + rng.range(-7...7), y + rng.range(-7...7))
+                guard terrain.coast?.isWater(centre) != true,
+                      (terrain.coast?.nearest(centre, within: 24)?.distance ?? 24) >= 20 else { continue }
+                let radius = rng.range(3.5...7)
+                let ring = (0..<18).map { i -> DV2 in
+                    let angle = Double(i) * .pi / 9
+                    let r = radius * (0.86 + 0.14 * sin(angle * 3 + centre.x))
+                    return centre + DV2(cos(angle) * r, sin(angle) * r * 0.72)
+                }
+                let pieces = cutouts.subtract(from: ring)
+                painter.earthPatch(pieces, outline: ring, centre: centre)
+            }
+        }
     }
 
     /// Paints the sea floor last so coastal paving and lawns stop exactly at the mapped water edge.

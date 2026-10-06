@@ -31,7 +31,27 @@ nonisolated struct DioramaRoadGenerator {
         paintSurfaces()
         for road in data.roads where road.isPaved && road.width >= 5.5 { markings(road) }
         junctionPaint()
+        roadNames()
         kerbs(into: &mesh)
+    }
+
+    private func roadNames() {
+        var placed: [(String, DV2)] = []
+        for road in data.roads.sorted(by: { DioramaPolygon.length($0.line) > DioramaPolygon.length($1.line) }) {
+            guard let name = road.name, !name.isEmpty, road.width >= 4 else { continue }
+            let line = DioramaLinearGeometry.simplified(road.line)
+            let segments = zip(line, line.dropFirst()).sorted { $0.0.distance(to: $0.1) > $1.0.distance(to: $1.1) }
+            for (a, b) in segments {
+                let length = a.distance(to: b)
+                guard length > max(14, Double(name.count) * 0.85 + 4) else { continue }
+                let direction = (b - a).normalized
+                let point = (a + b) * 0.5 + direction.left * (road.width * 0.22)
+                guard !placed.contains(where: { $0.0 == name && $0.1.distance(to: point) < 130 }),
+                      !data.buildings.contains(where: { DioramaPolygon.contains($0.ring, point) }) else { continue }
+                painter.roadName(name, centre: point, direction: direction, maximumWidth: length - 4)
+                placed.append((name, point)); break
+            }
+        }
     }
 
     // MARK: Paint

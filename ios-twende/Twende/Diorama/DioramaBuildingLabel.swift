@@ -1,7 +1,7 @@
 import Foundation
 import simd
 
-/// Source-backed names (or honest building categories) anchored above the generated roof.
+/// Only names supplied by Mapbox Streets; unnamed architecture never gets a generic label.
 nonisolated struct DioramaBuildingLabel: Sendable {
     let id: UInt64
     let title: String
@@ -9,26 +9,18 @@ nonisolated struct DioramaBuildingLabel: Sendable {
     let footprint: [DV2]
     let isNamed: Bool
 
-    static func make(_ building: DioramaBuilt, terrain: DioramaTerrain, config: DioramaConfig) -> Self {
-        let f = building.feature
-        let known: [UInt64: String] = [
-            DioramaHotelGenerator.gallery: "Hotel Slipway",
-            DioramaHotelGenerator.delta: "Delta Hotels",
-        ]
-        let name = f.name ?? known[f.id]
-        let fallback: String
-        if f.type == "mosque" { fallback = "Masjid" }
-        else {
-            switch building.kind {
-            case .villa: fallback = "Residence"
-            case .apartments: fallback = f.type == "hotel" ? "Hotel" : "Apartments"
-            case .commercial: fallback = "Commercial building"
+    static func makeAll(_ buildings: [DioramaBuilt], data: DioramaTileData, terrain: DioramaTerrain, config: DioramaConfig) -> [Self] {
+        data.pois.filter { $0.kind == "mapboxLabel" }.compactMap { poi in
+            guard let title = poi.name, !title.isEmpty else { return nil }
+            let host = buildings.filter { $0.feature.footprints.contains { DioramaPolygon.contains($0, poi.point) } }.min { $0.feature.area < $1.feature.area }
+            var height = terrain.height(poi.point) + 0.2
+            if let host {
+                height = terrain.buildingHeight(host.feature) + host.height + (host.flatRoof ? config.roofBevel : config.hipRoofMaxRise) + 0.15
+            } else if let fuel = data.landuse.first(where: { $0.kind == "fuel" && DioramaPolygon.contains(polygon: $0.rings, poi.point) }), let ring = fuel.rings.first {
+                height = terrain.foundationHeight(ring) + 6.5
             }
+            return Self(id: poi.id, title: title, anchor: SIMD3(Float(poi.point.x), Float(poi.point.y), Float(height)),
+                        footprint: host?.feature.ring ?? [], isNamed: true)
         }
-        let centre = DioramaPolygon.contains(f.ring, building.box.centre) ? building.box.centre : f.ring[0] * 0.1 + f.centroid * 0.9
-        let roof = terrain.buildingHeight(f) + building.height + (building.flatRoof ? config.roofBevel : config.hipRoofMaxRise)
-        return Self(id: f.id, title: name?.isEmpty == false ? name ?? fallback : fallback,
-                    anchor: SIMD3(Float(centre.x), Float(centre.y), Float(roof + 1.2)),
-                    footprint: f.ring, isNamed: name?.isEmpty == false)
     }
 }

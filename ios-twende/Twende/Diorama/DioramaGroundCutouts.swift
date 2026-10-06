@@ -6,7 +6,7 @@ nonisolated struct DioramaGroundCutouts: Sendable {
     private let masks: [(ring: [DV2], bounds: DioramaRect)]
 
     init(data: DioramaTileData, pavementWidth: Double, streetPolygons: [[DV2]]? = nil, additionalMasks: [[DV2]] = [], excludedAreaIDs: Set<UInt64> = []) {
-        var polygons: [[DV2]] = data.buildings.map(\.ring) + additionalMasks
+        var polygons: [[DV2]] = data.buildings.flatMap(\.footprints) + additionalMasks
             + data.shorelineLandMasks
         polygons += data.landuse.filter { ["pool", "pitch", "parking", "fuel", "terrace"].contains($0.kind) && !excludedAreaIDs.contains($0.id) }.compactMap { area in
             guard let ring = area.rings.first else { return nil }

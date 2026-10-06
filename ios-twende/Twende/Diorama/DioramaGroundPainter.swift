@@ -1,4 +1,5 @@
 import CoreGraphics
+import CoreText
 import Foundation
 
 /// Top-down painted ground for one tile. RGB is albedo; alpha carries the material code (×32) the
@@ -15,7 +16,7 @@ nonisolated struct DioramaGroundImage: Sendable {
 /// slivers; later fills simply cover earlier ones with anti-aliased edges.
 nonisolated final class DioramaGroundPainter {
     nonisolated enum Material: UInt8, Sendable {
-        case plain = 0, grass = 1, sand = 2, asphalt = 3, paving = 4, clay = 7
+        case plain = 0, grass = 1, sand = 2, asphalt = 3, paving = 4, dirt = 6, clay = 7
         var shade: CGFloat { CGFloat(rawValue) * 32 / 255 }
     }
 
@@ -65,6 +66,7 @@ nonisolated final class DioramaGroundPainter {
     static func material(for swatch: DioramaSwatch) -> Material {
         switch swatch {
         case .grass, .lawn, .pitchGreen, .hedge: .grass
+        case .naturalEarth: .dirt
         case .earth, .wetSand, .seabed, .soil: .sand
         case .asphalt, .roadEarth: .asphalt
         case .paving, .pavement, .concrete, .courtyard, .kerb, .parkEdge: .paving
@@ -182,6 +184,42 @@ nonisolated final class DioramaGroundPainter {
     func bar(at p: DV2, along: DV2, length: Double, width: Double, _ swatch: DioramaSwatch) {
         let d = along.normalized * (length / 2)
         stroke([p - d, p + d], width: width, swatch, cap: .butt)
+    }
+
+    /// Muted earth tint with a feathered boundary, using the existing terrain surface only.
+    func earthPatch(_ pieces: [[DV2]], outline: [DV2], centre: DV2) {
+        guard let path = Self.path(pieces.map { DioramaPolygon.counterClockwise($0) }) else { return }
+        set(.naturalEarth, stroke: false)
+        color.saveGState()
+        color.addPath(path); color.clip()
+        color.setAlpha(0.28)
+        for factor in stride(from: 1.0, through: 0.75, by: -0.05) {
+            let inset = outline.map { centre + ($0 - centre) * factor }
+            if let feather = Self.path([inset]) { color.addPath(feather); color.fillPath() }
+        }
+        color.restoreGState()
+        material.addPath(path); material.fillPath(using: .winding)
+    }
+
+    /// Road names are painted into albedo, not floating signs or extra 3D surfaces.
+    func roadName(_ title: String, centre: DV2, direction: DV2, maximumWidth: Double) {
+        let font = CTFontCreateWithName("Figtree-SemiBold" as CFString, 1.15, nil)
+        let text = NSAttributedString(string: title, attributes: [
+            NSAttributedString.Key(kCTFontAttributeName as String): font,
+            NSAttributedString.Key(kCTForegroundColorAttributeName as String): CGColor(gray: 0.98, alpha: 1)
+        ])
+        let line = CTLineCreateWithAttributedString(text)
+        let width = CTLineGetTypographicBounds(line, nil, nil, nil)
+        guard width > 0, width <= maximumWidth else { return }
+        let axis = direction.x < 0 ? -direction : direction
+        color.saveGState()
+        color.translateBy(x: centre.x, y: centre.y)
+        color.rotate(by: axis.angle)
+        color.textMatrix = .identity
+        color.setTextDrawingMode(.fill)
+        color.textPosition = CGPoint(x: -width / 2, y: -0.42)
+        CTLineDraw(line, color)
+        color.restoreGState()
     }
 
     /// Final image: colour from the RGB context, material code from the grey context.

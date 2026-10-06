@@ -12,6 +12,7 @@ nonisolated struct DioramaTileData: Sendable {
     var landuse: [DioramaAreaFeature]
     /// Individually mapped trees (OSM `natural=tree`).
     var trees: [DV2] = []
+    var hasMapboxCoverage: Bool = false
     /// Footways, steps, the pier walkway and the slipway ramp.
     var paths: [DioramaPathFeature] = []
     /// Point features worth a model: masts, playgrounds, artwork, the mosque.
@@ -58,6 +59,9 @@ nonisolated struct DioramaBuildingFeature: Sendable {
     let height: Double?
     let type: String
     var name: String? = nil
+    /// Disjoint occupied pieces for source courtyards and partial-priority overlaps; empty means full ring.
+    var occupiedPieces: [[DV2]] = []
+    var footprints: [[DV2]] { occupiedPieces.isEmpty ? [ring] : occupiedPieces }
 }
 
 nonisolated struct DioramaRoadFeature: Sendable {
@@ -67,6 +71,7 @@ nonisolated struct DioramaRoadFeature: Sendable {
     let isPaved: Bool
     /// Approximate carriageway width in metres.
     let width: Double
+    var name: String? = nil
     var isMain: Bool { ["motorway", "trunk", "primary", "secondary", "tertiary"].contains(roadClass) }
 }
 
@@ -131,15 +136,24 @@ nonisolated enum DioramaBundledTile {
 
         var buildings: [UInt64: DioramaBuildingFeature] = [:]
         for b in file.buildings {
-            let ring = b.ring.compactMap(local)
-            guard ring.count >= 3, ring.count == b.ring.count else { continue }
+            let raw = b.ring.compactMap(local)
+            guard raw.count >= 3, raw.count == b.ring.count else { continue }
+            let ring = DioramaPolygon.clipPolygon(raw, to: rect)
+            guard ring.count >= 3 else { continue }
             var (pts, flags) = DioramaPolygon.clean(ring, flags: [Bool](repeating: false, count: ring.count))
             (pts, flags) = DioramaPolygon.counterClockwise(pts, flags: flags)
             guard pts.count >= 3 else { continue }
+            flags = pts.indices.map { i in
+                let a = pts[i], b = pts[(i + 1) % pts.count]
+                return (abs(a.x - rect.minX) < 0.01 && abs(b.x - rect.minX) < 0.01)
+                    || (abs(a.x - rect.maxX) < 0.01 && abs(b.x - rect.maxX) < 0.01)
+                    || (abs(a.y - rect.minY) < 0.01 && abs(b.y - rect.minY) < 0.01)
+                    || (abs(a.y - rect.maxY) < 0.01 && abs(b.y - rect.maxY) < 0.01)
+            }
             let area = DioramaPolygon.area(pts)
-            guard area > 12 else { continue }
+            guard area > 1 else { continue }
             let centroid = DioramaPolygon.centroid(pts)
-            guard rect.contains(centroid) else { continue }
+            guard DioramaPolygon.area(DioramaPolygon.clipPolygon(pts, to: rect)) > 1 else { continue }
             // This is bundled OSM, not Mapbox's synthesized 3 m fallback: keep genuine low heights.
             let height = b.height.flatMap { $0.isFinite && $0 > 0 ? $0 : nil }
             if let existing = buildings[b.id], existing.area >= area { continue }
@@ -163,7 +177,7 @@ nonisolated enum DioramaBundledTile {
             }
             let line = r.line.compactMap(local)
             guard line.count >= 2 else { continue }
-            for (pieceIndex, piece) in DioramaPolygon.clip(line, to: rect).enumerated() where DioramaPolygon.length(piece) > 3 {
+            for (pieceIndex, piece) in DioramaPolygon.clip(line, to: rect).enumerated() where DioramaPolygon.length(piece) > 0.2 {
                 let key = DioramaRandom.mix(r.id &+ UInt64(pieceIndex) &* 977)
                 roads[key] = DioramaRoadFeature(id: key, line: piece, roadClass: r.class, isPaved: r.paved, width: width)
             }
@@ -231,8 +245,8 @@ nonisolated enum DioramaBundledTile {
 
         var result = DioramaTileData(
             tile: tile, projection: projection, rect: rect,
-            buildings: Array(buildings.values.sorted { $0.area != $1.area ? $0.area > $1.area : $0.id < $1.id }.prefix(config.maxBuildingsPerTile)).sorted { $0.id < $1.id },
-            roads: Array(roads.values.sorted { $0.id < $1.id }.prefix(config.maxRoadsPerTile)),
+            buildings: buildings.values.sorted { $0.id < $1.id },
+            roads: roads.values.sorted { $0.id < $1.id },
             water: water.sorted { $0.id < $1.id },
             landuse: landuse.sorted { $0.id < $1.id },
             trees: trees,
