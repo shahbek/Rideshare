@@ -13,6 +13,10 @@ final class DioramaDownloadService {
     private(set) var bytes: Int64 = 0
     private(set) var message: String = "Download and prepare Masaki before viewing."
     private(set) var stage: String = ""
+    var failureMessage: String?
+    private(set) var isDownloadingBasemap: Bool = false
+    private(set) var isPausing: Bool = false
+    @ObservationIgnored private var pauseReason: String?
     var total: Int { DioramaOfflineStore.tiles.count }
     var progress: Double { Double(completed) / Double(max(1, total)) }
     var canView: Bool { isPrepared && !isRunning && maps?.isReady(Self.area) == true && maps?.downloadedOnly == true }
@@ -50,22 +54,32 @@ final class DioramaDownloadService {
         notify()
     }
     func start() {
-        guard task == nil, let maps, maps.activeID == nil else { return }
-        guard maps.canDownload else { message = "Connect to Wi-Fi and turn off ‘Use downloaded maps only’ to prepare Masaki."; return }
-        guard UIApplication.shared.applicationState == .active,
-              !ProcessInfo.processInfo.isLowPowerModeEnabled,
-              ProcessInfo.processInfo.thermalState.rawValue < ProcessInfo.ThermalState.serious.rawValue else {
-            message = "Preparation paused for power or temperature. Turn off Low Power Mode and resume when cool."; return
+        print("[MasakiDownload] Start requested")
+        guard task == nil else {
+            reportFailure("Masaki files are already being processed. Wait for the current operation to finish."); return
         }
+        guard let maps else {
+            reportFailure("Map downloads are not ready. Close and reopen this screen, then try again."); return
+        }
+        guard maps.activeID == nil else {
+            reportFailure("Another map download is running. Pause it in Offline maps or wait for it to finish, then try again."); return
+        }
+        guard maps.removingIDs.isEmpty else {
+            reportFailure("Saved maps are being removed. Wait for removal to finish, then try again."); return
+        }
+        if let restriction = preparationRestriction {
+            reportFailure(restriction); return
+        }
+        failureMessage = nil; pauseReason = nil; isPausing = false
+        stage = "Checking available storage…"
         isRunning = true; isPrepared = false; message = "Preparing Masaki. Keep the app open; charging is recommended."
+        print("[MasakiDownload] Preparation started")
         notify()
         policyTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self else { return }
-                if UIApplication.shared.applicationState != .active || self.maps?.canDownload != true
-                    || ProcessInfo.processInfo.isLowPowerModeEnabled
-                    || ProcessInfo.processInfo.thermalState.rawValue >= ProcessInfo.ThermalState.serious.rawValue {
-                    self.pause()
+                if let reason = self.preparationRestriction {
+                    self.pause(reason: reason)
                 }
             }
         }
@@ -76,6 +90,7 @@ final class DioramaDownloadService {
             defer {
                 if ownsBasemapDownload && maps.activeID == Self.area.id { maps.pause() }
                 self.isRunning = false; self.task = nil
+                self.isDownloadingBasemap = false; self.isPausing = false
                 self.policyTimer?.invalidate(); self.policyTimer = nil
                 self.notify()
             }
@@ -83,7 +98,9 @@ final class DioramaDownloadService {
                 try await DioramaOfflineStore.shared.checkSpace()
                 try Task.checkCancellation()
                 if !maps.isReady(Self.area) {
-                    stage = "Downloading peninsula basemap and style…"
+                    isDownloadingBasemap = true
+                    stage = "Step 1 of 2 · Downloading peninsula basemap and style…"
+                    print("[MasakiDownload] Basemap download starting")
                     try Task.checkCancellation()
                     ownsBasemapDownload = true
                     maps.download(Self.area)
@@ -98,6 +115,8 @@ final class DioramaDownloadService {
                         } else { try await Task.sleep(for: .milliseconds(300)) }
                     }
                 }
+                isDownloadingBasemap = false
+                print("[MasakiDownload] Basemap ready; preparing geometry")
                 completed = 0
                 for tile in DioramaOfflineStore.tiles {
                     try Task.checkCancellation()
@@ -118,9 +137,11 @@ final class DioramaDownloadService {
                 message = "Ready offline. No downloads or geometry generation while viewing."
                 stage = "All \(total) tiles prepared"
             } catch is CancellationError {
-                message = "Paused. Completed tiles are kept; resume when ready."
+                message = pauseReason ?? "Paused. Completed tiles are kept; resume when ready."
+                print("[MasakiDownload] Preparation paused")
             } catch {
-                message = (error as? DioramaOfflineStore.Failure)?.errorDescription ?? "Preparation could not finish. Check connection and free storage, then resume."
+                let detail = (error as? DioramaOfflineStore.Failure)?.errorDescription ?? "Preparation could not finish. Check connection and free storage, then resume."
+                reportFailure(isDownloadingBasemap ? "The peninsula basemap download did not finish. Check your connection and retry. Saved progress is kept." : detail)
             }
         }
     }
@@ -144,10 +165,28 @@ final class DioramaDownloadService {
             try await store.save(full, context: false)
         }
     }
-    func pause() {
-        guard isRunning else { return }
+    private var preparationRestriction: String? {
+        guard let maps else { return "Map downloads are not ready. Reopen this screen and try again." }
+        if let restriction = maps.restriction { return L(restriction) }
+        if UIApplication.shared.applicationState != .active { return "Keep the app open to prepare Masaki, then tap Resume." }
+        if ProcessInfo.processInfo.isLowPowerModeEnabled { return "Turn off Low Power Mode in iPhone Settings → Battery, then resume preparation." }
+        if ProcessInfo.processInfo.thermalState.rawValue >= ProcessInfo.ThermalState.serious.rawValue {
+            return "Preparation paused because the device is too warm. Let it cool, then resume."
+        }
+        return nil
+    }
+    private func reportFailure(_ detail: String) {
+        message = detail
+        failureMessage = detail
+        print("[MasakiDownload] \(detail)")
+    }
+    func pause(reason: String? = nil) {
+        guard isRunning, !isPausing else { return }
+        isPausing = true
+        pauseReason = reason
+        message = reason ?? "Pausing preparation… Completed tiles will be kept."
         task?.cancel()
-        maps?.pause()
+        if maps?.activeID == Self.area.id { maps?.pause() }
     }
     func remove() {
         guard task == nil else { return }

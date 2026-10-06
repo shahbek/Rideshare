@@ -52,13 +52,13 @@ final class OfflineMapService {
     }
 
     var canDownload: Bool {
-        network.isOnline && !downloadedOnly && (!wiFiOnly || (network.isWiFi && !network.isExpensive && !network.isConstrained))
+        network.isOnline && !downloadedOnly && (!wiFiOnly || network.isUnmeteredLocalConnection)
     }
 
     var restriction: LKey? {
         if downloadedOnly { return .offlineDisableOnly }
         if !network.isOnline { return .offlineConnect }
-        if wiFiOnly && (!network.isWiFi || network.isExpensive || network.isConstrained) { return .offlineNeedWiFi }
+        if wiFiOnly && !network.isUnmeteredLocalConnection { return .offlineNeedWiFi }
         return nil
     }
 
