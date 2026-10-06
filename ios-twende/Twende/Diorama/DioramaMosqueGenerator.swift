@@ -6,10 +6,15 @@ nonisolated struct DioramaMosqueGenerator {
     let terrain: DioramaTerrain
 
     static func buildingIDs(in data: DioramaTileData) -> Set<UInt64> {
-        var ids = Set(data.buildings.filter { $0.type.lowercased() == "mosque" }.map(\.id))
+        // A clipped remnant must never enter the full-footprint mosque renderer.
+        let eligible = data.buildings.filter { $0.occupiedPieces.isEmpty }
+        var ids = Set(eligible.filter { $0.type.lowercased() == "mosque" }.map(\.id))
         for poi in data.pois where poi.kind == "mosque" {
-            // A point belongs only to its enclosing footprint, never an arbitrary nearby home.
-            if let host = data.buildings.filter({ DioramaPolygon.contains($0.ring, poi.point) }).min(by: { $0.area < $1.area }) {
+            // The authored point-only hall already owns this POI; do not promote a second envelope.
+            if eligible.contains(where: { ids.contains($0.id) && DioramaPolygon.contains($0.ring, poi.point) }) { continue }
+            if let host = eligible.filter({ DioramaPolygon.contains($0.ring, poi.point) }).min(by: {
+                $0.area != $1.area ? $0.area < $1.area : $0.id < $1.id
+            }) {
                 ids.insert(host.id)
             }
         }

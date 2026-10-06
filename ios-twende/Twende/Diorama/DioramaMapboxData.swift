@@ -31,6 +31,17 @@ nonisolated enum DioramaMapboxData {
         return DioramaPolygon.area(a) - remaining > 0.15
     }
 
+    private static func landmarkIDs(in data: DioramaTileData) -> Set<UInt64> {
+        DioramaHotelGenerator.ids.union(DioramaSlipwayPavilion.buildingIDs)
+            .union(DioramaMosqueGenerator.buildingIDs(in: data)).union([165_397_124])
+    }
+
+    /// Reserve both the original mapped outline and the authored replacement. A replacement may
+    /// deliberately recede a facade or stair passage; that space must not respawn as a second building.
+    private static func reservation(_ feature: DioramaBuildingFeature) -> [[DV2]] {
+        [feature.ring, feature.sourceFootprint].filter { $0.count >= 3 }
+    }
+
     static func merge(_ features: [DioramaVectorTile.Feature], into original: DioramaTileData) -> DioramaTileData {
         var data = original
         data.hasMapboxCoverage = true
@@ -53,6 +64,9 @@ nonisolated enum DioramaMapboxData {
             data.pois.append(.init(id: DioramaRandom.mix(f.id ^ 0xB0_0000_0000), point: p, kind: "mapboxLabel", name: title))
         }
         let fuel = data.landuse.filter { $0.kind == "fuel" }.compactMap { $0.rings.first }
+        let protectedIDs = landmarkIDs(in: data)
+        let protectedSites = data.buildings.filter { protectedIDs.contains($0.id) }.flatMap(reservation)
+        var rejectedLandmarkDuplicates = 0
         var added = 0
         for f in features.filter({ $0.layer == "building" && $0.type == 3 }).sorted(by: { $0.id < $1.id }) {
             for (part, path) in f.paths.enumerated() {
@@ -66,6 +80,12 @@ nonisolated enum DioramaMapboxData {
                 let holes = f.paths.dropFirst(part + 1).prefix(while: { DioramaPolygon.signedArea($0) < 0 })
                     .map { $0.map { local($0, extent: f.extent) } }
                 let basePieces = holes.isEmpty ? [ring] : DioramaGroundCutouts(polygons: holes).subtract(from: ring)
+                // Never salvage wings from a second representation of a bespoke landmark.
+                // Doing so retained the original Slipway outline around the authored smaller plan.
+                if protectedSites.contains(where: { owner in basePieces.contains { overlaps($0, owner) } }) {
+                    rejectedLandmarkDuplicates += 1
+                    continue
+                }
                 let owners = fuel + data.buildings.flatMap(\.footprints)
                 let relevant = owners.filter { owner in basePieces.contains { overlaps($0, owner) } }
                 let pieces = relevant.isEmpty ? basePieces : basePieces.flatMap { DioramaGroundCutouts(polygons: relevant).subtract(from: $0) }
@@ -133,15 +153,15 @@ nonisolated enum DioramaMapboxData {
                 }
             }
         }
-        print("[Diorama coverage] Mapbox added \(added) buildings, \(roadAdded) road stretches, \(seenNames.count) real POI names")
+        print("[Diorama coverage] Mapbox added \(added) buildings, \(roadAdded) road stretches, \(seenNames.count) real POI names; rejected \(rejectedLandmarkDuplicates) landmark duplicates")
         return data
     }
 
     /// Authored landmarks first, then mapped houses. Fuel parcels reserve their models before houses.
     static func resolveOwnership(_ original: DioramaTileData) -> DioramaTileData {
         var data = original
-        let landmarks = DioramaHotelGenerator.ids.union(DioramaSlipwayPavilion.buildingIDs)
-            .union(DioramaMosqueGenerator.buildingIDs(in: data)).union([165_397_124])
+        let landmarks = landmarkIDs(in: data)
+        let protectedSites = data.buildings.filter { landmarks.contains($0.id) }.flatMap(reservation)
         let fuel = data.landuse.filter { $0.kind == "fuel" }.compactMap { $0.rings.first }
         var accepted: [DioramaBuildingFeature] = []
         for f in data.buildings.sorted(by: { a, b in
@@ -149,6 +169,7 @@ nonisolated enum DioramaMapboxData {
             if pa != pb { return pa }
             return a.area != b.area ? a.area > b.area : a.id < b.id
         }) {
+            if !landmarks.contains(f.id), protectedSites.contains(where: { owner in f.footprints.contains { overlaps($0, owner) } }) { continue }
             let owners = accepted.flatMap(\.footprints) + (landmarks.contains(f.id) ? [] : fuel)
             let conflicts = owners.filter { owner in f.footprints.contains { overlaps($0, owner) } }
             guard !conflicts.isEmpty else { accepted.append(f); continue }
@@ -159,7 +180,7 @@ nonisolated enum DioramaMapboxData {
             // Bespoke landmark generators use their full source plan, so do not feed them clipped wings.
             guard !landmarks.contains(f.id) else { continue }
             accepted.append(.init(id: f.id, ring: f.ring, clipped: f.clipped, area: area, centroid: f.centroid,
-                height: f.height, type: f.type, name: f.name, occupiedPieces: pieces))
+                height: f.height, type: f.type, name: f.name, occupiedPieces: pieces, sourceFootprint: f.sourceFootprint))
         }
         data.buildings = accepted.sorted { $0.id < $1.id }
         print("[Diorama coverage] \(data.buildings.count) buildings / \(data.roads.count) roads; \(original.buildings.count - accepted.count) conflicting footprints replaced by owners")

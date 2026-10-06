@@ -9,7 +9,8 @@ nonisolated enum DioramaFootprints {
         (pts, fl) = DioramaPolygon.counterClockwise(pts, flags: fl)
         guard pts.count >= 3, DioramaPolygon.area(pts) > 12 else { return nil }
         return DioramaBuildingFeature(id: f.id, ring: pts, clipped: fl, area: DioramaPolygon.area(pts),
-                                      centroid: DioramaPolygon.centroid(pts), height: f.height, type: f.type, name: f.name)
+                                      centroid: DioramaPolygon.centroid(pts), height: f.height, type: f.type, name: f.name,
+                                      sourceFootprint: f.sourceFootprint.isEmpty ? f.ring : f.sourceFootprint)
     }
 
     /// OSM supplies only the landmark's location, orientation and approximate scale. The bespoke

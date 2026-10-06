@@ -137,7 +137,9 @@ nonisolated enum DioramaTileGenerator {
         var porchLights: [DioramaLight] = []
         let mosqueIDs = DioramaMosqueGenerator.buildingIDs(in: data)
         for feature in data.buildings {
-            if mosqueIDs.contains(feature.id) {
+            if !feature.occupiedPieces.isEmpty {
+                built.append(DioramaClippedBuilding.build(feature, terrain: terrain, config: config, mesh: &buildings))
+            } else if mosqueIDs.contains(feature.id) {
                 built.append(DioramaMosqueGenerator(config: config, terrain: terrain).build(feature, into: &buildings))
             } else if DioramaSlipwayPavilion.buildingIDs.contains(feature.id) {
                 built.append(DioramaSlipwayPavilion(data: data, terrain: terrain).build(feature, mesh: &buildings))

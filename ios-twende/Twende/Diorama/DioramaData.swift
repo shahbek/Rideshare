@@ -62,6 +62,8 @@ nonisolated struct DioramaBuildingFeature: Sendable {
     /// Disjoint occupied pieces for source courtyards and partial-priority overlaps; empty means full ring.
     var occupiedPieces: [[DV2]] = []
     var footprints: [[DV2]] { occupiedPieces.isEmpty ? [ring] : occupiedPieces }
+    /// Original mapped outline retained before authored reshaping, rounding or stair clearance.
+    var sourceFootprint: [DV2] = []
 }
 
 nonisolated struct DioramaRoadFeature: Sendable {
@@ -157,7 +159,7 @@ nonisolated enum DioramaBundledTile {
             // This is bundled OSM, not Mapbox's synthesized 3 m fallback: keep genuine low heights.
             let height = b.height.flatMap { $0.isFinite && $0 > 0 ? $0 : nil }
             if let existing = buildings[b.id], existing.area >= area { continue }
-            buildings[b.id] = DioramaBuildingFeature(id: b.id, ring: pts, clipped: flags, area: area, centroid: centroid, height: height, type: b.type, name: b.name)
+            buildings[b.id] = DioramaBuildingFeature(id: b.id, ring: pts, clipped: flags, area: area, centroid: centroid, height: height, type: b.type, name: b.name, sourceFootprint: pts)
         }
 
         buildings = buildings.mapValues(DioramaFootprints.landmarkPlan)

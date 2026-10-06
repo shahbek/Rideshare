@@ -60,7 +60,8 @@ nonisolated struct DioramaAmenityGenerator {
             case "tower": mast(at: poi.point, props: &props, glow: &glow, lights: &lights)
             case "playground": playground(at: poi.point, rng: &rng, ground: &ground, props: &props)
             case "artwork": sculpture(at: poi.point, ground: &ground, props: &props)
-            case "mosque": minaret(near: poi.point, props: &props, glow: &glow, lights: &lights)
+            // Mosque geometry has one owner in the building pass; POIs never add a second model.
+            case "mosque": break
             default: break
             }
         }
