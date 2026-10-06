@@ -103,12 +103,16 @@ nonisolated enum DioramaTileGenerator {
     /// Generates (or returns the in-memory copy of) one tile. Call from any thread.
     static func generate(_ data: DioramaTileData, config: DioramaConfig, library: DioramaPropLibrary, reduced: Bool) throws -> DioramaTileArtifacts {
         try Task.checkCancellation()
-        if let cached = cached(data.tile, config: config, reduced: reduced) { return cached }
+        let audit = DioramaGenerationAudit.current
+        // Audits are always cold, and must never populate or reuse the interactive app's cache.
+        if audit == nil, let cached = cached(data.tile, config: config, reduced: reduced) { return cached }
         let started = Date()
-        var checkpoint = started
+        var checkpoint = DioramaGenerationAudit.now
         func timing(_ stage: String) {
-            let now = Date()
-            print("[Diorama timing] \(stage): \(String(format: "%.3f", now.timeIntervalSince(checkpoint)))s")
+            let now = DioramaGenerationAudit.now
+            let seconds = now - checkpoint
+            audit?.stage(stage, seconds: seconds)
+            print("[Diorama timing] \(stage): \(String(format: "%.3f", seconds))s")
             checkpoint = now
         }
 
@@ -349,6 +353,7 @@ nonisolated enum DioramaTileGenerator {
         let image = painter.image()
         timing("packing + image export")
         for (category, mesh) in meshes {
+            audit?.record(mesh, category: category)
             print("[Diorama geometry] \(category): \(mesh.triangleCount) baked triangles, \(mesh.instances.count) instances")
         }
         let artifacts = DioramaTileArtifacts(
@@ -360,9 +365,11 @@ nonisolated enum DioramaTileGenerator {
             hasMapboxCoverage: data.hasMapboxCoverage
         )
         try Task.checkCancellation()
-        cacheLock.lock()
-        cache[cacheKey(data.tile, config: config, reduced: reduced)] = artifacts
-        cacheLock.unlock()
+        if audit == nil {
+            cacheLock.lock()
+            cache[cacheKey(data.tile, config: config, reduced: reduced)] = artifacts
+            cacheLock.unlock()
+        }
         return artifacts
     }
 }

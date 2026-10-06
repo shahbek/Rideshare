@@ -315,6 +315,9 @@ nonisolated struct DioramaTerrain: Sendable {
     /// must never bridge a hill and let the ground pierce a finish or cover road markings.
     func drape(_ ring: [DV2], lift: Double, swatch: DioramaSwatch, surface: Surface = .land, into mesh: inout DioramaMesh) {
         guard ring.count >= 3 else { return }
+        let audit = DioramaGenerationAudit.current
+        let start = audit == nil ? 0 : DioramaGenerationAudit.now
+        defer { audit?.operation("terrain.drape", since: start) }
         let onLand = surface == .land
         func elevation(_ p: DV2) -> Double { onLand ? height(p) : seabed(p) }
         let bounds = DioramaRect.bounding(ring), step = Self.surfaceStep

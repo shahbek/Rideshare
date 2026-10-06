@@ -44,10 +44,17 @@ nonisolated struct DioramaGroundCutouts: Sendable {
 
     /// Returns convex pieces outside all occupied footprints, preserving real outline intersections.
     func subtract(from ring: [DV2]) -> [[DV2]] {
+        let audit = DioramaGenerationAudit.current
+        let start = audit == nil ? 0 : DioramaGenerationAudit.now
+        defer { audit?.operation("cutout.subtract", since: start) }
         let bounds = DioramaRect.bounding(ring)
         let relevant = masks.filter { $0.bounds.intersects(bounds) }
         let ccw = DioramaPolygon.counterClockwise(ring)
-        var pieces = DioramaPolygon.triangulate(ccw).map { [ccw[$0.0], ccw[$0.1], ccw[$0.2]] }
+        let initial = DioramaPolygon.triangulate(ccw).map { [ccw[$0.0], ccw[$0.1], ccw[$0.2]] }
+        if audit?.usesCachedCutoutBounds == true {
+            return subtractWithCachedBounds(initial, masks: relevant)
+        }
+        var pieces = initial
         for mask in relevant {
             pieces = pieces.flatMap { piece in
                 guard DioramaRect.bounding(piece).intersects(mask.bounds) else { return [piece] }
@@ -56,6 +63,28 @@ nonisolated struct DioramaGroundCutouts: Sendable {
             if pieces.isEmpty { break }
         }
         return pieces
+    }
+
+    /// Keep mask order, piece order, clipping arithmetic and area thresholds unchanged.
+    /// Carry bounds with surviving pieces instead of recomputing them for every later mask.
+    private func subtractWithCachedBounds(_ initial: [[DV2]], masks: [(ring: [DV2], bounds: DioramaRect)]) -> [[DV2]] {
+        var pieces = initial.map { (ring: $0, bounds: DioramaRect.bounding($0)) }
+        for mask in masks {
+            var next: [(ring: [DV2], bounds: DioramaRect)] = []
+            next.reserveCapacity(pieces.count)
+            for piece in pieces {
+                if !piece.bounds.intersects(mask.bounds) {
+                    next.append(piece)
+                } else {
+                    for ring in Self.subtractConvex(mask.ring, from: piece.ring) {
+                        next.append((ring, DioramaRect.bounding(ring)))
+                    }
+                }
+            }
+            pieces = next
+            if pieces.isEmpty { break }
+        }
+        return pieces.map(\.ring)
     }
 
     static func subtractConvex(_ mask: [DV2], from polygon: [DV2]) -> [[DV2]] {
