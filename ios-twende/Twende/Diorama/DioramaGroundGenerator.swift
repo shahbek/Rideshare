@@ -78,9 +78,7 @@ nonisolated struct DioramaGroundGenerator {
                 mesh.face(a, c, d)
             }
         }
-        // Unmapped open land is dry, compacted earth, not a blanket irrigated lawn.
-        // Mapped gardens and parks retain their green paint below.
-        painter.fillAll(.roadEarth)
+        painter.fillAll(.grass)
     }
 
     /// Bounded, deterministic illustrative reef patches, not surveyed marine habitat. They sit on the
@@ -118,9 +116,6 @@ nonisolated struct DioramaGroundGenerator {
 
     /// Parks, commons and gardens as brighter lawns. Roads painted later cross them where mapped.
     private func parks() {
-        for area in data.landuse where ["mapped_green", "natural_earth"].contains(area.kind) {
-            painter.fill(area.rings, area.kind == "mapped_green" ? .grass : .roadEarth)
-        }
         for park in data.landuse where ["park", "common", "garden"].contains(park.kind) {
             guard let outer = park.rings.first else { continue }
             let ring = DioramaPolygon.clipPolygon(outer, to: data.rect)
@@ -132,8 +127,7 @@ nonisolated struct DioramaGroundGenerator {
     private func compoundGround(_ compounds: [DioramaCompound]) {
         for compound in compounds {
             let plot = DioramaPolygon.offset(compound.ring, by: -0.35) ?? compound.ring
-            let mappedGarden = data.landuse.contains { ["park", "garden", "common"].contains($0.kind) && DioramaPolygon.contains(polygon: $0.rings, compound.building.feature.centroid) }
-            painter.fill(plot, mappedGarden ? .lawn : .roadEarth)
+            painter.fill(plot, .lawn)
             if let gate = compound.gate {
                 let entrance = compound.building.entrance + compound.building.entranceOut * 0.4
                 painter.stroke([gate.point, entrance], width: config.gateWidth - 0.3, .paving, cap: .butt)

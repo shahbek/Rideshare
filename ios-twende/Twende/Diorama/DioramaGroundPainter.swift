@@ -1,5 +1,4 @@
 import CoreGraphics
-import CoreText
 import Foundation
 
 /// Top-down painted ground for one tile. RGB is albedo; alpha carries the material code (×32) the
@@ -16,7 +15,7 @@ nonisolated struct DioramaGroundImage: Sendable {
 /// slivers; later fills simply cover earlier ones with anti-aliased edges.
 nonisolated final class DioramaGroundPainter {
     nonisolated enum Material: UInt8, Sendable {
-        case plain = 0, grass = 1, sand = 2, asphalt = 3, paving = 4, dirt = 6, clay = 7
+        case plain = 0, grass = 1, sand = 2, asphalt = 3, paving = 4, clay = 7
         var shade: CGFloat { CGFloat(rawValue) * 32 / 255 }
     }
 
@@ -66,9 +65,8 @@ nonisolated final class DioramaGroundPainter {
     static func material(for swatch: DioramaSwatch) -> Material {
         switch swatch {
         case .grass, .lawn, .pitchGreen, .hedge: .grass
-        case .earth, .wetSand, .seabed: .sand
-        case .soil, .roadEarth: .dirt
-        case .asphalt: .asphalt
+        case .earth, .wetSand, .seabed, .soil: .sand
+        case .asphalt, .roadEarth: .asphalt
         case .paving, .pavement, .concrete, .courtyard, .kerb, .parkEdge: .paving
         case .tileClay: .clay
         default: .plain
@@ -184,33 +182,6 @@ nonisolated final class DioramaGroundPainter {
     func bar(at p: DV2, along: DV2, length: Double, width: Double, _ swatch: DioramaSwatch) {
         let d = along.normalized * (length / 2)
         stroke([p - d, p + d], width: width, swatch, cap: .butt)
-    }
-
-    /// Road names are cartographic ink on the ground, never a floating road-sign mesh.
-    func roadName(_ name: String, at point: DV2, direction: DV2, maximumWidth: Double) {
-        let font = CTFontCreateWithName("Figtree-SemiBold" as CFString, 1.7, nil)
-        let line = CTLineCreateWithAttributedString(NSAttributedString(string: String(name.prefix(48)), attributes: [
-            NSAttributedString.Key(kCTFontAttributeName as String): font,
-            NSAttributedString.Key(kCTForegroundColorAttributeName as String): CGColor(gray: 0.98, alpha: 1)
-        ]))
-        let width = CTLineGetTypographicBounds(line, nil, nil, nil)
-        guard width > 0, width <= maximumWidth else { return }
-        var angle = direction.angle
-        if angle > .pi / 2 { angle -= .pi }
-        if angle < -.pi / 2 { angle += .pi }
-        color.saveGState()
-        color.translateBy(x: point.x, y: point.y)
-        color.rotate(by: angle)
-        color.textMatrix = .identity
-        color.textPosition = CGPoint(x: -width / 2, y: -0.55)
-        color.setTextDrawingMode(.stroke)
-        color.setStrokeColor(CGColor(gray: 0.20, alpha: 1))
-        color.setLineWidth(0.25)
-        CTLineDraw(line, color)
-        color.textPosition = CGPoint(x: -width / 2, y: -0.55)
-        color.setTextDrawingMode(.fill)
-        CTLineDraw(line, color)
-        color.restoreGState()
     }
 
     /// Final image: colour from the RGB context, material code from the grey context.

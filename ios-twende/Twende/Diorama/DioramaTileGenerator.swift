@@ -56,7 +56,6 @@ nonisolated struct DioramaTileArtifacts: Sendable {
     /// Top-down painted ground (roads, lawns, paving, sand) sampled by the terrain skin.
     let groundImage: DioramaGroundImage?
     var buildingLabels: [DioramaBuildingLabel] = []
-    var sourceCoverage: String = "Bundled coverage only"
 
     /// Unique triangles in the buffers (each prototype counted once, not per placement).
     var totalTriangles: Int { indices.count / 3 }
@@ -353,8 +352,7 @@ nonisolated enum DioramaTileGenerator {
             parts: parts, lights: lights, lightGrid: lightGrid,
             waterHeight: terrain.waterLevel, shorelineReport: DioramaShoreline.report(data.shorelines), generationSeconds: Date().timeIntervalSince(started),
             groundImage: image,
-            buildingLabels: built.compactMap { DioramaBuildingLabel.make($0, terrain: terrain, config: config) },
-            sourceCoverage: data.sourceCoverage
+            buildingLabels: built.map { DioramaBuildingLabel.make($0, terrain: terrain, config: config) }
         )
         cacheLock.lock()
         cache[cacheKey(data.tile, config: config, reduced: reduced)] = artifacts

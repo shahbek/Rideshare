@@ -26,7 +26,6 @@ nonisolated struct DioramaTerrain: Sendable {
     let values: [Double]
     var attachedFootprints: [UInt64: [[DV2]]] = [:]
     private var pierDeckLevels: [(point: DV2, height: Double)] = []
-    private var doubleTreeDeckLevel: Double? = nil
     /// Vertical scale of the snapshot. 1 keeps real metres; the Slipway uses a gentler relief that
     /// stays readable yet short enough to ease into the flat basemap at the tile edge.
     var relief: Double = 1
@@ -126,7 +125,6 @@ nonisolated struct DioramaTerrain: Sendable {
                 level = max(level, dockTop + configDeckClearance)
             }
             result.pierDeckLevels.append((first, level))
-            if (path.sourceID ?? path.id) == 1_387_736_908 { result.doubleTreeDeckLevel = level }
         }
         return result
     }
@@ -145,11 +143,6 @@ nonisolated struct DioramaTerrain: Sendable {
     /// Level floors clear the complete footprint and connected decks with a shallow foundation.
     /// Only waterfront buildings with a connected deck are also held above the pier datum.
     func buildingHeight(_ feature: DioramaBuildingFeature) -> Double {
-        // OSM 165397124 is the Double Tree Pier head, not a land-based shop.
-        // Its floor must meet the walkway top, never use its underwater DEM foundation.
-        if feature.id == 165_397_124 {
-            return doubleTreeDeckLevel ?? (pierLevel + configDeckClearance)
-        }
         let attached = attachedFootprints[feature.id, default: []]
         let support = attached.map { foundationHeight($0) }.max() ?? -Double.infinity
         let floor = max(foundationHeight(feature.ring), support)

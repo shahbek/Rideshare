@@ -34,6 +34,7 @@ nonisolated final class DioramaLabelRenderer {
         }
         fragment float4 labelFragment(LabelOut in [[stage_in]], texture2d<float> image [[texture(0)]]) {
             constexpr sampler s(filter::linear, address::clamp_to_edge);
+            if (in.uv.x < -1.5) return float4(1.0, 1.0, 1.0, 1.0);
             if (in.uv.x < -0.5) return float4(0.20, 0.22, 0.24, 1.0);
             float4 c = image.sample(s, in.uv);
             if (c.a < 0.01) discard_fragment();
@@ -115,7 +116,7 @@ nonisolated final class DioramaLabelRenderer {
         var occupied: [CGRect] = []
         let w = Float(width), h = Float(height)
         for label in labels {
-            guard label.isNamed, occupied.count < 18, let image = images[label.title] else { continue }
+            guard label.isNamed || zoom >= 17.8, occupied.count < 18, let image = images[label.title] else { continue }
             if reveal.w > 0.5, max(abs(label.anchor.x - reveal.x), abs(label.anchor.y - reveal.y)) + 3 > reveal.z { continue }
             let roof = matrix * SIMD4(label.anchor, 1)
             let lift: Float = label.isNamed ? 5.5 : 3.5
@@ -133,7 +134,7 @@ nonisolated final class DioramaLabelRenderer {
             let delta = SIMD2((p.x / p.w - roof.x / roof.w) * w, (p.y / p.w - roof.y / roof.w) * h)
             let length = simd_length(delta)
             let normal = length > 0.01 ? SIMD2(-delta.y, delta.x) / length : SIMD2<Float>(1, 0)
-            for (thickness, uv) in [(1.25 * scale, Float(-1))] {
+            for (thickness, uv) in [(3.2 * scale, Float(-2)), (1.25 * scale, Float(-1))] {
                 func end(_ point: SIMD4<Float>, _ side: Float) -> Vertex {
                     Vertex(position: SIMD4(point.x + normal.x * thickness * side / w * point.w, point.y + normal.y * thickness * side / h * point.w, point.z, point.w), uv: SIMD2(uv, 0))
                 }
@@ -143,21 +144,6 @@ nonisolated final class DioramaLabelRenderer {
                 }
                 encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6)
             }
-            // Filled circular endpoint attached to the model, in the same ink as the stem.
-            var dot: [Vertex] = []
-            let centre = Vertex(position: roof, uv: SIMD2(-1, 0))
-            for i in 0..<20 {
-                func rim(_ index: Int) -> Vertex {
-                    let angle = Float(index) * 2 * .pi / 20
-                    return Vertex(position: SIMD4(roof.x + cos(angle) * 3 * scale * 2 / w * roof.w,
-                        roof.y + sin(angle) * 3 * scale * 2 / h * roof.w, roof.z, roof.w), uv: SIMD2(-1, 0))
-                }
-                dot += [centre, rim(i), rim(i + 1)]
-            }
-            dot.withUnsafeMutableBytes { bytes in
-                if let base = bytes.baseAddress { encoder.setVertexBytes(base, length: bytes.count, index: 0) }
-            }
-            encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: dot.count)
             func v(_ dx: Float, _ dy: Float, _ u: Float, _ t: Float) -> Vertex {
                 Vertex(position: SIMD4(p.x + dx * 2 / w * p.w, p.y + dy * 2 / h * p.w, p.z, p.w), uv: SIMD2(u, t))
             }

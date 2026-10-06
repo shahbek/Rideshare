@@ -25,7 +25,6 @@ nonisolated struct DioramaTileData: Sendable {
     var shorelines: [DioramaShorelineSegment] = []
     var shorelineLandMasks: [[DV2]] = []
 
-    var sourceCoverage: String = "Bundled coverage only"
     var isEmpty: Bool { buildings.isEmpty && roads.isEmpty && water.isEmpty }
 }
 
@@ -68,7 +67,6 @@ nonisolated struct DioramaRoadFeature: Sendable {
     let isPaved: Bool
     /// Approximate carriageway width in metres.
     let width: Double
-    var name: String? = nil
     var isMain: Bool { ["motorway", "trunk", "primary", "secondary", "tertiary"].contains(roadClass) }
 }
 
@@ -139,9 +137,9 @@ nonisolated enum DioramaBundledTile {
             (pts, flags) = DioramaPolygon.counterClockwise(pts, flags: flags)
             guard pts.count >= 3 else { continue }
             let area = DioramaPolygon.area(pts)
-            guard area > 2 else { continue }
+            guard area > 12 else { continue }
             let centroid = DioramaPolygon.centroid(pts)
-            guard DioramaPolygon.area(DioramaPolygon.clipPolygon(pts, to: rect)) > 0.5 else { continue }
+            guard rect.contains(centroid) else { continue }
             // This is bundled OSM, not Mapbox's synthesized 3 m fallback: keep genuine low heights.
             let height = b.height.flatMap { $0.isFinite && $0 > 0 ? $0 : nil }
             if let existing = buildings[b.id], existing.area >= area { continue }
@@ -165,7 +163,7 @@ nonisolated enum DioramaBundledTile {
             }
             let line = r.line.compactMap(local)
             guard line.count >= 2 else { continue }
-            for (pieceIndex, piece) in DioramaPolygon.clip(line, to: rect).enumerated() where DioramaPolygon.length(piece) > 0.25 {
+            for (pieceIndex, piece) in DioramaPolygon.clip(line, to: rect).enumerated() where DioramaPolygon.length(piece) > 3 {
                 let key = DioramaRandom.mix(r.id &+ UInt64(pieceIndex) &* 977)
                 roads[key] = DioramaRoadFeature(id: key, line: piece, roadClass: r.class, isPaved: r.paved, width: width)
             }
@@ -233,8 +231,8 @@ nonisolated enum DioramaBundledTile {
 
         var result = DioramaTileData(
             tile: tile, projection: projection, rect: rect,
-            buildings: buildings.values.sorted { $0.id < $1.id },
-            roads: roads.values.sorted { $0.id < $1.id },
+            buildings: Array(buildings.values.sorted { $0.area != $1.area ? $0.area > $1.area : $0.id < $1.id }.prefix(config.maxBuildingsPerTile)).sorted { $0.id < $1.id },
+            roads: Array(roads.values.sorted { $0.id < $1.id }.prefix(config.maxRoadsPerTile)),
             water: water.sorted { $0.id < $1.id },
             landuse: landuse.sorted { $0.id < $1.id },
             trees: trees,
