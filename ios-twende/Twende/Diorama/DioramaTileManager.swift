@@ -272,12 +272,14 @@ final class DioramaTileManager {
 
     private func updateEffectStatus() {
         guard shown else { return }
+        let coverage: String
+        if case .loaded(let artifacts) = status { coverage = artifacts.sourceCoverage } else { coverage = "" }
         if thermalReduced {
-            state.status = "Slipway loaded · bloom/AO off (thermal)"
+            state.status = "\(coverage) · bloom/AO off (thermal)"
         } else if ProcessInfo.processInfo.isLowPowerModeEnabled {
-            state.status = "Slipway loaded · bloom/AO off (Low Power)"
+            state.status = "\(coverage) · bloom/AO off (Low Power)"
         } else {
-            state.status = "Slipway loaded · full effects"
+            state.status = "\(coverage) · full effects"
         }
     }
 
@@ -290,13 +292,16 @@ final class DioramaTileManager {
         state.status = "Generating Slipway…"
         let config = self.config
         let reduced = thermalReduced
+        let token = MapboxOptions.accessToken
+        let offline = UserDefaults.standard.bool(forKey: "maps.downloadedOnly")
         Task.detached(priority: .userInitiated) {
             let artifacts: DioramaTileArtifacts?
             let started = Date()
             let tile = DioramaTileID(latitude: config.seedLatitude, longitude: config.seedLongitude, zoom: config.tileZoom)
             if let cached = DioramaTileGenerator.cached(tile, config: config, reduced: reduced) {
                 artifacts = cached
-            } else if let data = DioramaBundledTile.load(config: config), !data.isEmpty {
+            } else if let bundled = DioramaBundledTile.load(config: config), !bundled.isEmpty {
+                let data = await DioramaMapboxSource.supplement(bundled, token: token, offline: offline)
                 do {
                     // Prototype construction used to block the main thread at map-manager init,
                     // even when the diorama was off. Build lazily here, after checking the cache.
@@ -367,13 +372,8 @@ final class DioramaTileManager {
             labelClip.clipLayerTypes = .constant([.symbol])
             try map.addLayer(labelClip)
             labelMaskIDs = []; acceptedLabelIDs = []
-            host.onLabelsChanged = { [weak self, weak host] ids in
-                Task { @MainActor in
-                    guard let self, let host, self.renderLayer === host else { return }
-                    self.acceptedLabelIDs = ids
-                    self.updateLabelMask()
-                }
-            }
+            // All native symbols inside the revealed tile are suppressed, including unnamed buildings.
+            // Custom name decluttering must never reopen holes in that mask.
             renderLayer = host
             shown = true
             beginReveal()
@@ -505,7 +505,9 @@ final class DioramaTileManager {
             }
         } else { coordinates = tile.outline }
         map.updateGeoJSONSource(withId: clipSourceID, geoJSON: .geometry(.polygon(Polygon([coordinates]))))
-        updateLabelMask()
+        if map.sourceExists(withId: labelSourceID) {
+            map.updateGeoJSONSource(withId: labelSourceID, geoJSON: .geometry(.polygon(Polygon([coordinates]))))
+        }
     }
 
     private func updateLabelMask() {

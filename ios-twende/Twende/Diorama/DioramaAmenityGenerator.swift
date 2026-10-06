@@ -1,4 +1,5 @@
 import Foundation
+import CoreGraphics
 
 /// Everything in the tile that is neither a road nor a house, built from the mapped amenities so the
 /// diorama matches the real Slipway: padel and sports courts with lines, nets and glass; the hotel car
@@ -202,37 +203,31 @@ nonisolated struct DioramaAmenityGenerator {
     // MARK: Car park
 
     private func carPark(_ ring: [DV2], areaID: UInt64, rng: inout DioramaRandom, ground: inout DioramaMesh, props: inout DioramaMesh) {
-        let base = terrain.foundationHeight(ring)
-        let pieces = ownedSlab(ring, areaID: areaID, top: base + 0.1, side: .kerb, finish: .asphalt, ground: &ground)
-        func onParking(_ p: DV2) -> Bool { pieces.contains { DioramaPolygon.contains($0, p) } }
+        let cutouts = DioramaGroundCutouts(data: data, pavementWidth: config.pavementWidth, excludedAreaIDs: [areaID])
+        let pieces = cutouts.subtract(from: DioramaPolygon.clipPolygon(ring, to: data.rect))
+        painter.fillPieces(pieces, .asphalt)
         let box = DioramaPolygon.minimumAreaRectangle(ring)
-        let top = base + 0.1 + DioramaSurfaceLevel.structuralPaintClearance
-        // Bays 2.6 m wide along both long sides, nose-in from a central aisle.
-        let bayDepth = min(box.halfWidth - 0.5, 5.0)
-        guard bayDepth > 2.5 else { return }
-        let a = box.axis, c = box.across
-        var u = -box.halfLength + 1.5
-        while u <= box.halfLength - 1.5 {
-            for s in [-1.0, 1.0] {
-                let p0 = box.centre + a * u + c * (s * box.halfWidth), p1 = box.centre + a * u + c * (s * (box.halfWidth - bayDepth))
-                guard DioramaPolygon.contains(ring, p0 + c * (-s * 0.3)), DioramaPolygon.contains(ring, p1) else { continue }
-                let n = c * 0.06
-                if [p0 - n, p1 - n, p1 + n, p0 + n].allSatisfy(onParking) {
-                    ground.quad(DV3(p0 - n, top), DV3(p1 - n, top), DV3(p1 + n, top), DV3(p0 + n, top), .marking, normal: .up)
-                }
-                let bayCentre = box.centre + a * (u + 1.3) + c * (s * (box.halfWidth - bayDepth / 2))
-                if u + 2.6 <= box.halfLength - 1.5, DioramaOrientedRect(centre: bayCentre, axis: c, halfLength: 2.2, halfWidth: 1.0).corners.allSatisfy(onParking), rng.chance(0.55) {
-                    let heading = (c * -s).angle + rng.range(-0.04...0.04)
-                    props.instance(rng.pick(library.cars), DioramaTransform(rotation: heading, translation: DV3(bayCentre, top)))
-                }
+        // Allocate real-size bays and a manoeuvring aisle; no slab, island or decal meshes.
+        let width = box.halfWidth * 2 - 0.8
+        let parallel = width < 11
+        let depth = parallel ? 2.4 : 5.0
+        let spacing = parallel ? 6.0 : 2.6
+        guard width >= depth + (parallel ? 3.5 : 6) else { return }
+        let sides: [Double] = width >= 16 ? [-1, 1] : [1]
+        func fits(_ bay: [DV2]) -> Bool {
+            DioramaPolygon.densify(bay + [bay[0]], maxStep: 0.4).allSatisfy { p in
+                pieces.contains { DioramaPolygon.contains($0, p) }
             }
-            u += 2.6
         }
-        // A planter island with a tree in the middle of long car parks.
-        if box.halfLength > 14 {
-            let island = DioramaOrientedRect(centre: box.centre, axis: a, halfLength: 2.0, halfWidth: 0.9)
-            ground.extrude(island.corners, z0: top, z1: top + 0.25, .kerb, top: .soil)
-            props.instance(library.trees[8], DioramaTransform(rotation: rng.range(0...6.28), translation: DV3(box.centre, top + 0.25)))
+        for side in sides {
+            var u = -box.halfLength + 0.5
+            while u + spacing < box.halfLength - 0.5 {
+                let a = box.centre + box.axis * u + box.across * (side * (box.halfWidth - 0.4))
+                let b = a + box.axis * spacing
+                let c = b - box.across * (side * depth), d = a - box.across * (side * depth)
+                if fits([a, b, c, d]) { painter.stroke([d, a, b, c], width: 0.12, .marking, cap: .butt) }
+                u += spacing
+            }
         }
     }
 

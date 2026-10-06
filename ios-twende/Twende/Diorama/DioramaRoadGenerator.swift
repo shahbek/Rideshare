@@ -31,7 +31,27 @@ nonisolated struct DioramaRoadGenerator {
         paintSurfaces()
         for road in data.roads where road.isPaved && road.width >= 5.5 { markings(road) }
         junctionPaint()
+        roadNames()
         kerbs(into: &mesh)
+    }
+
+    /// One cartographic name per clear straight reach, drawn directly into the ground finish.
+    private func roadNames() {
+        var placed: [(name: String, point: DV2)] = []
+        for road in data.roads {
+            guard let name = road.name, !name.isEmpty else { continue }
+            let needed = min(48, Double(name.count)) * 1.15 + 4
+            for (a, b) in zip(road.line, road.line.dropFirst()).sorted(by: { $0.0.distance(to: $0.1) > $1.0.distance(to: $1.1) }) {
+                let length = a.distance(to: b), centre = (a + b) * 0.5, direction = (b - a).normalized
+                guard length > needed, layout.paintIsClear(centre),
+                      !placed.contains(where: { $0.point.distance(to: centre) < ($0.name == name ? 100 : 24) }) else { continue }
+                // Offset from the centre dashes, with enough room inside the edge paint.
+                let p = centre + direction.right * (road.width >= 6 ? road.width * 0.23 : 0)
+                painter.roadName(name, at: p, direction: direction, maximumWidth: length - 4)
+                placed.append((name, p))
+                break
+            }
+        }
     }
 
     // MARK: Paint

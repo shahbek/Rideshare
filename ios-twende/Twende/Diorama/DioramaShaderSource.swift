@@ -395,7 +395,7 @@ nonisolated enum DioramaShaderSource {
                 albedo = mix(albedo, whiteColor, saturate(white));
                 albedo = mix(albedo, yellowColor, saturate(yellow));
             }
-            if (tex > 0.5 && tex < 1.5) {
+            if ((tex > 0.5 && tex < 1.5) || (tex > 5.5 && tex < 6.5)) {
                 // Natural coast pigment is interpolated on the same mesh as the land and seabed.
                 // Hard finishes retain their painted color and never become a second surface.
                 albedo = mix(albedo, in.color.rgb, saturate(in.appearance.z));
@@ -412,6 +412,13 @@ nonisolated enum DioramaShaderSource {
             albedo *= 0.98 + 0.04 * (dioramaNoise(wp * 0.6) - 0.5);
         }
 
+        if (tex > 5.5 && tex < 6.5 && abs(n.z) > 0.7) {
+            // Warm compacted soil: broad dry patches and fine mineral grain, not beach ripples.
+            float patch = dioramaNoise(wp * 0.12) * 0.65 + dioramaNoise(wp * 0.7) * 0.35;
+            albedo *= 0.90 + 0.16 * patch;
+            float grit = dioramaNoise(wp * 3.2) - 0.5;
+            albedo += grit * 0.025 * (1.0 - smoothstep(0.15, 1.0, length(fwidth(wp))));
+        }
         if (tex > 6.5 && tex < 7.5 && abs(n.z) > 0.7) {
             // Square 40 cm maroon quarry tiles laid in a straight grid (no running bond).
             float2 bond = wp / float2(0.40, 0.40);
