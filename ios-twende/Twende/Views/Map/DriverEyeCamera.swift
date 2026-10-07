@@ -44,7 +44,7 @@ final class DriverEyeCamera {
         // Center and padding let Mapbox solve the projection, rather than guessing
         // an eye location whose optical axis can miss the car or ignore UI occlusion.
         view.mapboxMap.setCamera(to: CameraOptions(center: point.coordinate, padding: padding,
-                                                   zoom: forwardView ? 18.1 : 17.5, bearing: bearing, pitch: forwardView ? 66 : 45))
+                                                   zoom: forwardView ? 18.6 : 17.5, bearing: bearing, pitch: forwardView ? 69 : 45))
     }
 
     func stop(on view: MapView, restore: Bool) {
