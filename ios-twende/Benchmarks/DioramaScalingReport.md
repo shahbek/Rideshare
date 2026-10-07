@@ -5,7 +5,7 @@ Status: Geometry v36 supersedes the Sea Cliff traced model with photo-composed a
 ## 2026-10-07 glass camera modes
 
 - Live-trip text toggle replaced by a 48pt glass mode button beside glass recenter. Cycles overview/chase/forward, with haptics, accessible state and material fallback below iOS 26.
-- Forward mode keeps zoom 17.5, increases pitch to 62° and adds 24% of available height to top padding, placing the vehicle below center and exposing more ahead. Approved chase remains 45°; no scenery changes/downloads. Runtime framing is not yet visually accepted.
+- Forward mode now uses zoom 18.1 and pitch 66° following the user's closer/more immersive correction and adds 24% of available height to top padding, placing the vehicle below center and exposing more ahead. Approved chase remains 45°; no scenery changes/downloads. Runtime framing is not yet visually accepted.
 
 ## 2026-10-07 turn smoothing and route parallax
 
