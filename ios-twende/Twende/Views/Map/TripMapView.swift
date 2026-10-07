@@ -632,7 +632,7 @@ extension TripMapView {
                 try? map.addSource(source)
 
                 var casing = LineLayer(id: Self.casingLayerID, source: Self.routeSourceID)
-                casing.slot = .middle
+                casing.slot = .top
                 casing.lineWidth = .constant(9)
                 casing.lineColor = .constant(StyleColor(.white))
                 casing.lineCap = .constant(.round)
@@ -641,7 +641,7 @@ extension TripMapView {
                 try? map.addLayer(casing)
 
                 var core = LineLayer(id: Self.coreLayerID, source: Self.routeSourceID)
-                core.slot = .middle
+                core.slot = .top
                 core.lineWidth = .constant(5)
                 core.lineCap = .constant(.round)
                 core.lineJoin = .constant(.round)
@@ -659,7 +659,7 @@ extension TripMapView {
                 try? map.addLayer(core)
 
                 var pulse = LineLayer(id: Self.pulseLayerID, source: Self.routeSourceID)
-                pulse.slot = .middle
+                pulse.slot = .top
                 pulse.lineWidth = .constant(5)
                 pulse.lineCap = .constant(.round)
                 pulse.lineJoin = .constant(.round)

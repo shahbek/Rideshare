@@ -11,13 +11,14 @@ final class DriverEyeCamera {
     private var lastHeading: Double?
     private var lastGround: Double?
     private var lastAltitude: Double?
+    private var lockedBearing: Double?
 
     /// Directly behind the vehicle, with no lateral orbit or bird's-eye offset.
     func cameraPoint(for point: GeoPoint, heading: Double) -> GeoPoint {
-        let radians = heading * .pi / 180
+        let radians = (lockedBearing ?? heading) * .pi / 180
         let metresPerDegree = 111_320.0
-        return GeoPoint(latitude: point.latitude - cos(radians) * 22 / metresPerDegree,
-                        longitude: point.longitude - sin(radians) * 22 / (metresPerDegree * max(0.01, cos(point.latitude * .pi / 180))))
+        return GeoPoint(latitude: point.latitude - cos(radians) * 60 / metresPerDegree,
+                        longitude: point.longitude - sin(radians) * 60 / (metresPerDegree * max(0.01, cos(point.latitude * .pi / 180))))
     }
 
     func update(point: GeoPoint, heading: Double, ground: Double?, on view: MapView) {
@@ -31,18 +32,20 @@ final class DriverEyeCamera {
             catch { return }
             view.camera.cancelAnimations()
             view.mapboxMap.setCamera(to: CameraOptions(padding: .zero))
+            lockedBearing = heading
             isActive = true
         }
         let knownGround = ground.flatMap { $0.isFinite ? $0 : nil }
         let floor = knownGround ?? lastGround ?? 0
-        let altitude = max(0.3, floor + 9)
+        let altitude = max(0.3, floor + 50)
         guard point != lastPoint || heading != lastHeading || altitude != lastAltitude else { return }
         lastPoint = point; lastHeading = heading; lastGround = knownGround ?? lastGround
         lastAltitude = altitude
         let camera = view.mapboxMap.freeCameraOptions
         camera.location = cameraPoint(for: point, heading: heading).coordinate
         camera.altitude = altitude
-        camera.setPitchBearingForPitch(72, bearing: heading)
+        // Keep the reference viewing angle; turns rotate the car, not the map.
+        camera.setPitchBearingForPitch(50, bearing: lockedBearing ?? heading)
         view.mapboxMap.freeCameraOptions = camera
     }
 
@@ -52,6 +55,7 @@ final class DriverEyeCamera {
         view.camera.cancelAnimations()
         if let savedBounds { try? view.mapboxMap.setCameraBounds(with: savedBounds) }
         if restore, let savedCamera { view.mapboxMap.setCamera(to: savedCamera) }
+        lockedBearing = nil
         savedCamera = nil; savedBounds = nil; lastPoint = nil; lastHeading = nil; lastGround = nil; lastAltitude = nil
     }
 }

@@ -70,6 +70,9 @@ final class DioramaTileManager {
     private var requestedTile: DioramaTileID?
     private var selectionTask: Task<Void, Never>?
     private var packageTask: Task<Void, Never>?
+    private var prefetchTask: Task<DioramaTileArtifacts?, Never>?
+    private var prefetchedTile: DioramaTileID?
+    private var previousCameraPoint: DV2?
     private var lifecycleObservers: [NSObjectProtocol] = []
     private var areaName: String { tile == DioramaMasakiSource.slipway ? "Slipway" : "Masaki" }
     private var status: Status = .idle
@@ -153,7 +156,10 @@ final class DioramaTileManager {
         }
         for name in [UIApplication.didBecomeActiveNotification, UIApplication.willResignActiveNotification] {
             lifecycleObservers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated { self?.updateWaterClock() }
+                MainActor.assumeIsolated {
+                    self?.updateWaterClock()
+                    if name == UIApplication.willResignActiveNotification { self?.clearPrefetch() }
+                }
             })
         }
     }
@@ -194,6 +200,7 @@ final class DioramaTileManager {
     }
 
     func remove() {
+        clearPrefetch()
         generationRevision &+= 1
         generationTask?.cancel(); generationTask = nil
         packageTask?.cancel(); packageTask = nil
@@ -258,6 +265,7 @@ final class DioramaTileManager {
         guard installed, let map else { return }
         guard retractionCompletion == nil else { return }
         guard DioramaDownloadService.shared.canView else {
+            clearPrefetch()
             selectionTask?.cancel(); selectionTask = nil; requestedTile = nil
             generationTask?.cancel(); generationTask = nil; generationRevision &+= 1
             if shown { hide(on: map) }
@@ -270,6 +278,7 @@ final class DioramaTileManager {
         applyDebug()
 
         if state.isBasemapOnly {
+            clearPrefetch()
             selectionTask?.cancel(); selectionTask = nil; requestedTile = nil
             if shown { beginRetraction() }
             state.status = "Basemap-only comparison · custom shoreline hidden"
@@ -279,11 +288,15 @@ final class DioramaTileManager {
         let centreTile = DioramaTileID(latitude: camera.center.latitude, longitude: camera.center.longitude, zoom: config.tileZoom)
         let withinCoverage = DioramaMasakiSource.contains(latitude: camera.center.latitude, longitude: camera.center.longitude)
         guard withinCoverage else {
+            clearPrefetch()
             selectionTask?.cancel(); selectionTask = nil; requestedTile = nil
             beginRetraction()
             state.status = "Masaki coverage · pan back to the peninsula"
             return
         }
+        if camera.zoom >= config.minimumZoom - 1 {
+            prefetchAhead(latitude: camera.center.latitude, longitude: camera.center.longitude)
+        } else { clearPrefetch() }
         guard camera.zoom >= config.minimumZoom else {
             selectionTask?.cancel(); selectionTask = nil; requestedTile = nil
             beginRetraction()
@@ -292,7 +305,7 @@ final class DioramaTileManager {
         }
         // Hysteresis avoids rebuilding when a resting camera straddles an exact tile boundary.
         let local = DioramaProjection(origin: tile.centre)
-        let inside = local.rect(of: tile).expanded(by: 45).contains(local.local(longitude: camera.center.longitude, latitude: camera.center.latitude))
+        let inside = local.rect(of: tile).expanded(by: 12).contains(local.local(longitude: camera.center.longitude, latitude: camera.center.latitude))
         if centreTile != tile, !inside {
             requestTile(centreTile)
         } else {
@@ -312,6 +325,37 @@ final class DioramaTileManager {
         if requestedTile != nil {
             state.status = selectionTask == nil ? "Adjacent tile unavailable · current area retained. Try Regenerate online." : "Preparing adjacent tile… · current area stays visible"
         } else if shown && !isRetracting && revealClock == nil { updateContextTiles() }
+    }
+
+    private func clearPrefetch() {
+        prefetchTask?.cancel()
+        prefetchTask = nil
+        prefetchedTile = nil
+        previousCameraPoint = nil
+    }
+
+    /// Decode just one likely next full tile off-main, using saved archives only.
+    private func prefetchAhead(latitude: Double, longitude: Double) {
+        guard UIApplication.shared.applicationState == .active, !thermalReduced,
+              !ProcessInfo.processInfo.isLowPowerModeEnabled else { clearPrefetch(); return }
+        let projection = DioramaProjection(origin: tile.centre)
+        let point = projection.local(longitude: longitude, latitude: latitude)
+        defer { previousCameraPoint = point }
+        guard let previous = previousCameraPoint else { return }
+        let motion = point - previous
+        guard motion.dot(motion) > 0.04 else { return }
+        let predicted = projection.coordinate(point + motion.normalized * 180)
+        guard DioramaMasakiSource.contains(latitude: predicted.latitude, longitude: predicted.longitude) else { return }
+        let next = DioramaTileID(latitude: predicted.latitude, longitude: predicted.longitude, zoom: config.tileZoom)
+        guard next != tile, next != prefetchedTile, requestedTile == nil else { return }
+        prefetchTask?.cancel()
+        prefetchedTile = next
+        prefetchTask = Task.detached(priority: .utility) {
+            guard !Task.isCancelled else { return nil }
+            guard let artifact = await DioramaOfflineStore.shared.read(next),
+                  !Task.isCancelled, artifact.totalBytes <= 128 * 1_048_576 else { return nil }
+            return artifact
+        }
     }
 
     private func updateEffectStatus() {
@@ -337,16 +381,21 @@ final class DioramaTileManager {
         selectionTask?.cancel()
         requestedTile = next
         selectionTask = Task { [weak self] in
-            do { try await Task.sleep(for: .seconds(0.65)) } catch { return }
+            do { try await Task.sleep(for: .seconds(0.15)) } catch { return }
             guard let self, let map = self.map, self.installed, self.retractionCompletion == nil,
                   self.requestedTile == next, !self.state.isBasemapOnly,
                   map.cameraState.zoom >= self.config.minimumZoom,
                   DioramaTileID(latitude: map.cameraState.center.latitude, longitude: map.cameraState.center.longitude, zoom: self.config.tileZoom) == next else { return }
             self.contextTiles.pauseLoading()
             let config = self.config
-            let job = Task.detached(priority: .userInitiated) { () -> DioramaTileArtifacts? in
-                guard !Task.isCancelled else { return nil }
-                return await DioramaOfflineStore.shared.read(next)
+            let job: Task<DioramaTileArtifacts?, Never>
+            if self.prefetchedTile == next, let cachedJob = self.prefetchTask {
+                job = cachedJob
+            } else {
+                job = Task.detached(priority: .userInitiated) {
+                    guard !Task.isCancelled else { return nil }
+                    return await DioramaOfflineStore.shared.read(next)
+                }
             }
             let prepared = await withTaskCancellationHandler {
                 await job.value
@@ -376,6 +425,7 @@ final class DioramaTileManager {
             self.state.loadedTiles.removeAll()
             self.state.frameReport = "Waiting for the new tile's frame measurements."
             self.tile = next
+            self.clearPrefetch()
             self.bypassDiskOnNextGeneration = false
             self.status = .loaded(prepared)
             self.requestedTile = nil

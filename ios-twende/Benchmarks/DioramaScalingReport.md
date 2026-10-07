@@ -2,6 +2,13 @@
 
 Status: Geometry v36 supersedes the Sea Cliff traced model with photo-composed architecture and adds Settings-only diorama controls plus a driver's-eye camera; v35 pool/cemetery/effect optimizations remain. Seam-certified city rendering, certified 1-pixel LOD and CDN streaming remain incomplete. This is not a city-scale completion or measured battery report.
 
+## 2026-10-07 local prediction and reference tracking
+
+- Fixed-session bearing, pitch 50°, 60 m horizontal separation and 50 m terrain clearance replace the shallow heading-follow camera. Quarter-speed demo clock (12 real seconds per quoted minute), existing 0.25 s tick retained.
+- Route casing/core/pulse moved to top slot; live Metal depth behavior still needs inspection.
+- One predicted full archive is read 180 m along camera motion, beginning one zoom level before display; ≤128 MiB packed retained, not a peak-memory limit. Existing foreground/local-only gates remain. Clear on background/removal; bypass prediction in Low Power/serious thermal. Boundary hysteresis 12 m, selection delay 0.15 s. GPU installation is not prefetched; no zero-stutter claim.
+- Simulator build passes. No generator bump/download invalidation. Sea Cliff footprint fitting remains unimplemented; approved building geometry was not altered. Original visual/performance acceptance remains open.
+
 ## Retained downloads and chase-camera correction
 
 - Supersedes the version-specific preparation requirements below: inventory, verified resume and archive reads now discover compatible older generator packages, matching tile/detail/layout/archive format. Existing scenery remains viewable without a region-wide rebuild. Source bytes and SDK basemap are retained. Failed reads no longer delete user files; older compatible copies are tried. Missing/damaged resources still need repair; existing scenery may have the older appearance.

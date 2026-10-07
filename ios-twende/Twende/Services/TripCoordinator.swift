@@ -12,7 +12,7 @@ nonisolated struct ActiveTripSnapshot: Codable, Sendable {
 
 /// Demo clock. One quoted minute plays back in `secondsPerMinute` real seconds.
 nonisolated enum TripSimulation {
-    static let secondsPerMinute = 3.0
+    static let secondsPerMinute = 12.0
     static let tickSeconds = 0.25
     static let searchTimeoutSeconds = 90
     static let noCandidatesFailSeconds = 12
