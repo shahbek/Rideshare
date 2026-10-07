@@ -9,6 +9,15 @@ actor DioramaSourceStore {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("MasakiOffline/sources", isDirectory: true)
     }
+    /// Verified local read for road routing; never constructs a request or downloads data.
+    func savedData(key: String) -> Data? {
+        let file = root.appendingPathComponent(key)
+        guard let bytes = try? Data(contentsOf: file),
+              let digest = try? Data(contentsOf: file.appendingPathExtension("sha")),
+              Data(SHA256.hash(data: bytes)) == digest else { return nil }
+        return bytes
+    }
+
     func data(url: URL, key: String, offline: Bool) async throws -> Data {
         let file = root.appendingPathComponent(key)
         if let bytes = try? Data(contentsOf: file), let digest = try? Data(contentsOf: file.appendingPathExtension("sha")),

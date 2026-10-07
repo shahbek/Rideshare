@@ -66,6 +66,9 @@ struct ActiveTripView: View {
                             }
                         }
                     }
+                    if env.trips.needsRoadRoute {
+                        roadRouteStatus
+                    }
                     if !env.network.isOnline {
                         OfflineBanner()
                             .transition(.move(edge: .top).combined(with: .opacity))
@@ -167,6 +170,9 @@ struct ActiveTripView: View {
         .primaryOnScreen(TripEntity(trip, env: env), activity: TwendeActivity.liveTrip, title: trip.destination.name)
         .onAppear { frame(force: true) }
         .onDisappear { reframeTask?.cancel() }
+        .onChange(of: env.network.isOnline) { _, online in
+            if online, env.trips.needsRoadRoute { env.trips.refreshRoadRoutes() }
+        }
         .onChange(of: trip.phase) { _, _ in
             isPanelExpanded = false
             panelDrag = 0
@@ -181,6 +187,19 @@ struct ActiveTripView: View {
             lastFollowAt = now
             followDriver()
         }
+    }
+
+    private var roadRouteStatus: some View {
+        VStack(spacing: 8) {
+            Text(L(env.trips.isResolvingRoadRoute ? .roadRouteLoading : .roadRouteUnavailable))
+                .font(TwendeFont.caption)
+            if !env.trips.isResolvingRoadRoute {
+                Button(L(.tryAgain)) { env.trips.refreshRoadRoutes() }
+                    .frame(minHeight: 44)
+            }
+        }
+        .padding(12)
+        .background(TwendeColor.surface, in: .rect(cornerRadius: 8))
     }
 
     /// Route drawn on the map. In-trip it is the full route so the line stays still while the vehicle

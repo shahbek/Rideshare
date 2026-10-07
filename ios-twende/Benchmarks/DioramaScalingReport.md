@@ -2,6 +2,14 @@
 
 Status: Geometry v36 supersedes the Sea Cliff traced model with photo-composed architecture and adds Settings-only diorama controls plus a driver's-eye camera; v35 pool/cemetery/effect optimizations remain. Seam-certified city rendering, certified 1-pixel LOD and CDN streaming remain incomplete. This is not a city-scale completion or measured battery report.
 
+## 2026-10-07 rear chase, lifecycle and road geometry
+
+- User confirms chase framing; retain zoom 17.5/pitch 45° and UI-aware centering, replace activation-bearing lock with displayed vehicle heading so the rear stays visible through turns.
+- Diorama enable preference now persists/defaults on. Manager creation no longer flies the map to Slipway. Coalesced update scheduling cannot be perpetually postponed by camera/fix events. Foreground restarts updates. Prediction's 128 MiB admission miss retries an uncapped local focus read and cannot mark all prepared scenery unavailable; actual adjacent read failure retains the current renderer.
+- Root cause for off-road demo movement: RoutingService fabricated wobbles/grid elbows when Apple directions failed. Estimates now carry no invented path; driving uses full-resolution Mapbox directions, a 40-entry durable route cache, or a bounded graph derived from verified saved Streets bytes. Offline graph reads/decodes are shared off-main, use driving classes/shared vertices, structure/layer and available one-way attributes, and never download/generate scenery. This is geometry-following demo routing, not a complete legal navigation graph. Missing connection/directions pauses movement with explicit recovery.
+- On-road endpoints no longer jump into pickup/destination buildings. Persist approach route and heading for cold recovery. Near-route projection accepts 45 m geometric error independently of continuity scoring; displayed position and heading share arc-length sampling, including backward progress.
+- No geometry/archive revision, forced region downloads or automated tests. Fresh runtime lifecycle/road/corner recording, device memory and source topology coverage remain unverified; historical visual/performance/Sea Cliff goals remain open.
+
 ## 2026-10-07 camera projection correction
 
 - User screenshot rejects the free-camera rig: vehicle near left edge, scenery too large, UI ignored. Replace guessed eye location/altitude with native vehicle center and measured UI padding; zoom 17.5, pitch 45°, preserve activation map bearing, never heading-align. Header/banner, bottom control row, panel and map frames share global coordinates; convert available rectangle to map-local coordinates. Live panel measurements avoid stale/double-subtracted occlusion.

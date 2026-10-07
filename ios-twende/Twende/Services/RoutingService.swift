@@ -1,9 +1,9 @@
 import Foundation
 import MapKit
+import MapboxMaps
 
-/// Road routing. Apple Maps directions are used when available; a deterministic street-like polyline is the
-/// instant fallback so quotes never wait on the network. Durations always come from the Dar traffic model so
-/// fares stay consistent with the tariff.
+/// Mapped driving geometry with local road fallback. Fare estimates never pretend to be street routes.
+/// Durations use the Dar traffic model so fares stay consistent with the tariff.
 nonisolated enum RoutingService {
     static let roadFactor = 1.355
     static let citySpeedKmh = 19.68
@@ -12,7 +12,7 @@ nonisolated enum RoutingService {
         let straight = origin.distanceKm(to: destination)
         let distanceKm = max((straight * roadFactor * 10).rounded() / 10, 0.3)
         return RouteResult(
-            points: polyline(from: origin, to: destination),
+            points: [origin],
             distanceKm: distanceKm,
             durationMinutes: duration(forKm: distanceKm)
         )
@@ -54,12 +54,16 @@ nonisolated enum RoutingService {
             distanceKm += leg.distanceKm
             durationMinutes += leg.durationMinutes
         }
-        return RouteResult(points: points, distanceKm: (distanceKm * 10).rounded() / 10, durationMinutes: durationMinutes)
+        return RouteResult(points: points, distanceKm: (distanceKm * 10).rounded() / 10, durationMinutes: durationMinutes,
+                           isRoadMatched: legs.allSatisfy { $0.isRoadMatched == true })
     }
 
     /// Real driving directions along Dar es Salaam streets. Returns nil when directions are unavailable.
     @MainActor
     static func directions(from origin: GeoPoint, to destination: GeoPoint) async -> RouteResult? {
+        if let road = await MapboxRoadDirectionsService.shared.route(from: origin, to: destination, token: MapboxOptions.accessToken) { return road }
+        if let saved = await OfflineRoadRoutingService.shared.route(from: origin, to: destination) { return saved }
+        guard !UserDefaults.standard.bool(forKey: "maps.downloadedOnly"), !Task.isCancelled else { return nil }
         let request = MKDirections.Request()
         request.source = MKMapItem(placemark: MKPlacemark(coordinate: origin.coordinate))
         request.destination = MKMapItem(placemark: MKPlacemark(coordinate: destination.coordinate))
@@ -71,7 +75,7 @@ nonisolated enum RoutingService {
             let buffer = UnsafeBufferPointer(start: best.polyline.points(), count: best.polyline.pointCount)
             let points = buffer.map { GeoPoint($0.coordinate) }
             let distanceKm = max((best.distance / 100).rounded() / 10, 0.3)
-            return RouteResult(points: points, distanceKm: distanceKm, durationMinutes: duration(forKm: distanceKm))
+            return RouteResult(points: points, distanceKm: distanceKm, durationMinutes: duration(forKm: distanceKm), isRoadMatched: true)
         } catch {
             return nil
         }

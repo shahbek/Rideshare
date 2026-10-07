@@ -8,6 +8,8 @@ nonisolated struct ActiveTripSnapshot: Codable, Sendable {
     var tripProgress: Double
     var driverPosition: GeoPoint?
     var searchElapsedSeconds: Int
+    var approachRoute: RouteResult? = nil
+    var driverHeading: Double? = nil
 }
 
 /// Demo clock. One quoted minute plays back in `secondsPerMinute` real seconds.
@@ -49,6 +51,44 @@ final class TripCoordinator {
     private(set) var approachRoute: RouteResult?
 
     private var simulation: Task<Void, Never>?
+    private var roadRouteTask: Task<Void, Never>?
+    private(set) var isResolvingRoadRoute: Bool = false
+
+    var needsRoadRoute: Bool {
+        guard let trip = activeTrip else { return false }
+        if trip.phase == .driverAssigned { return approachRoute?.isRoadMatched != true }
+        if trip.phase == .inTrip { return trip.route.isRoadMatched != true }
+        return false
+    }
+
+    /// Retry after connectivity recovers or when the passenger explicitly requests it.
+    func refreshRoadRoutes() {
+        guard let trip = activeTrip, trip.phase.isLive else { return }
+        roadRouteTask?.cancel()
+        isResolvingRoadRoute = true
+        let id = trip.id
+        let originalRoute = trip.route
+        let origin = trip.phase == .inTrip ? (driverPosition ?? trip.pickup.point) : trip.pickup.point
+        let waypoints = [origin] + trip.stopList.map(\.point) + [trip.destination.point]
+        roadRouteTask = Task { [weak self] in
+            let real = await RoutingService.directions(through: waypoints)
+            guard let self, !Task.isCancelled, var current = self.activeTrip, current.id == id, current.phase.isLive, current.route == originalRoute else { return }
+            self.isResolvingRoadRoute = false
+            if let real, current.route.isRoadMatched != true {
+                current.route = real
+                self.activeTrip = current
+                if current.phase == .inTrip {
+                    self.tripProgress = 0
+                    self.driverPosition = real.point(at: 0)
+                    self.driverHeading = real.bearing(at: 0)
+                }
+                self.persist()
+            }
+            if current.phase == .driverAssigned, current.driverID != nil, self.approachRoute?.isRoadMatched != true {
+                self.refineApproachRoute(from: self.driverPosition ?? current.pickup.point, to: current.pickup.point, driverID: current.driverID ?? "")
+            }
+        }
+    }
     private var driverProgress: Double = 0
     private var assignmentDelaySeconds: Int = 5
     private var boardingElapsed: Double = 0
@@ -142,6 +182,7 @@ final class TripCoordinator {
             store.markRedeemed(promoCode)
         }
         persist()
+        refreshRoadRoutes()
         startSimulation()
     }
 
@@ -219,6 +260,7 @@ final class TripCoordinator {
             activeTrip = trip
             store.addRecent(place)
             persist()
+            refreshRoadRoutes()
             return
         }
         let remaining = RoutingService.route(through: [current] + newStops.map(\.point) + [place.point])
@@ -245,6 +287,7 @@ final class TripCoordinator {
         tripProgress = 0
         store.addRecent(place)
         persist()
+        refreshRoadRoutes()
     }
 
     // MARK: Payment
@@ -380,6 +423,9 @@ final class TripCoordinator {
     private func stopSimulation() {
         simulation?.cancel()
         simulation = nil
+        roadRouteTask?.cancel()
+        roadRouteTask = nil
+        isResolvingRoadRoute = false
     }
 
     private func tick() {
@@ -462,13 +508,14 @@ final class TripCoordinator {
 
     /// Swaps the instant approach estimate for real street directions if they arrive while the driver is still near the start.
     private func refineApproachRoute(from origin: GeoPoint, to pickup: GeoPoint, driverID: String) {
+        let tripID = activeTrip?.id
         Task { @MainActor [weak self] in
             guard let real = await RoutingService.directions(from: origin, to: pickup) else { return }
-            guard let self, var trip = self.activeTrip,
+            guard let self, var trip = self.activeTrip, trip.id == tripID,
                   trip.phase == .driverAssigned, trip.driverID == driverID, self.driverProgress < 0.2 else { return }
             self.approachRoute = real
             self.driverProgress = 0
-            self.driverPosition = origin
+            self.driverPosition = real.point(at: 0)
             self.driverHeading = real.bearing(at: 0)
             self.driverEtaMinutes = max(real.durationMinutes, 1)
             trip.quote.pickupEtaMinutes = self.driverEtaMinutes
@@ -481,6 +528,7 @@ final class TripCoordinator {
             approachRoute = RoutingService.route(from: driverPosition ?? trip.pickup.point, to: trip.pickup.point)
             return
         }
+        guard route.isRoadMatched == true else { return }
         let totalSeconds = Double(max(route.durationMinutes, 1)) * TripSimulation.secondsPerMinute
         driverProgress = min(driverProgress + TripSimulation.tickSeconds / totalSeconds, 1)
         driverPosition = route.point(at: driverProgress)
@@ -490,13 +538,14 @@ final class TripCoordinator {
             trip.phase = .driverArrived
             trip.arrivedAt = Date()
             boardingElapsed = 0
-            driverPosition = trip.pickup.point
+            driverPosition = route.point(at: 1)
             Haptics.success()
             persistNow(trip)
         }
     }
 
     private func tickInTrip(_ trip: inout Trip) {
+        guard trip.route.isRoadMatched == true else { return }
         let totalSeconds = Double(max(trip.route.durationMinutes, 1)) * TripSimulation.secondsPerMinute
         let trafficWindow = 0.32...0.46
         isInTraffic = trafficWindow.contains(tripProgress)
@@ -515,7 +564,7 @@ final class TripCoordinator {
             trip.paymentState = .notStarted
             remainingTripMinutes = 0
             isInTraffic = false
-            driverPosition = trip.destination.point
+            driverPosition = trip.route.point(at: 1)
             if let driverID = trip.driverID {
                 drivers.setPosition(trip.destination.point, for: driverID)
                 drivers.setStatus(.online, for: driverID)
@@ -552,7 +601,9 @@ final class TripCoordinator {
             driverProgress: driverProgress,
             tripProgress: tripProgress,
             driverPosition: driverPosition,
-            searchElapsedSeconds: searchElapsedSeconds
+            searchElapsedSeconds: searchElapsedSeconds,
+            approachRoute: approachRoute,
+            driverHeading: driverHeading
         )
         Persistence.save(snapshot, key: Persistence.Key.activeTrip)
     }
@@ -569,17 +620,22 @@ final class TripCoordinator {
         driverProgress = snapshot.driverProgress
         tripProgress = snapshot.tripProgress
         driverPosition = snapshot.driverPosition
+        driverHeading = snapshot.driverHeading ?? trip.route.bearing(at: tripProgress)
+        approachRoute = snapshot.approachRoute
         searchElapsedSeconds = min(snapshot.searchElapsedSeconds, TripSimulation.searchTimeoutSeconds - 10)
         remainingTripMinutes = Int(ceil((1 - tripProgress) * Double(trip.route.durationMinutes)))
         if let driverID = trip.driverID, let driver = drivers.driver(id: driverID) {
             drivers.setStatus(trip.phase.isLive ? .busy : .online, for: driverID)
             if trip.phase == .driverAssigned {
-                approachRoute = RoutingService.route(from: snapshot.driverPosition ?? driver.position, to: trip.pickup.point)
-                driverProgress = 0
+                if approachRoute?.isRoadMatched != true {
+                    approachRoute = RoutingService.route(from: snapshot.driverPosition ?? driver.position, to: trip.pickup.point)
+                    driverProgress = 0
+                }
                 driverEtaMinutes = approachRoute?.durationMinutes ?? 3
             }
         }
         if trip.phase.isLive {
+            refreshRoadRoutes()
             startSimulation()
         } else if trip.phase == .paymentPending,
                   !store.pendingMobileMoney.contains(where: { $0.tripID == trip.id }) {

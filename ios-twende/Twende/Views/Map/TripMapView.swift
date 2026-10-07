@@ -1,5 +1,6 @@
 @_spi(Experimental) import MapboxMaps
 import SwiftUI
+import Combine
 import UIKit
 
 /// Which gestures the map accepts.
@@ -162,6 +163,7 @@ extension TripMapView {
         private var cameraSettlement: Task<Void, Never>? = nil
         private var lastReportedSelection: GeoPoint? = nil
         private var cancelables: Set<AnyCancelable> = []
+        private var settingsCancelables: Set<AnyCancellable> = []
 
         private var styleReady: Bool = false
         private var appliedStyle: MapStyleOption? = nil
@@ -260,6 +262,9 @@ extension TripMapView {
         }
 
         func observe(_ mapView: MapView) {
+            NotificationCenter.default.publisher(for: DioramaState.renderSettingsChanged)
+                .sink { [weak self] _ in self?.updateDiorama() }
+                .store(in: &settingsCancelables)
             mapView.mapboxMap.onMapLoaded.observe { [weak self] _ in
                 self?.refreshBuildingHighlight(immediately: true)
                 self?.diorama?.scheduleUpdate(delay: 1.1)
@@ -508,7 +513,6 @@ extension TripMapView {
                 }
                 diorama = manager
                 if styleReady { manager.install(on: mapView.mapboxMap) }
-                if !parent.followsDriver { mapView.camera.fly(to: manager.introCamera(), duration: 1.6) }
                 dioramaFly = state.cameraFlyRequest
                 dioramaRegenerate = state.regenerateRequest
             } else if !state.isEnabled, let manager = diorama {
@@ -897,6 +901,7 @@ extension TripMapView {
             for pin in pins.values { pin.remove() }
             pins.removeAll()
             cancelables.removeAll()
+            settingsCancelables.removeAll()
         }
 
         func updateDriver(position: GeoPoint?, heading: Double, tier: RideTier) {
@@ -921,9 +926,12 @@ extension TripMapView {
                 driverShownProgress = nil
             }
             if !routeChanged, let target = driverTo, target.point == position, target.heading == heading { return }
-            let start = driverShown ?? Pose(point: position, heading: heading)
-            driverFromProgress = driverShownProgress ?? driverMotion?.fraction(nearest: start.point)
-            driverToProgress = driverMotion?.fraction(nearest: position, near: driverFromProgress)
+            let startProgress = driverShownProgress ?? driverMotion?.fraction(nearest: driverShown?.point ?? position)
+            let targetProgress = driverMotion?.fraction(nearest: position, near: startProgress)
+            let initialSample = targetProgress.flatMap { driverMotion?.sample(at: $0) }
+            let start = driverShown ?? Pose(point: initialSample?.point ?? position, heading: initialSample?.heading ?? heading)
+            driverFromProgress = startProgress
+            driverToProgress = targetProgress
             driverFrom = start
             driverTo = Pose(point: position, heading: heading)
             driverMoveStarted = Date()
@@ -947,7 +955,7 @@ extension TripMapView {
                 heading: from.heading + delta * t
             )
             if let start = driverFromProgress, let end = driverToProgress,
-               end >= start, let sample = driverMotion?.sample(at: start + (end - start) * t) {
+               let sample = driverMotion?.sample(at: start + (end - start) * t) {
                 driverShownProgress = start + (end - start) * t
                 pose = Pose(point: sample.point, heading: sample.heading)
             } else {

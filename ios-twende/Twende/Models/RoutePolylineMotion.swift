@@ -49,6 +49,7 @@ nonisolated struct RoutePolylineMotion {
         let eastScale = northScale * cos(point.latitude * .pi / 180)
         var bestDistance: Double = .infinity
         var bestProgress: Double = 0
+        var bestError: Double = .infinity
         for index in headings.indices {
             let a = points[index]
             let b = points[index + 1]
@@ -60,12 +61,13 @@ nonisolated struct RoutePolylineMotion {
             guard denominator > 0 else { continue }
             let t = min(1, max(0, -(ax * dx + ay * dy) / denominator))
             let error = hypot(ax + dx * t, ay + dy * t)
+            guard error <= 45 else { continue }
             let progress = (distances[index] + (distances[index + 1] - distances[index]) * t) / total
             // At crossing/overlapping segments prefer continuity, not a later route leg.
             let penalty = previous.map { max(0, abs(progress - $0) * total - 30) } ?? 0
             let score = error + penalty
-            if score < bestDistance { bestDistance = score; bestProgress = progress }
+            if score < bestDistance { bestDistance = score; bestProgress = progress; bestError = error }
         }
-        return bestDistance <= 10 ? bestProgress : nil
+        return bestError <= 45 ? bestProgress : nil
     }
 }

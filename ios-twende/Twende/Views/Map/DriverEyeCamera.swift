@@ -1,13 +1,13 @@
 import MapboxMaps
 import UIKit
 
-/// Vehicle-centered tracking with a fixed viewing bearing and UI-aware projection.
+/// Rear-facing chase tracking with vehicle heading and UI-aware projection.
 @MainActor
 final class DriverEyeCamera {
     private(set) var isActive: Bool = false
     private var savedCamera: CameraOptions?
     private var savedBounds: CameraBoundsOptions?
-    private var lockedBearing: Double?
+    private var lastHeading: Double?
     private var lastPoint: GeoPoint?
     private var lastPadding: UIEdgeInsets?
     private var lastSize: CGSize?
@@ -23,7 +23,6 @@ final class DriverEyeCamera {
             do { try view.mapboxMap.setCameraBounds(with: CameraBoundsOptions(maxZoom: 25.5, maxPitch: 85)) }
             catch { return }
             view.camera.cancelAnimations()
-            lockedBearing = state.bearing
             isActive = true
         }
         let bounds = view.bounds
@@ -33,14 +32,16 @@ final class DriverEyeCamera {
                                    left: available.minX - bounds.minX,
                                    bottom: bounds.maxY - available.maxY,
                                    right: bounds.maxX - available.maxX)
-        guard point != lastPoint || padding != lastPadding || bounds.size != lastSize else { return }
+        let bearing = (heading.truncatingRemainder(dividingBy: 360) + 360).truncatingRemainder(dividingBy: 360)
+        guard point != lastPoint || bearing != lastHeading || padding != lastPadding || bounds.size != lastSize else { return }
+        lastHeading = bearing
         lastPoint = point
         lastPadding = padding
         lastSize = bounds.size
         // Center and padding let Mapbox solve the projection, rather than guessing
         // an eye location whose optical axis can miss the car or ignore UI occlusion.
         view.mapboxMap.setCamera(to: CameraOptions(center: point.coordinate, padding: padding,
-                                                   zoom: 17.5, bearing: lockedBearing ?? heading, pitch: 45))
+                                                   zoom: 17.5, bearing: bearing, pitch: 45))
     }
 
     func stop(on view: MapView, restore: Bool) {
@@ -49,7 +50,7 @@ final class DriverEyeCamera {
         view.camera.cancelAnimations()
         if let savedBounds { try? view.mapboxMap.setCameraBounds(with: savedBounds) }
         if restore, let savedCamera { view.mapboxMap.setCamera(to: savedCamera) }
-        lockedBearing = nil
+        lastHeading = nil
         savedCamera = nil
         savedBounds = nil
         lastPoint = nil

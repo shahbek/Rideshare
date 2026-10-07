@@ -8,7 +8,13 @@ import UIKit
 final class DioramaState {
     static let shared = DioramaState()
 
-    var isEnabled: Bool = false
+    var isEnabled: Bool = UserDefaults.standard.object(forKey: "zuri.diorama.enabled") as? Bool ?? true {
+        didSet {
+            guard isEnabled != oldValue else { return }
+            UserDefaults.standard.set(isEnabled, forKey: "zuri.diorama.enabled")
+            notifyRenderer()
+        }
+    }
     static let renderSettingsChanged = Notification.Name("zuri.diorama.renderSettingsChanged")
     var timeOfDay: DioramaTimeOfDay = .dusk { didSet { notifyRenderer() } }
     var visibleCategories: Set<DioramaCategory> = Set(DioramaCategory.allCases.filter { $0 != .shorelineDebug }) { didSet { notifyRenderer() } }
@@ -159,6 +165,7 @@ final class DioramaTileManager {
                 MainActor.assumeIsolated {
                     self?.updateWaterClock()
                     if name == UIApplication.willResignActiveNotification { self?.clearPrefetch() }
+                    else { self?.scheduleUpdate(delay: 0) }
                 }
             })
         }
@@ -253,10 +260,14 @@ final class DioramaTileManager {
     // MARK: Updates
 
     func scheduleUpdate(delay: Double) {
+        // Coalesce camera events without postponing loading indefinitely during travel.
+        if pendingUpdate != nil, delay > 0 { return }
         pendingUpdate?.cancel()
         pendingUpdate = Task { [weak self] in
             do { try await Task.sleep(for: .seconds(delay)) } catch { return }
-            self?.update()
+            guard let self else { return }
+            self.pendingUpdate = nil
+            self.update()
         }
     }
 
@@ -264,6 +275,7 @@ final class DioramaTileManager {
     func update() {
         guard installed, let map else { return }
         guard retractionCompletion == nil else { return }
+        guard state.isEnabled else { beginRetraction(); return }
         guard DioramaDownloadService.shared.canView else {
             clearPrefetch()
             selectionTask?.cancel(); selectionTask = nil; requestedTile = nil
@@ -383,7 +395,7 @@ final class DioramaTileManager {
         selectionTask = Task { [weak self] in
             do { try await Task.sleep(for: .seconds(0.15)) } catch { return }
             guard let self, let map = self.map, self.installed, self.retractionCompletion == nil,
-                  self.requestedTile == next, !self.state.isBasemapOnly,
+                  self.requestedTile == next, self.state.isEnabled, !self.state.isBasemapOnly,
                   map.cameraState.zoom >= self.config.minimumZoom,
                   DioramaTileID(latitude: map.cameraState.center.latitude, longitude: map.cameraState.center.longitude, zoom: self.config.tileZoom) == next else { return }
             self.contextTiles.pauseLoading()
@@ -397,11 +409,18 @@ final class DioramaTileManager {
                     return await DioramaOfflineStore.shared.read(next)
                 }
             }
-            let prepared = await withTaskCancellationHandler {
+            var prepared = await withTaskCancellationHandler {
                 await job.value
             } onCancel: { job.cancel() }
+            // A prediction admission miss is not a corrupt focus tile.
+            if prepared == nil, self.prefetchedTile == next, !Task.isCancelled {
+                let fallback = Task.detached(priority: .userInitiated) {
+                    await DioramaOfflineStore.shared.read(next)
+                }
+                prepared = await withTaskCancellationHandler { await fallback.value } onCancel: { fallback.cancel() }
+            }
             guard !Task.isCancelled, self.installed, self.requestedTile == next,
-                  self.retractionCompletion == nil, !self.state.isBasemapOnly,
+                  self.retractionCompletion == nil, self.state.isEnabled, !self.state.isBasemapOnly,
                   map.cameraState.zoom >= config.minimumZoom,
                   DioramaTileID(latitude: map.cameraState.center.latitude, longitude: map.cameraState.center.longitude, zoom: config.tileZoom) == next else { return }
             guard let prepared else {
@@ -409,7 +428,6 @@ final class DioramaTileManager {
                 // camera leaves this request or the user explicitly chooses Regenerate.
                 self.selectionTask = nil
                 self.state.status = "Saved tile needs repair · resume Masaki preparation"
-                DioramaDownloadService.shared.invalidate()
                 return
             }
             self.generationRevision &+= 1
@@ -459,7 +477,6 @@ final class DioramaTileManager {
                 guard var artifacts else {
                     self.status = .failed
                     self.state.status = "Saved tile needs repair · resume Masaki preparation"
-                    DioramaDownloadService.shared.invalidate()
                     return
                 }
                 artifacts.stageTimings.append("source/cache → renderer-ready: \(String(format: "%.3f", readySeconds))s (not first visible)")

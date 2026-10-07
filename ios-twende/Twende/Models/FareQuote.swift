@@ -32,11 +32,13 @@ nonisolated struct FareQuote: Codable, Hashable, Identifiable, Sendable {
     }
 }
 
-/// Mock road route between two points.
+/// Fare estimate or mapped road geometry between waypoints.
 nonisolated struct RouteResult: Codable, Hashable, Sendable {
     var points: [GeoPoint]
     var distanceKm: Double
     var durationMinutes: Int
+    /// Optional for backward-compatible decoding of existing trip records.
+    var isRoadMatched: Bool? = nil
 
     /// Coordinate at a fraction of the route length.
     func point(at fraction: Double) -> GeoPoint {
