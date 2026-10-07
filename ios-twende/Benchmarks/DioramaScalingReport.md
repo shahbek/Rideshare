@@ -2,6 +2,12 @@
 
 Status: Geometry v36 supersedes the Sea Cliff traced model with photo-composed architecture and adds Settings-only diorama controls plus a driver's-eye camera; v35 pool/cemetery/effect optimizations remain. Seam-certified city rendering, certified 1-pixel LOD and CDN streaming remain incomplete. This is not a city-scale completion or measured battery report.
 
+## 2026-10-07 camera projection correction
+
+- User screenshot rejects the free-camera rig: vehicle near left edge, scenery too large, UI ignored. Replace guessed eye location/altitude with native vehicle center and measured UI padding; zoom 17.5, pitch 45°, preserve activation map bearing, never heading-align. Header/banner, bottom control row, panel and map frames share global coordinates; convert available rectangle to map-local coordinates. Live panel measurements avoid stale/double-subtracted occlusion.
+- Root cause for early turns: RouteResult.bearing sampled 2% of the entire route ahead, crossing upcoming junctions. Replace with occupied-segment bearing; final segment retains its heading. Cache cumulative route distance in the map and sample position/heading together through interpolation; no pre-corner heading blend or corner-cutting chord when fixes match the route.
+- No new downloads, archive revision, scenery changes or tests. Visual centering, exact reference matching and turn timing await a fresh runtime capture; existing performance/landmark acceptance remains open.
+
 ## 2026-10-07 local prediction and reference tracking
 
 - Fixed-session bearing, pitch 50°, 60 m horizontal separation and 50 m terrain clearance replace the shallow heading-follow camera. Quarter-speed demo clock (12 real seconds per quoted minute), existing 0.25 s tick retained.

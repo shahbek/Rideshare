@@ -15,6 +15,10 @@ struct ActiveTripView: View {
     @GestureState private var isDraggingPanel: Bool = false
     @State private var reframeTask: Task<Void, Never>? = nil
     @State private var viewHeight: CGFloat = 844
+    @State private var mapFrame: CGRect = .zero
+    @State private var topControlsFrame: CGRect = .zero
+    @State private var bottomControlsFrame: CGRect = .zero
+    @State private var tripPanelFrame: CGRect = .zero
     @Environment(\.foldLayout) private var foldLayout
 
     private var driver: Driver? { env.trips.assignedDriver }
@@ -36,6 +40,7 @@ struct ActiveTripView: View {
                 driverHeading: env.trips.driverHeading,
                 driverTier: trip.tier,
                 followsDriver: followsDriver,
+                driverVisibleRect: driverVisibleRect,
                 onDriverFollowInterrupted: { env.settings.driverEyeEnabled = false },
                 isSearching: trip.phase == .searching,
                 pickupEtaMinutes: trip.phase == .driverAssigned ? max(env.trips.driverEtaMinutes, 1) : nil,
@@ -44,25 +49,29 @@ struct ActiveTripView: View {
                 illuminatedDestination: trip.destination.point
             )
             .ignoresSafeArea()
+            .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { mapFrame = $0 }
 
             VStack(spacing: 12) {
-                HStack(alignment: .top) {
-                    if showsChrome {
-                        MapCircleButton(systemImage: "square.and.arrow.up", accessibilityLabel: L(.shareTrip)) {
-                            shareTrip()
+                VStack(spacing: 12) {
+                    HStack(alignment: .top) {
+                        if showsChrome {
+                            MapCircleButton(systemImage: "square.and.arrow.up", accessibilityLabel: L(.shareTrip)) {
+                                shareTrip()
+                            }
+                        }
+                        Spacer()
+                        if showsChrome {
+                            MapCircleButton(systemImage: "shield.fill", accessibilityLabel: L(.sos), tint: TwendeColor.danger, icon3D: .siren) {
+                                env.flow.activeSheet = .sos
+                            }
                         }
                     }
-                    Spacer()
-                    if showsChrome {
-                        MapCircleButton(systemImage: "shield.fill", accessibilityLabel: L(.sos), tint: TwendeColor.danger, icon3D: .siren) {
-                            env.flow.activeSheet = .sos
-                        }
+                    if !env.network.isOnline {
+                        OfflineBanner()
+                            .transition(.move(edge: .top).combined(with: .opacity))
                     }
                 }
-                if !env.network.isOnline {
-                    OfflineBanner()
-                        .transition(.move(edge: .top).combined(with: .opacity))
-                }
+                .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { topControlsFrame = $0 }
                 Spacer()
                 HStack(spacing: 12) {
                     if canUseDriverEye {
@@ -81,6 +90,7 @@ struct ActiveTripView: View {
                         frame(force: true)
                     }
                 }
+                .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { bottomControlsFrame = $0 }
             }
             .padding(.horizontal, 16)
             .padding(.top, 8)
@@ -110,6 +120,7 @@ struct ActiveTripView: View {
                 .padding(.horizontal, 20)
                 .padding(.bottom, 12)
             }
+            .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { tripPanelFrame = $0 }
             .contentShape(Rectangle())
             .simultaneousGesture(
                 DragGesture(minimumDistance: 3, coordinateSpace: .global)
@@ -190,6 +201,21 @@ struct ActiveTripView: View {
             guard !Task.isCancelled else { return }
             frame(force: true)
         }
+    }
+
+    /// Available space is measured in one coordinate system, then converted to map-local points.
+    /// The phone panel may already reduce the map's frame; intersection avoids double-counting it.
+    private var driverVisibleRect: CGRect? {
+        guard mapFrame.width > 0, mapFrame.height > 0 else { return nil }
+        let left = mapFrame.minX + (foldLayout?.trailingMinX ?? 0) + 16
+        let right = mapFrame.maxX - 16
+        let top = max(mapFrame.minY, topControlsFrame.maxY) + 12
+        var bottom = mapFrame.maxY - 16
+        if bottomControlsFrame.height > 0 { bottom = min(bottom, bottomControlsFrame.minY - 12) }
+        if foldLayout == nil, tripPanelFrame.height > 0 { bottom = min(bottom, tripPanelFrame.minY - 12) }
+        guard right > left, bottom > top else { return nil }
+        return CGRect(x: left - mapFrame.minX, y: top - mapFrame.minY,
+                      width: right - left, height: bottom - top)
     }
 
     private var bottomFraction: Double {

@@ -31,6 +31,8 @@ struct TripMapView: UIViewRepresentable {
     var driverHeading: Double = 0
     var driverTier: RideTier = .economy
     var followsDriver: Bool = false
+    /// Unobstructed map-local rectangle, measured by the screen that owns the overlays.
+    var driverVisibleRect: CGRect? = nil
     var onDriverFollowInterrupted: (() -> Void)? = nil
     var nearbyDrivers: [Driver] = []
     var favouriteIDs: Set<String> = []
@@ -244,6 +246,11 @@ extension TripMapView {
         private var driverFrom: Pose? = nil
         private var driverTo: Pose? = nil
         private var driverShown: Pose? = nil
+        private var driverMotion: RoutePolylineMotion? = nil
+        private var driverMotionPoints: [GeoPoint] = []
+        private var driverFromProgress: Double? = nil
+        private var driverToProgress: Double? = nil
+        private var driverShownProgress: Double? = nil
         private var driverMoveStarted: Date = .distantPast
         private static let driverGlideDuration: TimeInterval = 0.3
         private static let driverModelID = "twende-driver"
@@ -898,6 +905,7 @@ extension TripMapView {
                     driverFrom = nil
                     driverTo = nil
                     driverShown = nil
+                    driverFromProgress = nil; driverToProgress = nil; driverShownProgress = nil
                     syncVehicles()
                 }
                 return
@@ -906,8 +914,16 @@ extension TripMapView {
                 driverTier = tier
                 syncVehicles()
             }
-            if let target = driverTo, target.point == position, target.heading == heading { return }
+            let routeChanged = driverMotionPoints != parent.routePoints
+            if routeChanged {
+                driverMotionPoints = parent.routePoints
+                driverMotion = RoutePolylineMotion(points: parent.routePoints)
+                driverShownProgress = nil
+            }
+            if !routeChanged, let target = driverTo, target.point == position, target.heading == heading { return }
             let start = driverShown ?? Pose(point: position, heading: heading)
+            driverFromProgress = driverShownProgress ?? driverMotion?.fraction(nearest: start.point)
+            driverToProgress = driverMotion?.fraction(nearest: position, near: driverFromProgress)
             driverFrom = start
             driverTo = Pose(point: position, heading: heading)
             driverMoveStarted = Date()
@@ -923,13 +939,20 @@ extension TripMapView {
             guard let from = driverFrom, let to = driverTo else { return false }
             let t = min(Date().timeIntervalSince(driverMoveStarted) / Self.driverGlideDuration, 1)
             let delta = ((to.heading - from.heading + 540).truncatingRemainder(dividingBy: 360)) - 180
-            let pose = Pose(
+            var pose = Pose(
                 point: GeoPoint(
                     latitude: from.point.latitude + (to.point.latitude - from.point.latitude) * t,
                     longitude: from.point.longitude + (to.point.longitude - from.point.longitude) * t
                 ),
                 heading: from.heading + delta * t
             )
+            if let start = driverFromProgress, let end = driverToProgress,
+               end >= start, let sample = driverMotion?.sample(at: start + (end - start) * t) {
+                driverShownProgress = start + (end - start) * t
+                pose = Pose(point: sample.point, heading: sample.heading)
+            } else {
+                driverShownProgress = nil
+            }
             if pose != driverShown {
                 driverShown = pose
                 updateDriverCamera()
@@ -954,13 +977,8 @@ extension TripMapView {
                 return
             }
             let wasActive = driverEyeCamera.isActive
-            let rear = driverEyeCamera.cameraPoint(for: pose.point, heading: pose.heading)
-            let vehicleGround = diorama?.groundHeight(at: pose.point)
-                ?? mapView.mapboxMap.elevation(at: pose.point.coordinate)
-            let rearGround = diorama?.groundHeight(at: rear)
-                ?? mapView.mapboxMap.elevation(at: rear.coordinate)
-            let ground = [vehicleGround, rearGround].compactMap { $0 }.filter(\.isFinite).max()
-            driverEyeCamera.update(point: pose.point, heading: pose.heading, ground: ground, on: mapView)
+            driverEyeCamera.update(point: pose.point, heading: pose.heading,
+                                   visibleRect: parent.driverVisibleRect, on: mapView)
             if wasActive != driverEyeCamera.isActive { syncVehicles() }
             // Continuous driving must not perpetually postpone the normal camera-settle debounce.
             if Date().timeIntervalSince(lastDioramaFollowUpdate) >= 0.5 {

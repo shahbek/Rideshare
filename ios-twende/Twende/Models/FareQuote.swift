@@ -62,10 +62,8 @@ nonisolated struct RouteResult: Codable, Hashable, Sendable {
         return points[points.count - 1]
     }
 
-    /// Bearing of travel at a fraction of the route.
+    /// Tangent of the occupied segment; never look across an upcoming corner.
     func bearing(at fraction: Double) -> Double {
-        let here = point(at: fraction)
-        let ahead = point(at: min(fraction + 0.02, 1))
-        return here.bearing(to: ahead)
+        RoutePolylineMotion(points: points).sample(at: fraction)?.heading ?? 0
     }
 }

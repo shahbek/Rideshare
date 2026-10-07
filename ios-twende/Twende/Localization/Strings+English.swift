@@ -518,7 +518,7 @@ extension Strings {
         case .dioramaControlsBody: "Download, prepare and adjust Masaki here. The map stays free of floating diorama controls."
         case .dioramaEnabled: "Show prepared diorama"
         case .driverEye: "Vehicle chase view"
-        case .driverEyeBody: "Follow just behind and above the visible vehicle, looking forward with a slight downward angle. Drag the map or switch off to leave. Uses the trip’s position feed, including simulated movement in demo trips—not Street View imagery."
+        case .driverEyeBody: "Keep the vehicle centered in the available map space with a wider, tilted view. The viewing direction stays fixed while the vehicle turns. Drag the map or switch off to leave. Uses the trip’s position feed, including simulated movement in demo trips—not Street View imagery."
         case .driverEyeExit: "Exit chase view"
         case .mapStyle: "Map style"
         case .mapStyleBody: "Changes the map's lighting and colour. Buildings, places and vehicles stay the same."

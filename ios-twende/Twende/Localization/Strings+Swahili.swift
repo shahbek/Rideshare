@@ -518,7 +518,7 @@ extension Strings {
         case .dioramaControlsBody: "Pakua, andaa na rekebisha Masaki hapa. Vidhibiti vya 3D havitafunika ramani."
         case .dioramaEnabled: "Onyesha Masaki iliyoandaliwa"
         case .driverEye: "Mwonekano nyuma ya gari"
-        case .driverEyeBody: "Fuata nyuma na juu kidogo ya gari linaloonekana, ukiangalia mbele na chini kidogo. Buruta ramani au zima ili kuondoka. Hutumia nafasi ya gari ya safari, ikiwemo mwendo wa kuigiza katika safari za majaribio—si picha za Street View."
+        case .driverEyeBody: "Weka gari katikati ya nafasi ya ramani isiyofunikwa, kwa mwonekano mpana ulioinama. Mwelekeo wa mwonekano hubaki uleule gari linapogeuka. Buruta ramani au zima ili kuondoka. Hutumia nafasi ya gari ya safari, ikiwemo mwendo wa kuigiza katika safari za majaribio—si picha za Street View."
         case .driverEyeExit: "Ondoka kwenye mwonekano nyuma ya gari"
         case .mapStyle: "Muonekano wa ramani"
         case .mapStyleBody: "Hubadilisha mwanga na rangi ya ramani. Majengo, maeneo na magari hubaki sawa."
