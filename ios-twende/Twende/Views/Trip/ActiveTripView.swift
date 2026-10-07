@@ -7,6 +7,7 @@ struct ActiveTripView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let trip: Trip
     @State private var camera: MapCameraTarget = .automatic
+    @State private var forwardView: Bool = false
     @State private var lastFramedPhase: TripPhase? = nil
     @State private var lastFollowAt: Date = .distantPast
     @State private var panelHeight: CGFloat = 340
@@ -40,6 +41,7 @@ struct ActiveTripView: View {
                 driverHeading: env.trips.driverHeading,
                 driverTier: trip.tier,
                 followsDriver: followsDriver,
+                forwardDriverView: forwardView,
                 driverVisibleRect: driverVisibleRect,
                 onDriverFollowInterrupted: { env.settings.driverEyeEnabled = false },
                 isSearching: trip.phase == .searching,
@@ -77,18 +79,25 @@ struct ActiveTripView: View {
                 .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { topControlsFrame = $0 }
                 Spacer()
                 HStack(spacing: 12) {
-                    if canUseDriverEye {
-                        Toggle(L(.driverEye), isOn: Bindable(env.settings).driverEyeEnabled)
-                            .font(TwendeFont.label)
-                            .toggleStyle(.button)
-                            .tint(TwendeColor.primary)
-                            .padding(.horizontal, 12)
-                            .frame(minHeight: 48)
-                            .background(TwendeColor.surface, in: .rect(cornerRadius: 8))
-                            .accessibilityIdentifier("trip.driverEye")
-                    }
                     Spacer(minLength: 0)
-                    MapCircleButton(systemImage: "location.fill", accessibilityLabel: L(.recentre)) {
+                    if canUseDriverEye {
+                        MapCircleButton(systemImage: followsDriver ? (forwardView ? "road.lanes" : "car.rear.fill") : "car.rear", accessibilityLabel: L(.driverEye), usesLiquidGlass: true) {
+                            if !followsDriver {
+                                forwardView = false
+                                env.settings.driverEyeEnabled = true
+                            } else if !forwardView {
+                                forwardView = true
+                            } else {
+                                forwardView = false
+                                env.settings.driverEyeEnabled = false
+                                frame(force: true)
+                            }
+                        }
+                        .accessibilityValue(followsDriver ? (forwardView ? "Forward view" : "Chase view") : "Overview")
+                        .accessibilityHint("Cycles overview, chase and forward views")
+                        .accessibilityIdentifier("trip.viewMode")
+                    }
+                    MapCircleButton(systemImage: "location.fill", accessibilityLabel: L(.recentre), usesLiquidGlass: true) {
                         env.settings.driverEyeEnabled = false
                         frame(force: true)
                     }

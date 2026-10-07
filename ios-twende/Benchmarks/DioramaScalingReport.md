@@ -2,6 +2,11 @@
 
 Status: Geometry v36 supersedes the Sea Cliff traced model with photo-composed architecture and adds Settings-only diorama controls plus a driver's-eye camera; v35 pool/cemetery/effect optimizations remain. Seam-certified city rendering, certified 1-pixel LOD and CDN streaming remain incomplete. This is not a city-scale completion or measured battery report.
 
+## 2026-10-07 glass camera modes
+
+- Live-trip text toggle replaced by a 48pt glass mode button beside glass recenter. Cycles overview/chase/forward, with haptics, accessible state and material fallback below iOS 26.
+- Forward mode keeps zoom 17.5, increases pitch to 62° and adds 24% of available height to top padding, placing the vehicle below center and exposing more ahead. Approved chase remains 45°; no scenery changes/downloads. Runtime framing is not yet visually accepted.
+
 ## 2026-10-07 turn smoothing and route parallax
 
 - Occupied-segment heading previously stepped instantly through corners. Displayed orientation now uses shortest-arc exponential convergence (0.22 s time constant), capped at 160°/s; camera shares the result. Position remains on the exact route; no pre-turn lookahead or corner-cutting. Reduced Motion bypasses smoothing.

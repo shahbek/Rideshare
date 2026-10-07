@@ -32,6 +32,7 @@ struct TripMapView: UIViewRepresentable {
     var driverHeading: Double = 0
     var driverTier: RideTier = .economy
     var followsDriver: Bool = false
+    var forwardDriverView: Bool = false
     /// Unobstructed map-local rectangle, measured by the screen that owns the overlays.
     var driverVisibleRect: CGRect? = nil
     var onDriverFollowInterrupted: (() -> Void)? = nil
@@ -1035,7 +1036,7 @@ extension TripMapView {
             }
             let wasActive = driverEyeCamera.isActive
             driverEyeCamera.update(point: pose.point, heading: pose.heading,
-                                   visibleRect: parent.driverVisibleRect, on: mapView)
+                                   visibleRect: parent.driverVisibleRect, forwardView: parent.forwardDriverView, on: mapView)
             if wasActive != driverEyeCamera.isActive { syncVehicles() }
             // Continuous driving must not perpetually postpone the normal camera-settle debounce.
             if Date().timeIntervalSince(lastDioramaFollowUpdate) >= 0.5 {

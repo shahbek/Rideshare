@@ -11,8 +11,9 @@ final class DriverEyeCamera {
     private var lastPoint: GeoPoint?
     private var lastPadding: UIEdgeInsets?
     private var lastSize: CGSize?
+    private var lastForwardView: Bool?
 
-    func update(point: GeoPoint, heading: Double, visibleRect: CGRect?, on view: MapView) {
+    func update(point: GeoPoint, heading: Double, visibleRect: CGRect?, forwardView: Bool = false, on view: MapView) {
         guard UIApplication.shared.applicationState == .active,
               point.latitude.isFinite, point.longitude.isFinite, heading.isFinite,
               view.bounds.width > 0, view.bounds.height > 0 else { return }
@@ -28,12 +29,14 @@ final class DriverEyeCamera {
         let bounds = view.bounds
         let available = (visibleRect ?? bounds.inset(by: view.safeAreaInsets)).intersection(bounds)
         guard !available.isNull, available.width > 0, available.height > 0 else { return }
-        let padding = UIEdgeInsets(top: available.minY - bounds.minY,
+        let forwardInset = forwardView ? available.height * 0.24 : 0
+        let padding = UIEdgeInsets(top: available.minY - bounds.minY + forwardInset,
                                    left: available.minX - bounds.minX,
                                    bottom: bounds.maxY - available.maxY,
                                    right: bounds.maxX - available.maxX)
         let bearing = (heading.truncatingRemainder(dividingBy: 360) + 360).truncatingRemainder(dividingBy: 360)
-        guard point != lastPoint || bearing != lastHeading || padding != lastPadding || bounds.size != lastSize else { return }
+        guard point != lastPoint || bearing != lastHeading || padding != lastPadding || bounds.size != lastSize || forwardView != lastForwardView else { return }
+        lastForwardView = forwardView
         lastHeading = bearing
         lastPoint = point
         lastPadding = padding
@@ -41,7 +44,7 @@ final class DriverEyeCamera {
         // Center and padding let Mapbox solve the projection, rather than guessing
         // an eye location whose optical axis can miss the car or ignore UI occlusion.
         view.mapboxMap.setCamera(to: CameraOptions(center: point.coordinate, padding: padding,
-                                                   zoom: 17.5, bearing: bearing, pitch: 45))
+                                                   zoom: 17.5, bearing: bearing, pitch: forwardView ? 62 : 45))
     }
 
     func stop(on view: MapView, restore: Bool) {
@@ -56,5 +59,6 @@ final class DriverEyeCamera {
         lastPoint = nil
         lastPadding = nil
         lastSize = nil
+        lastForwardView = nil
     }
 }
