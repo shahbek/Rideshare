@@ -122,6 +122,7 @@ struct ActiveTripView: View {
                 }
                 .padding(.horizontal, 20)
                 .padding(.bottom, 12)
+                routingAttribution
             }
             .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { tripPanelFrame = $0 }
             .contentShape(Rectangle())
@@ -168,7 +169,10 @@ struct ActiveTripView: View {
         }
         // Siri can read this ride off the screen: "where's my driver?", "what's my start code?", "cancel this".
         .primaryOnScreen(TripEntity(trip, env: env), activity: TwendeActivity.liveTrip, title: trip.destination.name)
-        .onAppear { frame(force: true) }
+        .onAppear {
+            frame(force: true)
+            if env.trips.needsRoadRoute { env.trips.refreshRoadRoutes() }
+        }
         .onDisappear { reframeTask?.cancel() }
         .onChange(of: env.network.isOnline) { _, online in
             if online, env.trips.needsRoadRoute { env.trips.refreshRoadRoutes() }
@@ -187,6 +191,17 @@ struct ActiveTripView: View {
             lastFollowAt = now
             followDriver()
         }
+    }
+
+    private var routingAttribution: some View {
+        HStack(spacing: 12) {
+            Link("© OpenStreetMap", destination: URL(string: "https://www.openstreetmap.org/copyright")!)
+            Link("OSRM · FOSSGIS", destination: URL(string: "https://routing.openstreetmap.de/about.html")!)
+            Link("Fix the map", destination: URL(string: "https://www.openstreetmap.org/fixthemap")!)
+        }
+        .font(.caption2)
+        .foregroundStyle(TwendeColor.ink)
+        .frame(minHeight: 44)
     }
 
     private var roadRouteStatus: some View {

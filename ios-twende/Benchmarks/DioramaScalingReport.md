@@ -2,6 +2,12 @@
 
 Status: Geometry v36 supersedes the Sea Cliff traced model with photo-composed architecture and adds Settings-only diorama controls plus a driver's-eye camera; v35 pool/cemetery/effect optimizations remain. Seam-certified city rendering, certified 1-pixel LOD and CDN streaming remain incomplete. This is not a city-scale completion or measured battery report.
 
+## 2026-10-07 free routing recovery
+
+- Replace Mapbox direction requests with keyless OSM/OSRM on FOSSGIS's public car endpoint, retaining the separate 40-file route cache. A direct Masaki endpoint request returned HTTP 200/Ok, 2,958 m driving distance; this does not establish the actual user's ride/runtime acceptance.
+- User-requested trip routing is independent of downloaded-only scenery; saved sources/basemap/packages remain untouched. Reserve request slots at 1.1 s spacing, send identifying User-Agent, enforce timeout/cancellation and add OSM/OSRM/FOSSGIS attribution/map correction links. Public service is for light preview traffic, no SLA; production scale requires dedicated routing hosting.
+- Existing six visual/performance goals remain open. No new automated tests.
+
 ## 2026-10-07 rear chase, lifecycle and road geometry
 
 - User confirms chase framing; retain zoom 17.5/pitch 45° and UI-aware centering, replace activation-bearing lock with displayed vehicle heading so the rear stays visible through turns.

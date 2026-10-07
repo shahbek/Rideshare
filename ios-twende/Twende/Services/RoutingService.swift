@@ -1,6 +1,5 @@
 import Foundation
 import MapKit
-import MapboxMaps
 
 /// Mapped driving geometry with local road fallback. Fare estimates never pretend to be street routes.
 /// Durations use the Dar traffic model so fares stay consistent with the tariff.
@@ -61,7 +60,7 @@ nonisolated enum RoutingService {
     /// Real driving directions along Dar es Salaam streets. Returns nil when directions are unavailable.
     @MainActor
     static func directions(from origin: GeoPoint, to destination: GeoPoint) async -> RouteResult? {
-        if let road = await MapboxRoadDirectionsService.shared.route(from: origin, to: destination, token: MapboxOptions.accessToken) { return road }
+        if let road = await OpenRoadDirectionsService.shared.route(from: origin, to: destination) { return road }
         if let saved = await OfflineRoadRoutingService.shared.route(from: origin, to: destination) { return saved }
         guard !UserDefaults.standard.bool(forKey: "maps.downloadedOnly"), !Task.isCancelled else { return nil }
         let request = MKDirections.Request()
