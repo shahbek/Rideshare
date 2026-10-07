@@ -255,6 +255,8 @@ extension TripMapView {
         private var driverShownProgress: Double? = nil
         private var driverMoveStarted: Date = .distantPast
         private static let driverGlideDuration: TimeInterval = 0.3
+        private var lastDriverFrame: Date?
+        private var lastRouteElevation: [Double] = []
         private static let driverModelID = "twende-driver"
 
         init(parent: TripMapView) {
@@ -616,7 +618,11 @@ extension TripMapView {
             routePoints = points
             guard styleReady else { return }
             // Reordering intermediate stops may leave both endpoints and the point count unchanged.
-            guard points != renderedRoutePoints else { return }
+            guard points != renderedRoutePoints else {
+                refreshRouteElevation()
+                return
+            }
+            lastRouteElevation = []
             renderedRoutePoints = points
 
             guard let mapView else { return }
@@ -689,9 +695,40 @@ extension TripMapView {
                 routeInstalled = map.layerExists(withId: Self.coreLayerID)
             }
 
+            refreshRouteElevation()
             routeMotionFinished = false
             tickRoute()
             ensureFrameTimer()
+        }
+
+        /// Native lines need the same sea-relative height as the custom painted ground.
+        /// Upper-slot ordering alone cannot correct pitched-camera parallax.
+        private func refreshRouteElevation() {
+            guard routeInstalled, let map = mapView?.mapboxMap else { return }
+            let motion = RoutePolylineMotion(points: renderedRoutePoints)
+            guard motion.points.count > 1 else { return }
+            var heights: [Double] = []
+            for index in 0...128 {
+                let fraction = Double(index) / 128
+                guard let sample = motion.sample(at: fraction) else { return }
+                let height = dioramaOwnsGround ? diorama?.groundHeight(at: sample.point) : nil
+                heights.append(height.map { $0 + 0.12 } ?? 0)
+            }
+            guard heights != lastRouteElevation else { return }
+            var expression: [Any] = ["interpolate", ["linear"], ["line-progress"]]
+            for (index, height) in heights.enumerated() {
+                expression.append(Double(index) / 128)
+                expression.append(height)
+            }
+            do {
+                for layer in [Self.casingLayerID, Self.coreLayerID, Self.pulseLayerID] {
+                    try map.setLayerProperty(for: layer, property: "line-elevation-reference", value: dioramaOwnsGround ? "sea" : "none")
+                    try map.setLayerProperty(for: layer, property: "line-z-offset", value: expression)
+                }
+                lastRouteElevation = heights
+            } catch {
+                print("[TripMap] Route elevation could not be applied")
+            }
         }
 
         private func removeRoute(from map: MapboxMap) {
@@ -961,13 +998,25 @@ extension TripMapView {
             } else {
                 driverShownProgress = nil
             }
+            let now = Date()
+            let dt = min(0.1, max(0, lastDriverFrame.map { now.timeIntervalSince($0) } ?? 1.0 / 30.0))
+            lastDriverFrame = now
+            var turning = false
+            if let shown = driverShown, !parent.reduceMotion {
+                let turn = ((pose.heading - shown.heading + 540).truncatingRemainder(dividingBy: 360)) - 180
+                turning = abs(turn) > 0.1
+                // Smooth only orientation: geographic motion still follows the occupied road segment.
+                let step = turn * (1 - exp(-dt / 0.22))
+                pose.heading = turning ? shown.heading + min(160 * dt, max(-160 * dt, step)) : pose.heading
+            }
             if pose != driverShown {
                 driverShown = pose
                 updateDriverCamera()
                 syncVehicles()
             }
-            if t >= 1 {
+            if t >= 1 && !turning {
                 driverFrom = nil
+                lastDriverFrame = nil
                 return false
             }
             return true
@@ -992,6 +1041,7 @@ extension TripMapView {
             if Date().timeIntervalSince(lastDioramaFollowUpdate) >= 0.5 {
                 lastDioramaFollowUpdate = Date()
                 diorama?.update()
+                refreshRouteElevation()
             }
         }
 

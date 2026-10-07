@@ -2,6 +2,12 @@
 
 Status: Geometry v36 supersedes the Sea Cliff traced model with photo-composed architecture and adds Settings-only diorama controls plus a driver's-eye camera; v35 pool/cemetery/effect optimizations remain. Seam-certified city rendering, certified 1-pixel LOD and CDN streaming remain incomplete. This is not a city-scale completion or measured battery report.
 
+## 2026-10-07 turn smoothing and route parallax
+
+- Occupied-segment heading previously stepped instantly through corners. Displayed orientation now uses shortest-arc exponential convergence (0.22 s time constant), capped at 160°/s; camera shares the result. Position remains on the exact route; no pre-turn lookahead or corner-cutting. Reduced Motion bypasses smoothing.
+- Native route layers previously sat on the flat native plane while custom roads retained relief. Add 129 resident-ground samples along route progress, 12 cm clearance, sea-relative native elevated lines and restore native rendering outside diorama ownership. Update when geometry changes and during the existing bounded follow refresh; no source download or archive revision.
+- Build checks are separate from fresh live turn/alignment acceptance; height interpolation and differing source centerlines can retain residual discrepancies. Original six goals remain open.
+
 ## 2026-10-07 free routing recovery
 
 - Replace Mapbox direction requests with keyless OSM/OSRM on FOSSGIS's public car endpoint, retaining the separate 40-file route cache. A direct Masaki endpoint request returned HTTP 200/Ok, 2,958 m driving distance; this does not establish the actual user's ride/runtime acceptance.
