@@ -82,6 +82,8 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
     private var labelRenderer: DioramaLabelRenderer?
     private let origin: CLLocationCoordinate2D
     private let vertices: [BuildingRenderVertex]
+    private let materialsPrepared: Bool
+    private let materialCounts: SIMD2<Int>
     private let indices: [UInt32]
     private let ranges: [Range]
     private let groups: [DioramaInstanceGroup]
@@ -189,6 +191,7 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
     var onFrameReport: (@Sendable (String) -> Void)?
     var onWaterVisibilityChanged: (@Sendable () -> Void)?
     var onLifecycleCompleted: (@Sendable () -> Void)?
+    var onInitializationFailed: (@Sendable () -> Void)?
     private let frameMetrics = DioramaFrameMetrics()
     // Render-thread-only preparation cache. Water/reveal uniforms still update every frame.
     private var selectionVisible: Set<DioramaCategory>?
@@ -226,7 +229,8 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
         lock.lock(); reveal = value; lock.unlock()
     }
 
-    init(origin: CLLocationCoordinate2D, vertices: [BuildingRenderVertex], indices: [UInt32], ranges: [Range], groups: [DioramaInstanceGroup] = [], instances: [DioramaInstanceData] = [], lightGrid: DioramaLightGrid, waterHeight: Double, groundImage: DioramaGroundImage?, groundRect: DioramaRect, visible: Set<DioramaCategory>, timeOfDay: DioramaTimeOfDay, animates: Bool, config: DioramaConfig = .slipway, labels: [DioramaBuildingLabel] = [], displayScale: Float = 3, contextOnly: Bool = false) {
+    init(origin: CLLocationCoordinate2D, vertices: [BuildingRenderVertex], indices: [UInt32], ranges: [Range], groups: [DioramaInstanceGroup] = [], instances: [DioramaInstanceData] = [], lightGrid: DioramaLightGrid, waterHeight: Double, groundImage: DioramaGroundImage?, groundRect: DioramaRect, visible: Set<DioramaCategory>, timeOfDay: DioramaTimeOfDay, animates: Bool, config: DioramaConfig = .slipway, labels: [DioramaBuildingLabel] = [], displayScale: Float = 3, contextOnly: Bool = false, materialsPrepared: Bool = false,
+         materialCounts: SIMD2<Int> = .zero, preparedPoolBounds: Range? = nil) {
         var low = SIMD3<Float>(repeating: .greatestFiniteMagnitude)
         var high = SIMD3<Float>(repeating: -.greatestFiniteMagnitude)
         for range in ranges where range.minimum.x > -.greatestFiniteMagnitude && range.minimum.x.isFinite && range.maximum.x.isFinite {
@@ -237,6 +241,8 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
         }
         revealBounds = low.x < high.x ? (low, high) : (SIMD3(Float(groundRect.minX), Float(groundRect.minY), 0), SIMD3(Float(groundRect.maxX), Float(groundRect.maxY), 0))
         self.contextOnly = contextOnly
+        self.materialsPrepared = materialsPrepared
+        self.materialCounts = materialCounts
         tileState.y = contextOnly ? 0 : 1
         self.origin = origin
         self.labels = labels
@@ -250,11 +256,14 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
         self.waterHeight = Float(waterHeight)
         var poolLow = SIMD3<Float>(repeating: .greatestFiniteMagnitude)
         var poolHigh = SIMD3<Float>(repeating: -.greatestFiniteMagnitude)
-        for vertex in vertices where vertex.appearance.y > 4.5 && vertex.appearance.y < 5.5 && vertex.appearance.w < 0.5 {
-            let p = SIMD3(vertex.position.x, vertex.position.y, vertex.position.z)
-            poolLow = simd_min(poolLow, p); poolHigh = simd_max(poolHigh, p)
+        if !materialsPrepared {
+            for vertex in vertices where vertex.appearance.y > 4.5 && vertex.appearance.y < 5.5 && vertex.appearance.w < 0.5 {
+                let p = SIMD3(vertex.position.x, vertex.position.y, vertex.position.z)
+                poolLow = simd_min(poolLow, p); poolHigh = simd_max(poolHigh, p)
+            }
         }
-        poolBounds = poolLow.x <= poolHigh.x ? Range(category: .water, start: 0, count: 0, minimum: poolLow, maximum: poolHigh) : nil
+        poolBounds = materialsPrepared ? preparedPoolBounds
+            : (poolLow.x <= poolHigh.x ? Range(category: .water, start: 0, count: 0, minimum: poolLow, maximum: poolHigh) : nil)
         self.groundImage = groundImage
         self.groundRect = groundRect
         let referenceLatitude = -6.75
@@ -299,6 +308,7 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
     }
 
     func renderingWillStart(_ metalDevice: MTLDevice, colorPixelFormat: UInt, depthStencilPixelFormat: UInt) {
+        let uploadStarted = CACurrentMediaTime()
         guard !vertices.isEmpty, !indices.isEmpty,
               let library = DioramaShaderSource.library(for: metalDevice),
               let vertex = library.makeFunction(name: "dioramaVertex"),
@@ -307,6 +317,7 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
               let colorFormat = MTLPixelFormat(rawValue: colorPixelFormat),
               let depthFormat = MTLPixelFormat(rawValue: depthStencilPixelFormat) else {
             setDiagnostic("missing geometry or shader resources")
+            onInitializationFailed?()
             return
         }
         func descriptor(color: MTLPixelFormat, depth: MTLPixelFormat, stencil: Bool, blended: Bool = false, instanced: Bool = false) -> MTLRenderPipelineDescriptor {
@@ -355,10 +366,11 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
             lightBuffer = upload(lightGrid.lights, fallback: DioramaShaderLight(position: .zero, color: .zero))
             lightTableBuffer = upload(lightGrid.table, fallback: SIMD2<UInt32>(0, 0))
             lightIndexBuffer = upload(lightGrid.indices, fallback: UInt32(0))
-            let materialUpload = DioramaLegacyFoliageMaterial.tagged(vertices, indices: indices, ranges: ranges, groups: groups)
+            let materialUpload = materialsPrepared ? (vertices: vertices, count: materialCounts.x, architectureCount: materialCounts.y)
+                : DioramaLegacyFoliageMaterial.tagged(vertices, indices: indices, ranges: ranges, groups: groups)
             vertexBuffer = upload(materialUpload.vertices, fallback: vertices[0])
             #if DEBUG
-            print("[Diorama material] legacy_foliage_vertices=\(materialUpload.count) legacy_architecture_vertices=\(materialUpload.architectureCount) preset=\(timeOfDay.rawValue) color_format=\(colorPixelFormat) natural_finish=coverage-v2 reveal=narrow-v3 vegetation=savanna-fine-v5 water=coherent-v5")
+            print("[Diorama material] legacy_foliage_vertices=\(materialUpload.count) legacy_architecture_vertices=\(materialUpload.architectureCount) preset=\(timeOfDay.rawValue) color_format=\(colorPixelFormat) natural_finish=coverage-v2 reveal=joined-v4 vegetation=savanna-filtered-v6 water=coherent-v5")
             #endif
             indexBuffer = upload(indices, fallback: 0)
             instanceBuffer = upload(instances, fallback: .identity)
@@ -400,8 +412,10 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
             labelRenderer = DioramaLabelRenderer(device: metalDevice, labels: labels, scale: displayScale, color: colorFormat, depthFormat: depthFormat)
             lock.lock(); labelsReady = labelRenderer != nil; lock.unlock()
             setDiagnostic("ready vertices=\(vertices.count) triangles=\(indices.count / 3) instances=\(instances.count) lights=\(lightGrid.lights.count)")
+            print("[Diorama load] context=\(contextOnly) GPU-setup=\(String(format: "%.3f", CACurrentMediaTime() - uploadStarted))s (not GPU execution)")
         } catch {
             setDiagnostic("pipeline creation failed")
+            onInitializationFailed?()
             print("[Diorama] render pipeline unavailable")
         }
     }

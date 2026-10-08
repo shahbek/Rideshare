@@ -66,6 +66,11 @@ final class DioramaTileManager {
     let config: DioramaConfig
     /// Owned by the map coordinator: `false` removes the basemap terrain, `true` restores it.
     var setBasemapTerrainEnabled: ((Bool) -> Void)? = nil
+    /// Live map bounds in the same coordinate space as Mapbox's screen-to-ground conversion.
+    var viewportBounds: (() -> CGRect)?
+    private var viewportFocus: DioramaTileID?
+    private var visibleTilePriority: [DioramaTileID] = []
+    private var pendingUpdateDeadline: CFTimeInterval = 0
     private var basemapTerrainSuppressed: Bool = false
     private let state: DioramaState
     private let styling: DioramaMapStyling
@@ -174,12 +179,16 @@ final class DioramaTileManager {
                 self.map?.triggerRepaint()
             }
         }
-        for name in [UIApplication.didBecomeActiveNotification, UIApplication.willResignActiveNotification, UIAccessibility.reduceMotionStatusDidChangeNotification] {
+        for name in [UIApplication.didBecomeActiveNotification, UIApplication.willResignActiveNotification,
+                     UIApplication.didReceiveMemoryWarningNotification, UIAccessibility.reduceMotionStatusDidChangeNotification] {
             lifecycleObservers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated {
                     self?.updateWaterClock()
-                    if name == UIApplication.willResignActiveNotification { self?.clearPrefetch() }
-                    else { self?.scheduleUpdate(delay: 0) }
+                    if name == UIApplication.willResignActiveNotification || name == UIApplication.didReceiveMemoryWarningNotification {
+                        self?.clearPrefetch()
+                        if name == UIApplication.willResignActiveNotification { self?.contextTiles.pauseLoading() }
+                        Task { await DioramaOfflineStore.shared.releaseDecodedMemory() }
+                    } else { self?.scheduleUpdate(delay: 0) }
                 }
             })
         }
@@ -213,7 +222,7 @@ final class DioramaTileManager {
     func install(on map: MapboxMap) {
         self.map = map
         installed = true
-        scheduleUpdate(delay: 0.2)
+        scheduleUpdate(delay: 0)
     }
 
     /// Called when the style reloads: Mapbox drops every runtime layer and source.
@@ -291,9 +300,11 @@ final class DioramaTileManager {
     // MARK: Updates
 
     func scheduleUpdate(delay: Double) {
-        // Coalesce camera events without postponing loading indefinitely during travel.
-        if pendingUpdate != nil, delay > 0 { return }
+        // Throttle, not debounce. An idle retry must never hold a newer camera event behind it.
+        let deadline = CACurrentMediaTime() + max(0, delay)
+        if pendingUpdate != nil, pendingUpdateDeadline <= deadline { return }
         pendingUpdate?.cancel()
+        pendingUpdateDeadline = deadline
         pendingUpdate = Task { [weak self] in
             do { try await Task.sleep(for: .seconds(delay)) } catch { return }
             guard let self else { return }
@@ -304,14 +315,14 @@ final class DioramaTileManager {
 
     /// Shows the tile while the camera is near it and zoomed in; hides it otherwise.
     func update() {
-        guard installed, let map else { return }
+        guard installed, let map, UIApplication.shared.applicationState == .active else { return }
         guard retractionCompletion == nil else { return }
         guard state.isEnabled else { beginRetraction(); return }
         guard DioramaDownloadService.shared.canView else {
             clearPrefetch()
             selectionTask?.cancel(); selectionTask = nil; requestedTile = nil
             generationTask?.cancel(); generationTask = nil; generationRevision &+= 1
-            if shown { beginRetraction() }
+            beginRetraction()
             status = .idle
             state.loadedTiles.removeAll()
             state.status = "Download and prepare all Masaki tiles before viewing · open Offline maps"
@@ -328,9 +339,8 @@ final class DioramaTileManager {
             return
         }
         let camera = map.cameraState
-        let centreTile = DioramaTileID(latitude: camera.center.latitude, longitude: camera.center.longitude, zoom: config.tileZoom)
-        let withinCoverage = DioramaMasakiSource.contains(latitude: camera.center.latitude, longitude: camera.center.longitude)
-        guard withinCoverage else {
+        refreshViewportInterest(on: map)
+        guard let target = viewportFocus else {
             clearPrefetch()
             selectionTask?.cancel(); selectionTask = nil; requestedTile = nil
             beginRetraction()
@@ -346,11 +356,23 @@ final class DioramaTileManager {
             state.status = "Zoom in to \(Int(config.minimumZoom)) to build the diorama"
             return
         }
-        // Hysteresis avoids rebuilding when a resting camera straddles an exact tile boundary.
-        let local = DioramaProjection(origin: tile.centre)
-        let inside = local.rect(of: tile).expanded(by: 12).contains(local.local(longitude: camera.center.longitude, latitude: camera.center.latitude))
-        if centreTile != tile, !inside {
-            requestTile(centreTile)
+        if !shown {
+            switch status {
+            case .idle, .failed:
+                if tile != target { tile = target; status = .idle }
+            case .generating:
+                if tile != target {
+                    generationRevision &+= 1
+                    generationTask?.cancel(); generationTask = nil
+                    tile = target; status = .idle
+                }
+            case .loaded: break
+            }
+        }
+        // Coarse visible coverage is independent of the full-detail reveal or replacement read.
+        updateContextTiles()
+        if target != tile {
+            requestTile(target)
         } else {
             selectionTask?.cancel(); selectionTask = nil; requestedTile = nil
         }
@@ -367,8 +389,49 @@ final class DioramaTileManager {
         }
         if requestedTile != nil {
             state.status = selectionTask == nil ? "Adjacent tile unavailable · current area retained. Try Regenerate online." : "Preparing adjacent tile… · current area stays visible"
-        } else if shown && !isRetracting && revealClock == nil { updateContextTiles() }
+        }
         updateWaterClock()
+    }
+
+    private func refreshViewportInterest(on map: MapboxMap) {
+        let camera = map.cameraState
+        let bounds = viewportBounds?() ?? .zero
+        var weights: [DioramaTileID: Int] = [:]
+        if bounds.width > 1, bounds.height > 1 {
+            let padding = camera.padding
+            let rect = bounds.inset(by: padding)
+            if rect.width > 1, rect.height > 1 {
+                // Include the pitched ground ahead and both sides, rather than just camera.center.
+                for row in 0..<5 {
+                    for column in 0..<5 {
+                        let point = CGPoint(x: rect.minX + rect.width * (0.05 + Double(column) * 0.225),
+                                            y: rect.minY + rect.height * (0.05 + Double(row) * 0.225))
+                        let coordinate = map.coordinate(for: point)
+                        guard coordinate.latitude.isFinite, coordinate.longitude.isFinite,
+                              abs(coordinate.latitude) < 85,
+                              DioramaMasakiSource.contains(latitude: coordinate.latitude, longitude: coordinate.longitude) else { continue }
+                        let candidate = DioramaTileID(latitude: coordinate.latitude, longitude: coordinate.longitude, zoom: config.tileZoom)
+                        weights[candidate, default: 0] += row == 2 && column == 2 ? 4 : 1
+                    }
+                }
+            }
+        }
+        if weights.isEmpty, DioramaMasakiSource.contains(latitude: camera.center.latitude, longitude: camera.center.longitude) {
+            let candidate = DioramaTileID(latitude: camera.center.latitude, longitude: camera.center.longitude, zoom: config.tileZoom)
+            weights[candidate] = 1
+        }
+        visibleTilePriority = weights.keys.sorted {
+            let a = weights[$0] ?? 0, b = weights[$1] ?? 0
+            return a == b ? $0.key < $1.key : a > b
+        }
+        var target = visibleTilePriority.first
+        // Screen-area hysteresis only: keep a near-tie, never wait to cross a metre threshold.
+        if let first = target, let currentWeight = weights[tile],
+           Double(currentWeight) >= Double(weights[first] ?? 0) * 0.85 { target = tile }
+        if target != viewportFocus {
+            viewportFocus = target
+            if let target { print("[Diorama viewport] focus=\(target.key) visible=\(visibleTilePriority.count)") }
+        }
     }
 
     private func clearPrefetch() {
@@ -421,16 +484,16 @@ final class DioramaTileManager {
     /// residency to one full-detail tile plus the bounded low-detail neighbour ring.
     private func requestTile(_ next: DioramaTileID) {
         // Finish the current finite handoff before accepting the latest settled camera target.
-        guard revealClock == nil, outgoingTile == nil, !isRetracting, requestedTile != next else { return }
+        guard !isRetracting, requestedTile != next else { return }
         selectionTask?.cancel()
         requestedTile = next
         selectionTask = Task { [weak self] in
-            do { try await Task.sleep(for: .seconds(0.15)) } catch { return }
+            do { try await Task.sleep(for: .seconds(0.03)) } catch { return }
             guard let self, let map = self.map, self.installed, self.retractionCompletion == nil,
                   self.requestedTile == next, self.state.isEnabled, !self.state.isBasemapOnly,
                   map.cameraState.zoom >= self.config.minimumZoom,
-                  DioramaTileID(latitude: map.cameraState.center.latitude, longitude: map.cameraState.center.longitude, zoom: self.config.tileZoom) == next else { return }
-            self.contextTiles.pauseLoading()
+                  self.viewportFocus == next else { return }
+            let started = CACurrentMediaTime()
             let config = self.config
             let job: Task<DioramaTileArtifacts?, Never>
             if self.prefetchedTile == next, let cachedJob = self.prefetchTask {
@@ -451,10 +514,17 @@ final class DioramaTileManager {
                 }
                 prepared = await withTaskCancellationHandler { await fallback.value } onCancel: { fallback.cancel() }
             }
+            // Decode overlaps the current GPU handoff; only installation waits for its completion.
+            while prepared != nil, self.revealClock != nil || self.outgoingTile != nil {
+                guard !Task.isCancelled, self.viewportFocus == next, CACurrentMediaTime() - started < 25 else {
+                    if self.requestedTile == next { self.requestedTile = nil; self.selectionTask = nil }
+                    return
+                }
+                do { try await Task.sleep(for: .milliseconds(50)) } catch { return }
+            }
             guard !Task.isCancelled, self.installed, self.requestedTile == next,
                   self.retractionCompletion == nil, self.state.isEnabled, !self.state.isBasemapOnly,
-                  map.cameraState.zoom >= config.minimumZoom,
-                  DioramaTileID(latitude: map.cameraState.center.latitude, longitude: map.cameraState.center.longitude, zoom: config.tileZoom) == next else { return }
+                  map.cameraState.zoom >= config.minimumZoom, self.viewportFocus == next else { return }
             guard let prepared else {
                 // Retain the old tile and suppress automatic repeated source requests until the
                 // camera leaves this request or the user explicitly chooses Regenerate.
@@ -468,7 +538,6 @@ final class DioramaTileManager {
             let previous = self.tile
             let projection = DioramaProjection(origin: next.centre)
             let oldCentre = projection.local(longitude: previous.centre.longitude, latitude: previous.centre.latitude)
-            self.contextTiles.prepareForFocus()
             self.retainOutgoing(on: map)
             self.arrivalDirection = (-oldCentre).normalized
             DioramaTileGenerator.clearCache(for: previous, config: config)
@@ -563,6 +632,7 @@ final class DioramaTileManager {
     }
 
     private func show(_ artifacts: DioramaTileArtifacts, on map: MapboxMap) {
+        let hasCoverage = contextTiles.isReady(tile)
         do {
             hide(on: map, preservingContext: true)
             let animates = true // Repaint only visible water at 12 Hz under normal-power motion policy.
@@ -570,10 +640,21 @@ final class DioramaTileManager {
                 origin: tile.centre, vertices: artifacts.vertices, indices: artifacts.indices, ranges: artifacts.ranges,
                 groups: artifacts.groups, instances: artifacts.allInstances, lightGrid: artifacts.lightGrid, waterHeight: artifacts.waterHeight, groundImage: artifacts.groundImage,
                 groundRect: DioramaProjection(origin: tile.centre).rect(of: tile), visible: state.visibleCategories, timeOfDay: state.timeOfDay,
-                animates: animates, config: config, labels: artifacts.buildingLabels, displayScale: Float(UIScreen.main.scale)
+                animates: animates, config: config, labels: artifacts.buildingLabels, displayScale: Float(UIScreen.main.scale),
+                materialsPrepared: artifacts.renderMaterialsPrepared, materialCounts: artifacts.renderMaterialCounts,
+                preparedPoolBounds: artifacts.renderPoolBounds
             )
             host.onWaterVisibilityChanged = { [weak self] in
                 Task { @MainActor [weak self] in self?.updateWaterClock() }
+            }
+            host.onInitializationFailed = { [weak self, weak host] in
+                Task { @MainActor [weak self, weak host] in
+                    guard let self, let host, self.renderLayer === host, let map = self.map else { return }
+                    self.hide(on: map)
+                    self.status = .failed
+                    self.state.status = "3D renderer unavailable · basemap restored; saved tiles retained"
+                    map.triggerRepaint()
+                }
             }
             host.onFrameReport = { [weak self, weak host] report in
                 Task { @MainActor [weak self, weak host] in
@@ -582,8 +663,8 @@ final class DioramaTileManager {
                 }
             }
             renderLayer = host
-            currentExtent = emptyExtent
-            host.setReveal(revealUniform)
+            currentExtent = hasCoverage ? fullExtent : emptyExtent
+            host.setReveal(hasCoverage ? .zero : revealUniform)
             try map.addCustomLayer(withId: layerID, layerHost: host, layerPosition: nil)
             try map.setLayerProperty(for: layerID, property: "slot", value: "middle")
             var source = GeoJSONSource(id: clipSourceID)
@@ -604,7 +685,8 @@ final class DioramaTileManager {
             try map.addLayer(labelClip)
             renderLayer = host
             shown = true
-            beginReveal()
+            if hasCoverage { setRevealClip(halfExtent: nil) }
+            else { beginReveal() }
             suppressBasemapTerrain(true)
             host.setReducedEffects(reducesEffects)
             host.setWireframe(state.showsWireframe)
@@ -682,7 +764,12 @@ final class DioramaTileManager {
     }
 
     private func beginRetraction() {
-        guard shown, !isRetracting else { return }
+        guard shown else {
+            contextTiles.clear()
+            suppressBasemapTerrain(false)
+            return
+        }
+        guard !isRetracting else { return }
         retireOutgoing()
         contextTiles.retractAll()
         guard !UIAccessibility.isReduceMotionEnabled, UIApplication.shared.applicationState == .active,
@@ -828,24 +915,30 @@ final class DioramaTileManager {
     }
 
     private func updateContextTiles() {
-        guard shown, !isRetracting, !state.isBasemapOnly, let map else { return }
+        guard !isRetracting, state.isEnabled, DioramaDownloadService.shared.canView,
+              !state.isBasemapOnly, let map, map.cameraState.zoom >= config.minimumZoom else { return }
         contextTiles.onReady = { [weak self] ready in
             guard let self else { return }
             if self.outgoingTile == ready { self.retireOutgoing() }
             self.updateWaterClock()
             self.scheduleUpdate(delay: 0.1)
         }
-        contextTiles.onUnavailable = contextTiles.onReady
+        contextTiles.onUnavailable = { [weak self] missing in
+            guard let self else { return }
+            if self.outgoingTile == missing { self.retireOutgoing() }
+            self.scheduleUpdate(delay: 30)
+        }
         contextTiles.onWaterVisibilityChanged = { [weak self] in self?.updateWaterClock() }
-        contextTiles.onFocusFallback = { [weak self] ready, paired in
-            guard let self, self.tile == ready else { return }
-            self.renderLayer?.setTileCoverage(edges: SIMD4(repeating: 1), role: 1, paired: paired)
-            self.map?.triggerRepaint()
+        contextTiles.onFocusCoverage = { [weak self] ready, edges, paired in
+            guard let self else { return }
+            if self.tile == ready { self.renderLayer?.setTileCoverage(edges: edges, role: 1, paired: paired) }
+            if self.outgoingTile == ready { self.outgoingHost?.setTileCoverage(edges: edges, role: 1, paired: paired) }
         }
         contextTiles.setReducedEffects(reducesEffects, waterMotion: !UIAccessibility.isReduceMotionEnabled)
-        contextTiles.setFocusMask(tile: tile, reveal: revealClock == nil ? .zero : revealUniform)
+        if shown { contextTiles.setFocusMask(tile: tile, reveal: revealClock == nil ? .zero : revealUniform) }
         contextTiles.update(focus: tile, config: config, map: map, visible: state.visibleCategories,
-                            time: state.timeOfDay, wireframe: state.showsWireframe)
+                            time: state.timeOfDay, wireframe: state.showsWireframe, priorityTiles: visibleTilePriority)
+        if let retry = contextTiles.retryDelay { scheduleUpdate(delay: retry) }
     }
 
     private func retireOutgoing() {

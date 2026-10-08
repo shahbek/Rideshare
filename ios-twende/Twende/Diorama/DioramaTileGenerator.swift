@@ -43,7 +43,7 @@ nonisolated struct DioramaTileArtifacts: Sendable {
     }
 
     let tile: DioramaTileID
-    let vertices: [BuildingRenderVertex]
+    var vertices: [BuildingRenderVertex]
     let indices: [UInt32]
     let ranges: [DioramaRenderLayer.Range]
     let groups: [DioramaInstanceGroup]
@@ -61,6 +61,34 @@ nonisolated struct DioramaTileArtifacts: Sendable {
     var hasMapboxCoverage: Bool = false
     var optimizationReport: [String] = []
     var stageTimings: [String] = []
+    /// Transient read-time preparation; never part of the archive schema or visual patch identity.
+    var renderMaterialsPrepared: Bool = false
+    var renderMaterialCounts: SIMD2<Int> = .zero
+    var renderPoolBounds: DioramaRenderLayer.Range?
+
+    mutating func prepareForRendering() {
+        guard !renderMaterialsPrepared else { return }
+        let tagged = DioramaLegacyFoliageMaterial.tagged(vertices, indices: indices, ranges: ranges, groups: groups)
+        vertices = tagged.vertices
+        renderMaterialCounts = SIMD2(tagged.count, tagged.architectureCount)
+        var low = SIMD3<Float>(repeating: .greatestFiniteMagnitude)
+        var high = SIMD3<Float>(repeating: -.greatestFiniteMagnitude)
+        for vertex in vertices where vertex.appearance.y > 4.5 && vertex.appearance.y < 5.5 && vertex.appearance.w < 0.5 {
+            let point = SIMD3(vertex.position.x, vertex.position.y, vertex.position.z)
+            low = simd_min(low, point); high = simd_max(high, point)
+        }
+        renderPoolBounds = low.x <= high.x ? .init(category: .water, start: 0, count: 0, minimum: low, maximum: high) : nil
+        renderMaterialsPrepared = true
+    }
+
+    var decodedBytes: Int {
+        totalBytes + groups.reduce(0) { $0 + $1.instances.count * MemoryLayout<DioramaInstanceData>.stride }
+            + (groundImage?.paint.triangles.count ?? 0) * MemoryLayout<DioramaPaintTriangle>.stride
+            + (groundImage?.paint.table.count ?? 0) * MemoryLayout<SIMD2<UInt32>>.stride
+            + (groundImage?.paint.indices.count ?? 0) * MemoryLayout<UInt32>.stride
+            + lightGrid.lights.count * MemoryLayout<DioramaShaderLight>.stride
+            + lightGrid.table.count * MemoryLayout<SIMD2<UInt32>>.stride + lightGrid.indices.count * MemoryLayout<UInt32>.stride
+    }
 
     /// Unique triangles in the buffers (each prototype counted once, not per placement).
     var totalTriangles: Int { indices.count / 3 }

@@ -33,6 +33,7 @@ final class DioramaContextTiles {
     private var revision: UInt = 0
     private var retryAfter: [DioramaTileID: Date] = [:]
     private var availability: String = ""
+    private var wantedTiles: [DioramaTileID] = []
     private weak var map: MapboxMap?
     private var visible: Set<DioramaCategory> = []
     private var time: DioramaTimeOfDay = .dusk
@@ -40,7 +41,7 @@ final class DioramaContextTiles {
     private var reducedEffects: Bool = false
     var onReady: ((DioramaTileID) -> Void)?
     var onUnavailable: ((DioramaTileID) -> Void)?
-    var onFocusFallback: ((DioramaTileID, Bool) -> Void)?
+    var onFocusCoverage: ((DioramaTileID, SIMD4<Float>, Bool) -> Void)?
     var onWaterVisibilityChanged: (() -> Void)?
 
     func groundHeight(at point: GeoPoint) -> Double? {
@@ -48,6 +49,12 @@ final class DioramaContextTiles {
         return residents[tile]?.host.groundHeight(at: point)
     }
 
+    func isReady(_ tile: DioramaTileID) -> Bool { residents[tile]?.connection == 1 && residents[tile]?.isRemoving != true }
+    var retryDelay: TimeInterval? {
+        let now = Date()
+        return wantedTiles.filter { residents[$0] == nil }.compactMap { retryAfter[$0] }
+            .filter { $0 > now }.min().map { max(0.1, $0.timeIntervalSince(now)) }
+    }
     var isTransitioning: Bool { residents.values.contains { $0.isRemoving } || !retirements.isEmpty }
     var hasWaterInView: Bool { residents.values.contains { $0.host.hasWaterInView } }
     var report: String {
@@ -63,18 +70,15 @@ final class DioramaContextTiles {
     }
 
     func update(focus next: DioramaTileID, config: DioramaConfig, map: MapboxMap,
-                visible: Set<DioramaCategory>, time: DioramaTimeOfDay, wireframe: Bool) {
+                visible: Set<DioramaCategory>, time: DioramaTimeOfDay, wireframe: Bool,
+                priorityTiles: [DioramaTileID] = []) {
         self.map = map; self.visible = visible; self.time = time; self.wireframe = wireframe
         for resident in residents.values {
             resident.host.setVisible(visible, timeOfDay: time)
             resident.host.setWireframe(wireframe)
         }
         let sameFocus = focus == next
-        guard !sameFocus || task == nil else { return }
-        cancelPendingInstallations()
-        focus = next
-        let expected = revision
-        let tiles = (-1...1).flatMap { y in (-1...1).compactMap { x -> DioramaTileID? in
+        let ring = (-1...1).flatMap { y in (-1...1).compactMap { x -> DioramaTileID? in
             let tile = DioramaTileID(z: next.z, x: next.x + x, y: next.y + y)
             return DioramaOfflineStore.tiles.contains(tile) ? tile : nil
         }}.sorted {
@@ -83,10 +87,22 @@ final class DioramaContextTiles {
             let b = $1 == next ? 10 : abs($1.x - next.x) + abs($1.y - next.y)
             return a == b ? $0.key < $1.key : a < b
         }
-        let wanted = Set(tiles)
-        if sameFocus && tiles.allSatisfy({ residents[$0] != nil || (retryAfter[$0] ?? .distantPast) > Date() }) { return }
+        var seen: Set<DioramaTileID> = []
+        let ordered = (priorityTiles.filter { $0 != next || fullMasks[next] == nil } + ring.filter { $0 != next }
+            + fullMasks.keys.filter { $0 != next }.sorted { $0.key < $1.key } + [next])
+            .filter { DioramaOfflineStore.tiles.contains($0) && seen.insert($0).inserted }
+        let tiles = Array(ordered.prefix(9))
+        let wanted = Set(tiles).union(fullMasks.keys)
+        if sameFocus && Set(wantedTiles) == Set(tiles) && task != nil { return }
+        if sameFocus && wantedTiles == tiles && tiles.allSatisfy({
+            (residents[$0] != nil && residents[$0]?.isRemoving != true) || (retryAfter[$0] ?? .distantPast) > Date()
+        }) { return }
+        cancelPendingInstallations()
+        wantedTiles = tiles; focus = next
+        let expected = revision
         for (tile, resident) in residents {
-            if !wanted.contains(tile) { removeAnimated(tile) }
+            // Streaming eviction has no animated offscreen wait; explicit whole-scene exits still retract.
+            if !wanted.contains(tile) { removeNow(tile) }
             else if resident.isRemoving {
                 resident.transition?.cancel(); resident.isRemoving = false
                 animateArrival(tile, resident: resident)
@@ -95,9 +111,7 @@ final class DioramaContextTiles {
         task = Task { [weak self] in
             guard let self else { return }
             defer { if self.revision == expected { self.task = nil } }
-            // Keep departing hosts inside the same packed/resident admission budget until invisible.
-            let departures = self.residents.values.filter(\.isRemoving).compactMap(\.transition)
-            for departure in departures { await departure.value }
+            // Each installation yields to UI work; saved reads run off-main in the bounded store.
             for tile in tiles {
                 guard !Task.isCancelled, self.revision == expected else { return }
                 if let resident = self.residents[tile] {
@@ -111,18 +125,29 @@ final class DioramaContextTiles {
                     return await DioramaOfflineStore.shared.read(tile, context: true)
                 }
                 let artifacts = await withTaskCancellationHandler { await job.value } onCancel: { job.cancel() }
-                guard !Task.isCancelled, self.revision == expected else { return }
+                guard !Task.isCancelled, self.revision == expected,
+                      UIApplication.shared.applicationState == .active else { return }
                 guard let artifacts else {
                     self.retryAfter[tile] = Date().addingTimeInterval(30)
                     self.availability = " · saved context read unavailable"
                     print("[Diorama context] \(tile.key): saved read unavailable; retained scenery, retry on camera update")
                     self.onUnavailable?(tile); continue
                 }
-                if tile != next, self.residents[next] != nil,
+                if tile != next, self.fullMasks[next] != nil, self.residents[next] != nil,
                    self.residents.values.reduce(0, { $0 + $1.bytes }) + artifacts.totalBytes > 64 * 1_048_576 {
-                    self.removeAnimated(next)
-                    if let departure = self.residents[next]?.transition { await departure.value }
+                    self.removeNow(next)
                     guard !Task.isCancelled, self.revision == expected else { return }
+                }
+                if priorityTiles.contains(tile) {
+                    // Visible scenery outranks speculative ring residents, not merely read order.
+                    let victims = self.residents.keys.filter {
+                        $0 != tile && self.fullMasks[$0] == nil && !priorityTiles.contains($0)
+                    }.sorted { (tiles.firstIndex(of: $0) ?? Int.max) > (tiles.firstIndex(of: $1) ?? Int.max) }
+                    for victim in victims {
+                        if self.residents.count < 9,
+                           self.residents.values.reduce(0, { $0 + $1.bytes }) + artifacts.totalBytes <= 64 * 1_048_576 { break }
+                        self.removeNow(victim)
+                    }
                 }
                 guard self.residents.count < 9,
                       self.residents.values.reduce(0, { $0 + $1.bytes }) + artifacts.totalBytes <= 64 * 1_048_576 else {
@@ -133,6 +158,7 @@ final class DioramaContextTiles {
                 }
                 self.retryAfter[tile] = nil
                 self.install(artifacts, config: config)
+                await Task.yield()
             }
         }
     }
@@ -142,8 +168,9 @@ final class DioramaContextTiles {
         fullMasks[tile] = reveal
         if let resident = residents[tile] {
             applyCoverage(tile, resident: resident)
-            onFocusFallback?(tile, resident.connection >= 1)
+            onFocusCoverage?(tile, connectedEdges(for: tile), resident.connection >= 1)
         }
+        refreshConnections()
     }
 
     func pauseLoading() { cancelPendingInstallations(); focus = nil }
@@ -151,13 +178,13 @@ final class DioramaContextTiles {
 
     private func cancelPendingInstallations() { task?.cancel(); task = nil; revision &+= 1 }
 
-    /// Immediate teardown is reserved for a style/screen destruction; visible exits use retractAll.
+    /// Whole-scene exits retract; offscreen streaming eviction and style destruction remove directly.
     func clear() {
         cancelPendingInstallations()
         for retirement in retirements.values { retirement.cancel() }
         retirements.removeAll()
         for tile in Array(residents.keys) { removeNow(tile) }
-        fullMasks.removeAll(); retryAfter.removeAll(); availability = ""; focus = nil
+        fullMasks.removeAll(); retryAfter.removeAll(); wantedTiles.removeAll(); availability = ""; focus = nil
     }
 
     func retractAll() {
@@ -167,11 +194,18 @@ final class DioramaContextTiles {
 
     func retire(host: DioramaRenderLayer, tile: DioramaTileID, completion: @escaping () -> Void) {
         guard retirements[tile] == nil else { return }
+        if residents[tile]?.connection == 1 {
+            fullMasks[tile] = nil
+            refreshConnections()
+            completion()
+            map?.triggerRepaint()
+            return
+        }
         let extent = max(abs(host.revealBounds.minimum.x), abs(host.revealBounds.maximum.x),
                          abs(host.revealBounds.minimum.y), abs(host.revealBounds.maximum.y))
             + DioramaRevealStyle.support + 50
         let paired = residents[tile]?.connection == 1
-        host.setTileCoverage(edges: SIMD4(repeating: 1), role: 1, paired: paired)
+        host.setTileCoverage(edges: connectedEdges(for: tile), role: 1, paired: paired)
         retirements[tile] = Task { [weak self, weak host] in
             guard let self, let host else { return }
             let finished = await DioramaTileTransition.run(host: host, from: extent,
@@ -182,7 +216,7 @@ final class DioramaContextTiles {
             guard !Task.isCancelled else { return }
             self.retirements[tile] = nil
             self.fullMasks[tile] = nil
-            if let resident = self.residents[tile] { self.applyCoverage(tile, resident: resident) }
+            self.refreshConnections()
             if !finished { print("[Diorama context] retirement unavailable; basemap fallback") }
             completion()
             self.map?.triggerRepaint()
@@ -198,7 +232,6 @@ final class DioramaContextTiles {
             if map.sourceExists(withId: id(tile) + "-source") { try? map.removeSource(withId: id(tile) + "-source") }
         }
         residents[tile] = nil
-        onFocusFallback?(tile, false)
         refreshConnections()
     }
 
@@ -220,31 +253,27 @@ final class DioramaContextTiles {
         }
     }
 
+    private func connectedEdges(for tile: DioramaTileID) -> SIMD4<Float> {
+        func exposed(_ x: Int, _ y: Int) -> Float {
+            let neighbour = tile.offset(dx: x, dy: y)
+            if fullMasks[neighbour] != nil { return 0 }
+            if let resident = residents[neighbour], resident.connection >= 1, !resident.isRemoving { return 0 }
+            return 1
+        }
+        return SIMD4(exposed(-1, 0), exposed(0, 1), exposed(1, 0), exposed(0, -1))
+    }
+
     private func applyCoverage(_ tile: DioramaTileID, resident: Resident) {
-        func boundary(_ resident: Resident, side: Int) -> Float {
-            let rect = resident.rect
-            let point: SIMD3<Float>
-            switch side {
-            case 0: point = SIMD3(Float(rect.minX), 0, 0)
-            case 1: point = SIMD3(0, Float(rect.minY), 0)
-            case 2: point = SIMD3(Float(rect.maxX), 0, 0)
-            default: point = SIMD3(0, Float(rect.maxY), 0)
-            }
-            return DioramaRevealStyle.coverage(point, reveal: SIMD4(0, 0, resident.currentExtent, 1))
-        }
-        func connection(_ x: Int, _ y: Int, side: Int) -> Float {
-            guard let neighbour = residents[DioramaTileID(z: tile.z, x: tile.x + x, y: tile.y + y)] else { return 0 }
-            return min(boundary(resident, side: side), boundary(neighbour, side: (side + 2) % 4))
-        }
-        let edges = SIMD4(1 - connection(-1, 0, side: 0), 1 - connection(0, 1, side: 1),
-                          1 - connection(1, 0, side: 2), 1 - connection(0, -1, side: 3))
         let paired = fullMasks[tile] != nil
-        resident.host.setTileCoverage(edges: edges, role: paired ? 2 : 0, paired: paired)
+        resident.host.setTileCoverage(edges: connectedEdges(for: tile), role: paired ? 2 : 0, paired: paired)
         resident.host.setReveal(fullMasks[tile] ?? .zero)
     }
 
     private func refreshConnections() {
         for (tile, resident) in residents { applyCoverage(tile, resident: resident) }
+        for tile in fullMasks.keys {
+            onFocusCoverage?(tile, connectedEdges(for: tile), residents[tile]?.connection == 1)
+        }
     }
 
     private func animateArrival(_ tile: DioramaTileID, resident: Resident) {
@@ -276,7 +305,7 @@ final class DioramaContextTiles {
             resident.host.setLifecycleReveal(.zero)
             resident.connection = 1
             self.refreshConnections()
-            self.onFocusFallback?(tile, self.fullMasks[tile] != nil)
+            self.onFocusCoverage?(tile, self.connectedEdges(for: tile), self.fullMasks[tile] != nil)
             self.onReady?(tile)
             self.map?.triggerRepaint()
         }
@@ -302,24 +331,39 @@ final class DioramaContextTiles {
     private func install(_ artifacts: DioramaTileArtifacts, config: DioramaConfig) {
         guard let map else { return }
         let tile = artifacts.tile
+        let installedAt = CACurrentMediaTime()
         let host = DioramaRenderLayer(origin: tile.centre, vertices: artifacts.vertices, indices: artifacts.indices,
             ranges: artifacts.ranges, groups: artifacts.groups, instances: artifacts.allInstances, lightGrid: artifacts.lightGrid, waterHeight: artifacts.waterHeight,
             groundImage: artifacts.groundImage, groundRect: DioramaProjection(origin: tile.centre).rect(of: tile),
-            visible: visible, timeOfDay: time, animates: true, config: config, contextOnly: true)
+            visible: visible, timeOfDay: time, animates: true, config: config, contextOnly: true,
+            materialsPrepared: artifacts.renderMaterialsPrepared, materialCounts: artifacts.renderMaterialCounts,
+            preparedPoolBounds: artifacts.renderPoolBounds)
         host.onWaterVisibilityChanged = { [weak self] in
             Task { @MainActor [weak self] in self?.onWaterVisibilityChanged?() }
         }
         host.onLifecycleCompleted = { [weak self] in
             Task { @MainActor [weak self] in
-                guard let self, let resident = self.residents[tile], resident.transition == nil,
-                      !resident.isRemoving, resident.connection < 1, self.focus != nil else { return }
-                self.animateArrival(tile, resident: resident)
+                guard let self, let resident = self.residents[tile], !resident.isRemoving,
+                      resident.connection < 1, self.focus != nil else { return }
+                resident.connection = 1
+                print("[Diorama context] \(tile.key): install-to-completed-frame=\(String(format: "%.3f", CACurrentMediaTime() - installedAt))s")
+                self.refreshConnections()
+                self.onReady?(tile)
+                self.map?.triggerRepaint()
+            }
+        }
+        host.onInitializationFailed = { [weak self, weak host] in
+            Task { @MainActor [weak self, weak host] in
+                guard let self, let host, self.residents[tile]?.host === host else { return }
+                self.retryAfter[tile] = Date().addingTimeInterval(30)
+                self.removeNow(tile); self.onUnavailable?(tile)
             }
         }
         host.setReducedEffects(reducedEffects); host.setWireframe(wireframe)
         host.setWaterMotion(!UIAccessibility.isReduceMotionEnabled)
         let resident = Resident(host: host, artifacts: artifacts)
-        host.setLifecycleReveal(SIMD4(0, 0, resident.currentExtent, 1))
+        resident.currentExtent = resident.extent
+        host.setLifecycleReveal(.zero)
         residents[tile] = resident
         applyCoverage(tile, resident: resident)
         do {
@@ -332,7 +376,8 @@ final class DioramaContextTiles {
             clip.slot = .top; clip.clipLayerScope = .constant(["basemap"]); clip.clipLayerTypes = .constant([.model])
             try map.addLayer(clip)
             print("[Diorama context] \(tile.key): installed bytes=\(resident.bytes) triangles=\(resident.triangles)")
-            animateArrival(tile, resident: resident)
+            updateClip(tile, extent: resident.extent)
+            refreshConnections()
             map.triggerRepaint()
         } catch {
             retryAfter[tile] = Date().addingTimeInterval(30)

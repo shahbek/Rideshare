@@ -7,8 +7,11 @@ nonisolated enum DioramaLegacyFoliageMaterial {
                        ranges: [DioramaRenderLayer.Range], groups: [DioramaInstanceGroup]) -> (vertices: [BuildingRenderVertex], count: Int, architectureCount: Int) {
         var vertices = source
         var count = 0
+        var visitedFoliage: Set<SIMD3<Int>> = []
+        var visitedArchitecture: Set<SIMD2<Int>> = []
         func visit(start: Int, count indexCount: Int, hedgeOnly: Bool) {
-            guard start >= 0, start <= indices.count, indexCount >= 0, indexCount <= indices.count - start else { return }
+            guard start >= 0, start <= indices.count, indexCount >= 0, indexCount <= indices.count - start,
+                  visitedFoliage.insert(SIMD3(start, indexCount, hedgeOnly ? 1 : 0)).inserted else { return }
             for offset in start..<(start + indexCount) {
                 let index = Int(indices[offset])
                 guard index < vertices.count else { continue }
@@ -37,7 +40,8 @@ nonisolated enum DioramaLegacyFoliageMaterial {
             return SIMD3(Float((hex >> 16) & 255), Float((hex >> 8) & 255), Float(hex & 255)) / 255
         }
         func architecture(start: Int, count indexCount: Int) {
-            guard start >= 0, indexCount >= 0, start <= indices.count, indexCount <= indices.count - start else { return }
+            guard start >= 0, indexCount >= 0, start <= indices.count, indexCount <= indices.count - start,
+                  visitedArchitecture.insert(SIMD2(start, indexCount)).inserted else { return }
             for offset in start..<(start + indexCount) {
                 let index = Int(indices[offset])
                 guard index < vertices.count else { continue }

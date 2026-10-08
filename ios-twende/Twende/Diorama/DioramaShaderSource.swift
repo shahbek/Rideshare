@@ -172,13 +172,14 @@ nonisolated enum DioramaShaderSource {
         return 1.0 - smoothstep(-\(DioramaRevealStyle.feather), \(DioramaRevealStyle.feather), dioramaFieldDistance(p, field));
     }
     float dioramaEdgeCoverage(float3 p, float4 edges, constant DioramaUniforms &u) {
+        if (all(edges <= float4(0.0))) return 1.0;
         float4 d = float4(p.xy - u.tileBounds.xy, u.tileBounds.zw - p.xy);
         if (all((d >= float4(\(DioramaRevealStyle.edgeWidth))) | (edges <= float4(0.0)))) return 1.0;
         float4 c = 1.0 - edges * (1.0 - smoothstep(float4(0.0), float4(\(DioramaRevealStyle.edgeWidth)), d));
         return c.x * c.y * c.z * c.w;
     }
     float dioramaFocusCoverage(float3 p, constant DioramaUniforms &u) {
-        return dioramaFieldCoverage(p, u.reveal) * dioramaEdgeCoverage(p, float4(1.0), u);
+        return dioramaFieldCoverage(p, u.reveal) * dioramaEdgeCoverage(p, u.tileEdges, u);
     }
     float dioramaRevealCoverage(float3 p, constant DioramaUniforms &u) {
         float focus = u.tileState.y > 1.5 ? 1.0 - dioramaFocusCoverage(p, u) : dioramaFieldCoverage(p, u.reveal);
@@ -635,7 +636,10 @@ nonisolated enum DioramaShaderSource {
                 float2 tangent = normalize(float2(-surfaceNormal.y, surfaceNormal.x) + float2(0.0001, 0.0));
                 detailUV = float2(dot(vegetationPosition, tangent), surfacePosition.z) / repeatSize;
             }
-            float resolved = 1.0 - smoothstep(0.04, 0.16, max(length(dfdx(detailUV)), length(dfdy(detailUV))));
+            float footprint = max(length(dfdx(detailUV)), length(dfdy(detailUV)));
+            // Blade relief must resolve across several physical pixels, not a 2×2 derivative quad.
+            float resolved = grassSurface ? 1.0 - smoothstep(0.008, 0.030, footprint)
+                : 1.0 - smoothstep(0.04, 0.16, footprint);
             constexpr sampler detailSampler(coord::normalized, address::repeat, filter::linear, mip_filter::linear, max_anisotropy(8));
             float4 grain = microdetail.sample(detailSampler, detailUV);
             float value = (grassSurface || foliage) ? grain.r : grain.g;
@@ -651,6 +655,16 @@ nonisolated enum DioramaShaderSource {
                 float3 gradient = (rx * dfdx(height) + ry * dfdy(height)) * sign(determinant);
                 if (abs(determinant) > 1e-8) {
                     float3 slope = gradient / abs(determinant);
+                    if (grassSurface && resolved > 0.001) {
+                        // Texture-space finite differences are continuous per fragment; screen-space
+                        // height derivatives otherwise create square normals on each fragment quad.
+                        float step = max(1.0 / float(microdetail.get_width()), footprint);
+                        float hx = microdetail.sample(detailSampler, detailUV + float2(step, 0.0)).a;
+                        float hy = microdetail.sample(detailSampler, detailUV + float2(0.0, step)).a;
+                        float2 dh = float2(hx - relief, hy - relief) * (0.012 / (step * repeatSize)) * u.materialFrame.z;
+                        slope = float3(dh, 0.0);
+                        slope -= surfaceNormal * dot(slope, surfaceNormal);
+                    }
                     slope *= min(1.0, 0.45 / max(length(slope), 1e-6));
                     // Bounded tilt avoids projection-seam spikes; geometric shadow normals stay intact.
                     float3 reliefNormal = normalize(surfaceNormal - slope * 0.65);

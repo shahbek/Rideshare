@@ -10,6 +10,30 @@ actor DioramaOfflineStore {
         return (nw.y...se.y).flatMap { y in (nw.x...se.x).map { DioramaTileID(z: 16, x: $0, y: y) } }
     }()
 
+    private struct ReadKey: Hashable, Sendable {
+        let tile: DioramaTileID
+        let context: Bool
+    }
+    private struct CachedRead {
+        let artifact: DioramaTileArtifacts
+        var access: UInt
+    }
+    private struct ReadWaiter {
+        let focus: Bool
+        let continuation: CheckedContinuation<Void, Never>
+    }
+    private var directoryNames: [String]?
+    private var candidates: [ReadKey: [String]] = [:]
+    private var inFlight: [ReadKey: Task<DioramaTileArtifacts?, Never>] = [:]
+    private var readIdentities: [ReadKey: UUID] = [:]
+    private var decoded: [ReadKey: CachedRead] = [:]
+    private var access: UInt = 0
+    private var readConsumers: [UUID: Set<UUID>] = [:]
+    private var dataRevision: UInt = 0
+    private var activeReads: Int = 0
+    private var waiters: [ReadWaiter] = []
+    private let decodedBudget: Int = 64 * 1_048_576
+
     private var root: URL {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("MasakiOffline", isDirectory: true)
@@ -28,22 +52,107 @@ actor DioramaOfflineStore {
         let free = try root.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]).volumeAvailableCapacityForImportantUsage ?? 0
         guard free > 900 * 1_048_576 else { throw Failure.storage }
     }
+    /// Deduplicated local reads; at most two decompressions run, with focus ahead of queued context.
     func read(_ tile: DioramaTileID, context: Bool = false) async -> DioramaTileArtifacts? {
-        for name in candidateNames(tile, context: context) {
-            if Task.isCancelled { return nil }
-            let directory = root.appendingPathComponent(name)
-            do {
-                let artifact = try DioramaTileArchive.read(from: directory, key: name)
-                guard artifact.tile == tile else { continue }
-                return await DioramaVisualUpgrade.shared.apply(artifact, directory: directory, context: context)
-            } catch {
-                // Keep user-owned bytes on transient I/O/decode failure; try an older compatible copy.
-                continue
+        guard !Task.isCancelled else { return nil }
+        let request = ReadKey(tile: tile, context: context)
+        access &+= 1
+        if var cached = decoded[request] {
+            cached.access = access; decoded[request] = cached
+            print("[Diorama load] \(tile.key) context=\(context) decoded-cache hit")
+            return cached.artifact
+        }
+        if let pending = inFlight[request], !pending.isCancelled, let identity = readIdentities[request] {
+            return await consume(pending, identity: identity)
+        }
+        let identity = UUID()
+        let names = candidateNames(tile, context: context)
+        let directory = root
+        let revision = dataRevision
+        let started = Date()
+        let job = Task.detached(priority: context ? .utility : .userInitiated) { [weak self] () -> DioramaTileArtifacts? in
+            guard let self else { return nil }
+            await self.acquireReadSlot(focus: !context)
+            guard !Task.isCancelled else { await self.releaseReadSlot(); return nil }
+            let decode = Task.detached(priority: context ? .utility : .userInitiated) { () -> DioramaTileArtifacts? in
+                for name in names {
+                    if Task.isCancelled { return nil }
+                    let location = directory.appendingPathComponent(name)
+                    do {
+                        let artifact = try DioramaTileArchive.read(from: location, key: name)
+                        guard artifact.tile == tile else { continue }
+                        var result = await DioramaVisualUpgrade.shared.apply(artifact, directory: location, context: context)
+                        guard !Task.isCancelled else { return nil }
+                        result.prepareForRendering()
+                        return result
+                    } catch {
+                        // Keep user-owned bytes and try an older compatible copy.
+                        continue
+                    }
+                }
+                return nil
+            }
+            let result = await withTaskCancellationHandler { await decode.value } onCancel: { decode.cancel() }
+            await self.releaseReadSlot()
+            return result
+        }
+        inFlight[request] = job; readIdentities[request] = identity
+        let result = await consume(job, identity: identity)
+        guard revision == dataRevision, readIdentities[request] == identity else { return nil }
+        inFlight[request] = nil; readIdentities[request] = nil
+        if let result, result.decodedBytes <= decodedBudget {
+            access &+= 1
+            decoded[request] = CachedRead(artifact: result, access: access)
+            while decoded.values.reduce(0, { $0 + $1.artifact.decodedBytes }) > decodedBudget,
+                  let oldest = decoded.min(by: { $0.value.access < $1.value.access })?.key {
+                decoded[oldest] = nil
             }
         }
-        return nil
+        print("[Diorama load] \(tile.key) context=\(context) saved-to-ready=\(String(format: "%.3f", Date().timeIntervalSince(started)))s bytes=\(result?.totalBytes ?? 0)")
+        return Task.isCancelled ? nil : result
+    }
+
+    private func consume(_ job: Task<DioramaTileArtifacts?, Never>, identity: UUID) async -> DioramaTileArtifacts? {
+        let consumer = UUID()
+        readConsumers[identity, default: []].insert(consumer)
+        let result = await withTaskCancellationHandler {
+            await job.value
+        } onCancel: {
+            Task { await self.cancelConsumer(consumer, identity: identity, job: job) }
+        }
+        cancelConsumer(consumer, identity: identity, job: job)
+        return Task.isCancelled ? nil : result
+    }
+
+    private func cancelConsumer(_ consumer: UUID, identity: UUID, job: Task<DioramaTileArtifacts?, Never>) {
+        guard readConsumers[identity]?.remove(consumer) != nil else { return }
+        if readConsumers[identity]?.isEmpty == true {
+            readConsumers[identity] = nil
+            job.cancel()
+        }
+    }
+
+    private func acquireReadSlot(focus: Bool) async {
+        if activeReads < 2 { activeReads += 1; return }
+        await withCheckedContinuation { waiters.append(ReadWaiter(focus: focus, continuation: $0)) }
+    }
+
+    private func releaseReadSlot() {
+        if let index = waiters.firstIndex(where: \.focus) ?? waiters.indices.first {
+            waiters.remove(at: index).continuation.resume()
+        } else { activeReads -= 1 }
+    }
+
+    func releaseDecodedMemory() { decoded.removeAll() }
+
+    private func invalidateReads() {
+        dataRevision &+= 1
+        for job in inFlight.values { job.cancel() }
+        inFlight.removeAll(); readIdentities.removeAll(); readConsumers.removeAll()
+        decoded.removeAll(); candidates.removeAll(); directoryNames = nil
     }
     func save(_ artifact: DioramaTileArtifacts, context: Bool) throws {
+        invalidateReads()
         try checkSpace()
         let name = key(artifact.tile, context: context)
         let destination = root.appendingPathComponent(name)
@@ -108,14 +217,20 @@ actor DioramaOfflineStore {
     private func candidateNames(_ tile: DioramaTileID, context: Bool) -> [String] {
         let current = key(tile, context: context)
         let suffix = String(current.drop(while: { $0 != "-" }))
-        let entries = (try? FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)) ?? []
-        let older = entries.map(\.lastPathComponent).filter { name in
+        let request = ReadKey(tile: tile, context: context)
+        if let cached = candidates[request] { return cached }
+        if directoryNames == nil {
+            directoryNames = (try? FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil))?.map(\.lastPathComponent) ?? []
+        }
+        let older = (directoryNames ?? []).filter { name in
             guard name != current, name.hasPrefix("v"), name.hasSuffix(suffix),
                   let prefix = name.split(separator: "-").first,
                   let version = Int(prefix.dropFirst()) else { return false }
             return version <= DioramaConfig.slipway.generatorVersion
         }.sorted { $0.compare($1, options: .numeric) == .orderedDescending }
-        return [current] + older
+        let names = [current] + older
+        candidates[request] = names
+        return names
     }
     private func validFiles(_ tile: DioramaTileID, context: Bool) -> Bool {
         candidateNames(tile, context: context).contains { validFiles(name: $0) }
@@ -137,6 +252,7 @@ actor DioramaOfflineStore {
         }
     }
     func removeAll() throws {
+        invalidateReads()
         if FileManager.default.fileExists(atPath: root.path) { try FileManager.default.removeItem(at: root) }
     }
     nonisolated enum Failure: LocalizedError {

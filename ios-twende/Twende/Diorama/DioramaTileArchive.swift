@@ -160,12 +160,19 @@ nonisolated enum DioramaTileArchive {
                           block.bytes <= output.count - offset, block.stored > 0, block.stored <= blockSize + 65536 else { throw ArchiveError.invalid }
                     let data = try Data(contentsOf: directory.appendingPathComponent(block.file), options: .mappedIfSafe)
                     guard data.count == block.stored, digest(data) == block.sha256 else { throw ArchiveError.invalid }
-                    let raw = block.compressed ? try decompress(data, count: block.bytes) : data
-                    guard raw.count == block.bytes else { throw ArchiveError.invalid }
-                    raw.withUnsafeBytes { source in
-                        output.baseAddress?.advanced(by: offset).copyMemory(from: source.baseAddress!, byteCount: raw.count)
+                    guard let destination = output.baseAddress?.advanced(by: offset) else { throw ArchiveError.invalid }
+                    try data.withUnsafeBytes { source in
+                        guard let address = source.baseAddress else { throw ArchiveError.invalid }
+                        if block.compressed {
+                            let decoded = compression_decode_buffer(destination.assumingMemoryBound(to: UInt8.self), block.bytes,
+                                address.assumingMemoryBound(to: UInt8.self), data.count, nil, COMPRESSION_LZFSE)
+                            guard decoded == block.bytes else { throw ArchiveError.invalid }
+                        } else {
+                            guard data.count == block.bytes else { throw ArchiveError.invalid }
+                            destination.copyMemory(from: address, byteCount: block.bytes)
+                        }
                     }
-                    offset += raw.count
+                    offset += block.bytes
                 }
                 guard offset == output.count else { throw ArchiveError.invalid }
             }

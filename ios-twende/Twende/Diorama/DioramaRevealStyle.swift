@@ -38,7 +38,7 @@ nonisolated enum DioramaRevealStyle {
         let transition = coverage(p, reveal: reveal)
         let outer = edgeCoverage(p, bounds: bounds, edges: edges, frame: frame)
         if state.y > 1.5 {
-            let full = transition * edgeCoverage(p, bounds: bounds, edges: SIMD4(repeating: 1), frame: frame)
+            let full = transition * edgeCoverage(p, bounds: bounds, edges: edges, frame: frame)
             return outer * (1 - full) * state.x
         }
         return outer * transition * state.x

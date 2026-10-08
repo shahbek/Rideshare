@@ -271,7 +271,7 @@ extension TripMapView {
                 .store(in: &settingsCancelables)
             mapView.mapboxMap.onMapLoaded.observe { [weak self] _ in
                 self?.refreshBuildingHighlight(immediately: true)
-                self?.diorama?.scheduleUpdate(delay: 1.1)
+                self?.diorama?.scheduleUpdate(delay: 0)
             }.store(in: &cancelables)
             mapView.mapboxMap.onMapIdle.observe { [weak self] _ in
                 guard let self else { return }
@@ -279,7 +279,7 @@ extension TripMapView {
                 self.reportSelectionCoordinate()
                 self.refreshBuildingHighlight(immediately: true)
                 if let map = self.mapView?.mapboxMap { self.airtelHouse.update(on: map, settled: true) }
-                self.diorama?.scheduleUpdate(delay: 1.1)
+                self.diorama?.scheduleUpdate(delay: 0.05)
             }.store(in: &cancelables)
             mapView.mapboxMap.onStyleLoaded.observe { [weak self] _ in
                 guard let self else { return }
@@ -327,7 +327,7 @@ extension TripMapView {
                 if let mapView = self.mapView, self.parent.onBillboardTap != nil {
                     for teaser in self.billboardTeasers { teaser.update(on: mapView) }
                 }
-                self.diorama?.scheduleUpdate(delay: 0.3)
+                self.diorama?.scheduleUpdate(delay: 0.08)
                 self.scheduleCameraSettlement()
             }.store(in: &cancelables)
             mapView.gestures.onMapTap.observe { [weak self] context in
@@ -510,6 +510,7 @@ extension TripMapView {
             guard let mapView else { return }
             if state.isEnabled, diorama == nil {
                 let manager = DioramaTileManager()
+                manager.viewportBounds = { [weak mapView] in mapView?.bounds ?? .zero }
                 manager.setBasemapTerrainEnabled = { [weak self] enabled in
                     guard let self else { return }
                     self.dioramaOwnsGround = !enabled
