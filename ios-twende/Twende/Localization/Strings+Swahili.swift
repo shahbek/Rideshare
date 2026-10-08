@@ -57,6 +57,8 @@ extension Strings {
         case .saveChanges: "Hifadhi mabadiliko"
         case .menu: "Menyu"
         case .recentre: "Rudisha ramani"
+        case .birdsEye: "Mwonekano kutoka juu"
+        case .birdsEyeHint: "Tazama moja kwa moja kutoka juu bila kubadilisha eneo au ukuzaji. Tumia vidole viwili kuinamisha ramani tena."
         case .request: "Omba"
         case .notNow: "Si sasa"
         case .tryAgain: "Jaribu tena"

@@ -25,6 +25,8 @@ nonisolated struct DioramaShaderUniforms {
     var waterShallow: SIMD4<Float>
     /// x/y: ground image origin (local metres), z/w: 1 / image extent in metres.
     var groundImage: SIMD4<Float>
+    /// xy: stable peninsula-space material origin, z: local-to-reference scale; w reserved.
+    var materialFrame: SIMD4<Float>
     /// x: ambient-occlusion strength (0 disables sampling), y: bloom strength, z: grade strength,
     /// w: haze density per metre.
     var post: SIMD4<Float>
@@ -81,6 +83,7 @@ nonisolated enum DioramaLighting {
             waterDeep: .zero,
             waterShallow: .zero,
             groundImage: .zero,
+            materialFrame: SIMD4(0, 0, 1, 0),
             post: .zero,
             reveal: .zero
         )
@@ -120,6 +123,7 @@ nonisolated enum DioramaShaderSource {
         float4 waterDeep;
         float4 waterShallow;
         float4 groundImage;
+        float4 materialFrame;
         float4 post;
         float4 reveal;
     };
@@ -139,17 +143,44 @@ nonisolated enum DioramaShaderSource {
     float3 dioramaGrade(float3 color, float3 worldPosition, constant DioramaUniforms &u);
 
     float dioramaRevealDistance(float3 p, constant DioramaUniforms &u) {
-        if (u.reveal.w > 2.5) return u.reveal.z - dot(p.xy, u.reveal.xy);
-        if (u.reveal.w > 1.5) return dot(p.xy, u.reveal.xy) - u.reveal.z;
-        float2 delta = abs(p.xy - u.reveal.xy);
-        return max(delta.x, delta.y) - u.reveal.z;
+        float ripple = \(DioramaRevealStyle.variation) * (0.6 * sin(p.x * 0.025 + p.y * 0.011)
+            + 0.4 * sin(p.y * 0.037 - p.x * 0.009));
+        if (u.reveal.w > 1.5) {
+            float d = dot(p.xy, u.reveal.xy) - u.reveal.z + ripple;
+            return u.reveal.w > 2.5 ? -d : d;
+        }
+        float radius = min(48.0, max(0.0, u.reveal.z) * 0.16);
+        float2 q = abs(p.xy - u.reveal.xy) - (u.reveal.z - radius);
+        return length(max(q, float2(0.0))) + min(max(q.x, q.y), 0.0) - radius + ripple;
+    }
+    float dioramaRevealCoverage(float3 p, constant DioramaUniforms &u) {
+        if (u.reveal.w < 0.5) return 1.0;
+        return 1.0 - smoothstep(-\(DioramaRevealStyle.feather), \(DioramaRevealStyle.feather), dioramaRevealDistance(p, u));
+    }
+    float dioramaRevealAlpha(float3 p, float2 pixel, constant DioramaUniforms &u) {
+        float coverage = dioramaRevealCoverage(p, u);
+        if (u.reveal.w > 1.5 && u.params.w < 0.5) {
+            // Complementary pixel ownership avoids transparent coarse/full depth competition.
+            // The identical threshold is used by both hosts, independent of their draw order.
+            float threshold = fract(52.9829189 * fract(dot(floor(pixel), float2(0.06711056, 0.00583715))));
+            float full = u.reveal.w > 2.5 ? 1.0 - coverage : coverage;
+            bool selected = u.reveal.w > 2.5 ? threshold >= full : threshold < full;
+            if (!selected) discard_fragment();
+            return 1.0;
+        }
+        return coverage;
+    }
+    float4 dioramaRevealColor(float3 color, float alpha, float coverage, constant DioramaUniforms &u) {
+        // Reflection stores premultiplied coverage; the water sampler later unpremultiplies it.
+        return u.params.w > 0.5 ? float4(color * alpha * coverage, alpha * coverage)
+                               : float4(color, alpha * coverage);
     }
     void dioramaRevealClip(float3 p, constant DioramaUniforms &u) {
         if (u.shoreline.w > 0.5) {
             float2 uv = (p.xy - u.groundImage.xy) * u.groundImage.zw;
             if (any(uv < float2(0.0)) || any(uv >= float2(1.0))) discard_fragment();
         }
-        if (u.reveal.w > 0.5 && dioramaRevealDistance(p, u) > 0.0) discard_fragment();
+        if (u.reveal.w > 0.5 && dioramaRevealDistance(p, u) >= \(DioramaRevealStyle.feather)) discard_fragment();
     }
 
     /// One placement of a prototype: xyz translation + rotation about z, xyz scale + bounding radius.
@@ -167,6 +198,7 @@ nonisolated enum DioramaShaderSource {
         float4 color;
         float4 appearance;
         float clipHeight;
+        float treeVariation;
     };
 
     float3 dioramaPlace(float3 p, DioramaInstance inst) {
@@ -212,6 +244,7 @@ nonisolated enum DioramaShaderSource {
         out.normal = normal;
         out.color = v.color;
         out.appearance = v.appearance;
+        out.treeVariation = 0.5;
         return out;
     }
 
@@ -235,7 +268,9 @@ nonisolated enum DioramaShaderSource {
         if (inst.grading.w > 0.5) {
             v.appearance.z = (v.position.z * inst.grading.x + inst.grading.y) + 100.0;
         }
-        return dioramaShade(v, dioramaPlace(v.position.xyz, inst), dioramaPlaceNormal(v.normal.xyz, inst), matrix, u);
+        DioramaVarying out = dioramaShade(v, dioramaPlace(v.position.xyz, inst), dioramaPlaceNormal(v.normal.xyz, inst), matrix, u);
+        out.treeVariation = fract(sin(dot(inst.placement.xy * u.materialFrame.z + u.materialFrame.xy, float2(12.9898, 78.233))) * 43758.5453);
+        return out;
     }
 
     vertex float4 dioramaShadowVertex(uint id [[vertex_id]],
@@ -311,7 +346,8 @@ nonisolated enum DioramaShaderSource {
             DioramaLight l = lights[indices[entry.x + k]];
             // A not-yet-revealed fixture must not light already-visible ground.
             // Keep off-camera fixtures whose finite radius still reaches a visible receiver.
-            if (u.reveal.w > 0.5 && dioramaRevealDistance(l.position.xyz, u) > 0.0) continue;
+            float fixtureCoverage = dioramaRevealCoverage(l.position.xyz, u);
+            if (fixtureCoverage < 0.001) continue;
             float3 d = l.position.xyz - p;
             float dist2 = dot(d, d);
             float radius = l.position.w;
@@ -321,7 +357,7 @@ nonisolated enum DioramaShaderSource {
             float att = 1.0 - dist / radius;
             att = att * att * (1.0 / (1.0 + dist2 * 0.06));
             float wrap = saturate(dot(n, L) * 0.75 + 0.25);
-            sum += l.color.rgb * (l.color.w * att * wrap * 3.2);
+            sum += l.color.rgb * (l.color.w * att * wrap * 3.2 * fixtureCoverage);
         }
         return sum;
     }
@@ -384,13 +420,8 @@ nonisolated enum DioramaShaderSource {
         bool mirrored = u.params.w > 0.5;
 
         if (mirrored && (in.clipHeight < -0.05 || (code > 0.5 && code < 1.5))) discard_fragment();
-        if (u.reveal.w > 0.5 && !(code > 4.5 && code < 5.5)) {
-            float edge = -dioramaRevealDistance(in.worldPosition, u);
-            if (edge < 1.4) {
-                float heat = 1.0 - smoothstep(0.0, 1.4, edge);
-                return float4(mix(in.color.rgb * 0.55, float3(1.0, 0.84, 0.52), heat), 1.0);
-            }
-        }
+        float revealCoverage = dioramaRevealCoverage(in.worldPosition, u);
+        float revealAlpha = dioramaRevealAlpha(in.worldPosition, in.position.xy, u);
         // Reflection pass: only what is above the water surface reflects; never the water itself.
         if (mirrored) {
             if (in.clipHeight < -0.05) discard_fragment();
@@ -401,12 +432,12 @@ nonisolated enum DioramaShaderSource {
             float r = length(in.normal.xy);
             if (r > 1.0) discard_fragment();
             float a = pow(1.0 - r, 2.2) * 0.7 + pow(max(0.0, 1.0 - r * 3.0), 2.0) * 0.5;
-            return float4(in.color.rgb * glow, a * min(glow, 1.0));
+            return dioramaRevealColor(in.color.rgb * glow, a * min(glow, 1.0), revealAlpha, u);
         }
-        if (code > 5.5) { return float4(in.color.rgb, 1.0); }
+        if (code > 5.5) { return dioramaRevealColor(in.color.rgb, 1.0, revealAlpha, u); }
         if (code > 3.5) {
             float3 c = in.color.rgb * (0.55 + 0.8 * glow) + float3(0.12, 0.05, 0.0) * glow;
-            return float4(min(c, float3(1.0)), 1.0);
+            return dioramaRevealColor(min(c, float3(1.0)), 1.0, revealAlpha, u);
         }
 
         float3 n = normalize(in.normal);
@@ -437,6 +468,7 @@ nonisolated enum DioramaShaderSource {
         if (!paintedGround) finish.y = 0.0;
         float grassDetailWeight = finish.x;
         float2 wp = surfacePosition.xy;
+        float2 vegetationPosition = wp * u.materialFrame.z + u.materialFrame.xy;
         if (tex > 8.5 && tex < 9.5) {
             // Painted ground: albedo from the tile image, grain code from its alpha (×32).
             constexpr sampler groundSampler(coord::normalized, address::clamp_to_edge, filter::linear, mip_filter::linear, max_anisotropy(8));
@@ -461,16 +493,28 @@ nonisolated enum DioramaShaderSource {
             if (paintedGround && finish.y > 0.0001) {
                 soilFraction = smoothstep(0.08, 0.94, dioramaEarthFraction(albedo));
             }
-            float3 grass = mix(float3(145.0, 170.0, 52.0), float3(156.0, 182.0, 64.0),
-                               smoothstep(0.42, 0.72, luminance)) / 255.0;
+            // Stable moisture/dryness fields at landscape, lawn and tuft scales. No moving noise.
+            // All fields use the original material coordinates, including mirrored reflections.
+            float broad = dioramaNoise(vegetationPosition * 0.027 + float2(11.4, -7.2));
+            float patches = dioramaNoise(vegetationPosition * 0.105 + float2(-4.1, 19.7));
+            float tufts = dioramaNoise(vegetationPosition * 0.42);
+            float tone = smoothstep(0.20, 0.82, broad * 0.50 + patches * 0.35 + tufts * 0.15);
+            float3 deepGrass = float3(88.0, 123.0, 50.0) / 255.0;
+            float3 livingGrass = float3(120.0, 148.0, 61.0) / 255.0;
+            float3 sunGrass = float3(151.0, 164.0, 71.0) / 255.0;
+            float3 grass = tone < 0.55 ? mix(deepGrass, livingGrass, tone / 0.55)
+                                      : mix(livingGrass, sunGrass, (tone - 0.55) / 0.45);
+            float dry = smoothstep(0.58, 0.86, patches) * smoothstep(0.42, 0.72, broad);
+            grass = mix(grass, float3(155.0, 152.0, 81.0) / 255.0, dry * 0.38);
+            grass *= mix(0.97, 1.03, smoothstep(0.42, 0.72, luminance));
             float3 earth = float3(179.0, 152.0, 122.0) / 255.0;
             float vegetation = naturalArea * (1.0 - naturalCoverage);
             albedo = mix(albedo, mix(grass, earth, soilFraction), vegetation);
             grassDetailWeight = vegetation * (1.0 - soilFraction);
-            float mottle = dioramaNoise(wp * 0.09) * 0.7 + dioramaNoise(wp * 0.35) * 0.3;
-            float clods = dioramaNoise(wp * 1.7) * 0.65 + dioramaNoise(wp * 0.18) * 0.35;
-            albedo *= 1.0 + (mottle - 0.5) * 0.035 * grassDetailWeight
-                         + (clods - 0.5) * 0.10 * vegetation * soilFraction;
+            if (soilFraction > 0.001) {
+                float clods = dioramaNoise(wp * 1.7) * 0.65 + dioramaNoise(wp * 0.18) * 0.35;
+                albedo *= 1.0 + (clods - 0.5) * 0.10 * vegetation * soilFraction;
+            }
         }
         if (tex > 1.5 && tex < 2.5) {
             albedo *= 0.98 + 0.04 * (dioramaNoise(wp * 0.5) - 0.5);
@@ -485,15 +529,20 @@ nonisolated enum DioramaShaderSource {
         }
 
         if (tex > 9.5 && tex < 10.5) {
-            // Same chartreuse ramp for tagged legacy foliage and current prototypes. Flowers/trunks
-            // never enter this material. Keep source palette bytes stable for exact roof replay.
+            // Source cluster tones + smooth normals retain depth inside each crown. Stable placement
+            // variation adds greener trees, rather than assigning every tree one pale lime material.
             float luminance = dot(albedo, float3(0.2126, 0.7152, 0.0722));
-            float tone = smoothstep(0.22, 0.74, luminance);
-            float3 shade = float3(156.0, 177.0, 61.0) / 255.0;
-            float3 middle = float3(180.0, 202.0, 80.0) / 255.0;
-            float3 crown = float3(208.0, 223.0, 121.0) / 255.0;
-            albedo = tone < 0.60 ? mix(shade, middle, tone / 0.60)
-                                 : mix(middle, crown, (tone - 0.60) / 0.40);
+            float cluster = dioramaNoise(vegetationPosition * 0.38 + surfacePosition.z * 0.13);
+            float tone = saturate(smoothstep(0.20, 0.72, luminance) * 0.68
+                + smoothstep(-0.45, 0.92, surfaceNormal.z) * 0.22 + cluster * 0.10);
+            float3 shade = float3(56.0, 91.0, 44.0) / 255.0;
+            float3 middle = float3(118.0, 148.0, 54.0) / 255.0;
+            float3 crown = float3(189.0, 203.0, 99.0) / 255.0;
+            float greener = smoothstep(0.54, 0.90, in.treeVariation);
+            middle = mix(middle, float3(72.0, 122.0, 65.0) / 255.0, greener * 0.65);
+            crown = mix(crown, float3(137.0, 176.0, 94.0) / 255.0, greener * 0.55);
+            albedo = tone < 0.58 ? mix(shade, middle, tone / 0.58)
+                                 : mix(middle, crown, (tone - 0.58) / 0.42);
         }
 
         // Legacy saved wall vertices already carry height grading; texture them without a rebuild.
@@ -610,7 +659,7 @@ nonisolated enum DioramaShaderSource {
         if (u.post.x > 0.001 && !mirrored) {
             constexpr sampler aoSampler(coord::normalized, address::clamp_to_edge, filter::linear);
             float2 suv = in.position.xy / u.water.zw;
-            ao = 1.0 - u.post.x * (1.0 - occlusion.sample(aoSampler, suv).r);
+            ao = 1.0 - u.post.x * revealCoverage * (1.0 - occlusion.sample(aoSampler, suv).r);
         }
         float ndl = dot(detailNormal, u.sunDirection.xyz);
         float wrap = foliage && u.params.z < 0.5 ? 0.18 : 0.0;
@@ -631,7 +680,7 @@ nonisolated enum DioramaShaderSource {
             float caustic = smoothstep(0.45, 0.8, c1 * 0.55 + c2 * 0.45);
             color = albedo * light * (0.92 + 0.18 * caustic) + float3(0.10, 0.12, 0.12) * caustic;
             color = mix(color, u.skyColor.rgb * 1.1, 0.12);
-            return float4(color, 1.0);
+            return dioramaRevealColor(color, 1.0, revealAlpha, u);
         }
 
         if (code > 0.5 && code < 1.5) {
@@ -681,7 +730,7 @@ nonisolated enum DioramaShaderSource {
                 color = mix(color, reflected.rgb / max(reflected.a, 0.001), fresnel * reflected.a * edgeFade * (1.0 - foam));
             }
             // Shallow water still reveals submerged sand and coral beneath the reflection.
-            return float4(color, mix(1.0, 0.48, shallow));
+            return dioramaRevealColor(color, mix(1.0, 0.48, shallow), revealAlpha, u);
         }
 
         if (tex > 5.5 && tex < 6.5 && in.appearance.y < 8.5) {
@@ -691,7 +740,7 @@ nonisolated enum DioramaShaderSource {
         }
         float rim = pow(1.0 - saturate(dot(n, view)), 4.0) * 0.035;
         color += u.skyColor.rgb * rim;
-        return float4(dioramaGrade(color, in.worldPosition, u), 1.0);
+        return dioramaRevealColor(dioramaGrade(color, in.worldPosition, u), 1.0, revealAlpha, u);
     }
     """
 
@@ -723,7 +772,7 @@ nonisolated enum DioramaShaderSource {
         DioramaGBuffer out;
         float3 n = normalize(in.normal);
         if (!isFront) n = -n;
-        out.position = float4(in.worldPosition, 1.0);
+        out.position = float4(in.worldPosition, dioramaRevealCoverage(in.worldPosition, u));
         out.normal = float4(n, 0.0);
         out.emissive = float4(0.0);
         return out;
@@ -745,7 +794,7 @@ nonisolated enum DioramaShaderSource {
         out.position = float4(0.0);
         out.normal = float4(0.0);
         // Preserve HDR radiance before the blur: display-range colors disappear when downsampled.
-        out.emissive = float4(c * glow * a * 3.0, 1.0);
+        out.emissive = float4(c * glow * a * 3.0 * dioramaRevealCoverage(in.worldPosition, u), 1.0);
         return out;
     }
 
@@ -774,7 +823,7 @@ nonisolated enum DioramaShaderSource {
                                         texture2d<float> normals [[texture(1)]]) {
         constexpr sampler point(coord::normalized, address::clamp_to_edge, filter::nearest);
         float4 P = positions.sample(point, in.uv);
-        if (P.w < 0.5) return float4(1.0);
+        if (P.w < 0.001) return float4(1.0);
         float3 N = normalize(normals.sample(point, in.uv).xyz);
         float3 eye = p.eye.xyz;
         float radius = p.params.x;
@@ -797,13 +846,13 @@ nonisolated enum DioramaShaderSource {
             if (any(suv < float2(0.0)) || any(suv > float2(1.0))) continue;
             float4 Q = positions.sample(point, suv);
             weight += 1.0;
-            if (Q.w < 0.5) continue;
+            if (Q.w < 0.001) continue;
             float sampleDist = length(eye - S);
             float sceneDist = length(eye - Q.xyz);
             float delta = sampleDist - sceneDist;
             if (delta > 0.04) {
                 float range = smoothstep(0.0, 1.0, radius / max(delta, 0.0001));
-                occlusion += range;
+                occlusion += range * Q.w;
             }
         }
         float ao = weight > 0.0 ? 1.0 - occlusion / weight : 1.0;

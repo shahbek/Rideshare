@@ -9,7 +9,8 @@ import simd
 /// per frame without rebuilding anything.
 ///
 /// Directional shadows are cached. Spatial batches outside the camera frustum never draw;
-/// only water/halos blend. Water samples a cached, reduced-resolution reflected scene.
+/// only water/halos blend at rest; finite reveals also blend their coverage. Water samples a cached,
+/// reduced-resolution reflected scene.
 nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
     nonisolated struct Range: Sendable {
         let category: DioramaCategory
@@ -25,7 +26,7 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
             guard reveal.w > 0.5, minimum.x > -.greatestFiniteMagnitude,
                   minimum.x.isFinite, minimum.y.isFinite, maximum.x.isFinite, maximum.y.isFinite,
                   reveal.x.isFinite, reveal.y.isFinite, reveal.z.isFinite else { return true }
-            let margin: Float = 0.02
+            let margin: Float = DioramaRevealStyle.support + 0.02
             if reveal.w > 1.5 {
                 let x0 = reveal.x * minimum.x, x1 = reveal.x * maximum.x
                 let y0 = reveal.y * minimum.y, y1 = reveal.y * maximum.y
@@ -61,6 +62,9 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
         }
     }
 
+    /// Immutable rendered XY envelope, including prototype/structure overhangs beyond the tile.
+    let revealBounds: (minimum: SIMD3<Float>, maximum: SIMD3<Float>)
+
     private let groundQueryLock = NSLock()
     private var cameraGround = DioramaCameraGround()
 
@@ -88,6 +92,7 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
     private let waterHeight: Float
     private let groundImage: DioramaGroundImage?
     private let groundRect: DioramaRect
+    private let materialFrame: SIMD4<Float>
     private var groundTexture: MTLTexture?
     private var surfaceTexture: MTLTexture?
     private var paintBuffer: MTLBuffer?
@@ -172,6 +177,15 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
     }
 
     init(origin: CLLocationCoordinate2D, vertices: [BuildingRenderVertex], indices: [UInt32], ranges: [Range], groups: [DioramaInstanceGroup] = [], instances: [DioramaInstanceData] = [], lightGrid: DioramaLightGrid, waterHeight: Double, groundImage: DioramaGroundImage?, groundRect: DioramaRect, visible: Set<DioramaCategory>, timeOfDay: DioramaTimeOfDay, animates: Bool, config: DioramaConfig = .slipway, labels: [DioramaBuildingLabel] = [], displayScale: Float = 3, contextOnly: Bool = false) {
+        var low = SIMD3<Float>(repeating: .greatestFiniteMagnitude)
+        var high = SIMD3<Float>(repeating: -.greatestFiniteMagnitude)
+        for range in ranges where range.minimum.x > -.greatestFiniteMagnitude && range.minimum.x.isFinite && range.maximum.x.isFinite {
+            low = simd_min(low, range.minimum); high = simd_max(high, range.maximum)
+        }
+        for group in groups {
+            low = simd_min(low, group.minimum); high = simd_max(high, group.maximum)
+        }
+        revealBounds = low.x < high.x ? (low, high) : (SIMD3(Float(groundRect.minX), Float(groundRect.minY), 0), SIMD3(Float(groundRect.maxX), Float(groundRect.maxY), 0))
         self.contextOnly = contextOnly
         self.origin = origin
         self.labels = labels
@@ -185,6 +199,10 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
         self.waterHeight = Float(waterHeight)
         self.groundImage = groundImage
         self.groundRect = groundRect
+        let referenceLatitude = -6.75
+        let reference = DioramaProjection(origin: CLLocationCoordinate2D(latitude: referenceLatitude, longitude: 39.28))
+        let offset = reference.local(longitude: origin.longitude, latitude: origin.latitude)
+        materialFrame = SIMD4(Float(offset.x), Float(offset.y), Float(cos(referenceLatitude * .pi / 180) / cos(origin.latitude * .pi / 180)), 0)
         self.visible = visible
         self.timeOfDay = timeOfDay
         self.animates = animates
@@ -282,7 +300,7 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
             let materialUpload = DioramaLegacyFoliageMaterial.tagged(vertices, indices: indices, ranges: ranges, groups: groups)
             vertexBuffer = upload(materialUpload.vertices, fallback: vertices[0])
             #if DEBUG
-            print("[Diorama material] legacy_foliage_vertices=\(materialUpload.count) preset=\(timeOfDay.rawValue) color_format=\(colorPixelFormat) natural_finish=coverage-v2")
+            print("[Diorama material] legacy_foliage_vertices=\(materialUpload.count) preset=\(timeOfDay.rawValue) color_format=\(colorPixelFormat) natural_finish=coverage-v2 reveal=soft-v1 vegetation=layered-v3")
             #endif
             indexBuffer = upload(indices, fallback: 0)
             instanceBuffer = upload(instances, fallback: .identity)
@@ -418,6 +436,7 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
         uniforms.waterDeep = waterDeepTint
         uniforms.waterShallow = waterShallowTint
         uniforms.groundImage = SIMD4<Float>(Float(groundRect.minX), Float(groundRect.minY), Float(1 / max(groundRect.width, 1)), Float(1 / max(groundRect.height, 1)))
+        uniforms.materialFrame = materialFrame
         uniforms.lightGrid = SIMD4<Float>(lightGrid.minX, lightGrid.minY, lightGrid.cellSize, Float(lightGrid.cells))
         // Wrapped so the float stays precise however long the map is open; 1.7 s into the cycle when frozen.
         uniforms.params.y = animates && !reducedEffects ? Float((CACurrentMediaTime() - startTime).truncatingRemainder(dividingBy: 3600)) : 1.7
@@ -488,7 +507,7 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
         guard let encoder = mtlCommandBuffer.makeRenderCommandEncoder(descriptor: mtlRenderPassDescriptor) else { return }
         encoder.label = "Zuri diorama"
         encoder.setViewport(MTLViewport(originX: 0, originY: 0, width: Double(texture.width), height: Double(texture.height), znear: Double(parameters.depthRange.min), zfar: Double(parameters.depthRange.max)))
-        encoder.setRenderPipelineState(pipeline)
+        encoder.setRenderPipelineState(reveal.w > 0.5 ? (waterPipeline ?? pipeline) : pipeline)
         // Geometric winding is counter-clockwise seen from outside; closed meshes cull their backs.
         // Thin double-sided pieces (fronds, sails, canopies) carry appearance.x = 0 and are drawn
         // in a second pass with culling off.
@@ -534,7 +553,7 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
         }
         if let instanceBuffer, let instancedPipeline {
             encoder.setVertexBuffer(instanceBuffer, offset: 0, index: 3)
-            encoder.setRenderPipelineState(instancedPipeline)
+            encoder.setRenderPipelineState(reveal.w > 0.5 ? (instancedGlowPipeline ?? instancedPipeline) : instancedPipeline)
             for group in submittedGroups where group.category != .propGlow { drawGroup(group) }
         }
         encoder.setDepthStencilState(noWriteDepthState)

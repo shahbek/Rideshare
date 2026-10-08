@@ -38,7 +38,7 @@ nonisolated enum DioramaSurfaceTexture {
             guard command.status == .completed else { return nil }
         }
         #if DEBUG
-        print("[Diorama material] detail_ready=\(valid) size=\(descriptor.width) leaf_relief=\(valid) grass_relief=\(valid) style=paired-closeup-v2")
+        print("[Diorama material] detail_ready=\(valid) size=\(descriptor.width) leaf_relief=\(valid) grass_relief=\(valid) style=layered-aerial-v3")
         #endif
         textures[key] = texture
         return texture

@@ -8,6 +8,7 @@ struct ActiveTripView: View {
     let trip: Trip
     @State private var camera: MapCameraTarget = .automatic
     @State private var forwardView: Bool = false
+    @State private var isExploringMap: Bool = false
     @State private var lastFramedPhase: TripPhase? = nil
     @State private var lastFollowAt: Date = .distantPast
     @State private var panelHeight: CGFloat = 340
@@ -43,12 +44,13 @@ struct ActiveTripView: View {
                 followsDriver: followsDriver,
                 forwardDriverView: forwardView,
                 driverVisibleRect: driverVisibleRect,
-                onDriverFollowInterrupted: { env.settings.driverEyeEnabled = false },
+                onDriverFollowInterrupted: { beginExploration() },
                 isSearching: trip.phase == .searching,
                 pickupEtaMinutes: trip.phase == .driverAssigned ? max(env.trips.driverEtaMinutes, 1) : nil,
                 destinationEtaMinutes: trip.phase == .inTrip ? max(env.trips.remainingTripMinutes, 1) : nil,
-                interactionModes: [.pan, .zoom],
-                illuminatedDestination: trip.destination.point
+                interactionModes: .all,
+                illuminatedDestination: trip.destination.point,
+                onCameraWillMove: { isGesture in if isGesture { beginExploration() } }
             )
             .ignoresSafeArea()
             .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { mapFrame = $0 }
@@ -80,8 +82,15 @@ struct ActiveTripView: View {
                 Spacer()
                 HStack(spacing: 12) {
                     Spacer(minLength: 0)
+                    MapCircleButton(systemImage: "square.3.layers.3d.top.filled", accessibilityLabel: L(.birdsEye), usesLiquidGlass: true) {
+                        beginExploration()
+                        camera = .topDown(requestID: UUID())
+                    }
+                    .accessibilityHint(L(.birdsEyeHint))
+                    .accessibilityIdentifier("trip.birdsEye")
                     if canUseDriverEye {
                         MapCircleButton(systemImage: followsDriver ? (forwardView ? "road.lanes" : "car.rear.fill") : "car.rear", accessibilityLabel: L(.driverEye), usesLiquidGlass: true) {
+                            isExploringMap = false
                             if !followsDriver {
                                 forwardView = false
                                 env.settings.driverEyeEnabled = true
@@ -98,6 +107,7 @@ struct ActiveTripView: View {
                         .accessibilityIdentifier("trip.viewMode")
                     }
                     MapCircleButton(systemImage: "location.fill", accessibilityLabel: L(.recentre), usesLiquidGlass: true) {
+                        isExploringMap = false
                         env.settings.driverEyeEnabled = false
                         frame(force: true)
                     }
@@ -192,9 +202,8 @@ struct ActiveTripView: View {
             frame(force: true)
         }
         .onChange(of: env.trips.driverPosition) { _, _ in
-            guard !followsDriver, trip.phase == .inTrip || trip.phase == .driverAssigned else { return }
-            // Re-frame at most every 4s, and only when the vehicle has actually left the framed area, so the
-            // camera glides instead of restarting its ease on every fix.
+            guard !isExploringMap, !followsDriver, trip.phase == .inTrip || trip.phase == .driverAssigned else { return }
+            // Automatic overview updates are suspended until the user explicitly recentres.
             let now = Date()
             guard now.timeIntervalSince(lastFollowAt) >= 4 else { return }
             lastFollowAt = now
@@ -237,11 +246,18 @@ struct ActiveTripView: View {
         }
     }
 
+    private func beginExploration() {
+        isExploringMap = true
+        reframeTask?.cancel()
+        env.settings.driverEyeEnabled = false
+    }
+
     private func scheduleReframe() {
         reframeTask?.cancel()
+        guard !isExploringMap else { return }
         reframeTask = Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(600))
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled, !isExploringMap else { return }
             frame(force: true)
         }
     }
@@ -266,7 +282,7 @@ struct ActiveTripView: View {
     }
 
     private func frame(force: Bool) {
-        guard !followsDriver else { return }
+        guard !isExploringMap, !followsDriver else { return }
         guard force || lastFramedPhase != trip.phase else { return }
         lastFramedPhase = trip.phase
         var points: [GeoPoint]
@@ -295,7 +311,7 @@ struct ActiveTripView: View {
     }
 
     private func followDriver() {
-        guard let driverPosition = env.trips.driverPosition else { return }
+        guard !isExploringMap, let driverPosition = env.trips.driverPosition else { return }
         let target = trip.phase == .inTrip ? trip.destination.point : trip.pickup.point
         let rect = MapCameraHelper.rect(fitting: [driverPosition, target], bottomFraction: bottomFraction, paddingFraction: 0.35, fold: foldLayout)
         camera = .rect(rect)

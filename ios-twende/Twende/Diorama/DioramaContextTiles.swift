@@ -72,7 +72,7 @@ final class DioramaContextTiles {
         }
     }
 
-    /// Complement the full-resolution directional front so no low/high surfaces overlap.
+    /// Complement the shared soft field with disjoint screen coverage, not stacked transparent surfaces.
     func setFocusMask(tile: DioramaTileID, reveal: SIMD4<Float>) {
         guard let resident = residents[tile] else { return }
         if reveal.w < 0.5 { remove(tile) }

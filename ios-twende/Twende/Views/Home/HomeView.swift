@@ -5,6 +5,7 @@ struct HomeView: View {
     @Environment(AppEnvironment.self) private var env
     @State private var camera: MapCameraTarget = .region(MapCameraHelper.homeRegion(around: DarEsSalaam.upanga))
     @State private var detentIndex: Int = 0
+    @State private var isExploringMap: Bool = false
     @State private var contentAtTop: Bool = true
     @Environment(\.foldLayout) private var foldLayout
 
@@ -31,6 +32,7 @@ struct HomeView: View {
                 nearbyDrivers: nearby,
                 favouriteIDs: Set(env.store.favouriteDriverIDs),
                 showsPinLabels: false,
+                onCameraWillMove: { isGesture in if isGesture { isExploringMap = true } },
                 onBillboardTap: { adID in env.flow.activeSheet = .billboard(adID) }
             )
             .ignoresSafeArea()
@@ -55,10 +57,18 @@ struct HomeView: View {
                 detentIndex: $detentIndex,
                 contentAtTop: contentAtTop,
                 floatingControl: AnyView(
-                    MapCircleButton(systemImage: "location.fill", accessibilityLabel: L(.recentre), usesLiquidGlass: true) {
-                        recentre()
+                    HStack(spacing: 12) {
+                        MapCircleButton(systemImage: "square.3.layers.3d.top.filled", accessibilityLabel: L(.birdsEye), usesLiquidGlass: true) {
+                            isExploringMap = true
+                            camera = .topDown(requestID: UUID())
+                        }
+                        .accessibilityHint(L(.birdsEyeHint))
+                        .accessibilityIdentifier("home.birdsEye")
+                        MapCircleButton(systemImage: "location.fill", accessibilityLabel: L(.recentre), usesLiquidGlass: true) {
+                            recentre()
+                        }
+                        .accessibilityIdentifier("home.recentre")
                     }
-                    .accessibilityIdentifier("home.recentre")
                 )
             ) {
                 sheetHeader
@@ -67,7 +77,7 @@ struct HomeView: View {
             }
             .foldPanel()
         }
-        .onChange(of: foldLayout) { _, _ in recentre() }
+        .onChange(of: foldLayout) { _, _ in if !isExploringMap { recentre() } }
         .onAppear {
             env.flow.refreshPickupFromLocation()
             recentre(animated: false)
@@ -235,6 +245,7 @@ struct HomeView: View {
     }
 
     private func recentre(animated: Bool = true) {
+        isExploringMap = false
         let region = MapCameraHelper.homeRegion(around: env.flow.pickup.point, fold: foldLayout)
         if animated {
             withAnimation(.easeInOut(duration: 0.6)) { camera = .region(region) }

@@ -57,6 +57,8 @@ extension Strings {
         case .saveChanges: "Save changes"
         case .menu: "Menu"
         case .recentre: "Recentre map"
+        case .birdsEye: "Bird’s-eye view"
+        case .birdsEyeHint: "Look straight down without changing your location or zoom. Use two fingers to tilt the map again."
         case .request: "Request"
         case .notNow: "Not now"
         case .tryAgain: "Try again"

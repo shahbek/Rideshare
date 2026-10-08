@@ -1,7 +1,7 @@
 import Foundation
 
 /// Where a map screen wants its camera. Screens describe intent (a centred region, or a set of points that
-/// must stay visible above a bottom panel); the map view turns that into a Google Maps camera update.
+/// must stay visible above a bottom panel); the map view turns that into a native Mapbox camera update.
 nonisolated enum MapCameraTarget: Equatable, Sendable {
     /// Leave the camera where it is.
     case automatic
@@ -9,6 +9,8 @@ nonisolated enum MapCameraTarget: Equatable, Sendable {
     case region(MapRegion)
     /// Fit every point, keeping them clear of a bottom panel.
     case rect(MapBounds)
+    /// One-shot bird’s-eye intent; preserve centre, zoom, bearing and padding, change only pitch.
+    case topDown(requestID: UUID)
 }
 
 /// A centre and the approximate width of the visible map in kilometres.

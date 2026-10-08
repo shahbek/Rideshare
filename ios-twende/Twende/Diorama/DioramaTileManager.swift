@@ -116,15 +116,21 @@ final class DioramaTileManager {
     private var isRetracting: Bool = false
     /// Pan arrivals sweep in world space from the previously focused tile, unlike initial focus.
     private var arrivalDirection: DV2? = nil
-    private var currentExtent: Double = 0.8
-    private var transitionFrom: Double = 0.8
+    private var currentExtent: Double = -Double(DioramaRevealStyle.support)
+    private var transitionFrom: Double = -Double(DioramaRevealStyle.support)
+    private var revealEndpointPending: Bool = false
     private var retractionCompletion: (() -> Void)?
     private var fullExtent: Double {
         let rect = DioramaProjection(origin: tile.centre).rect(of: tile)
+        let low = renderLayer?.revealBounds.minimum ?? SIMD3(Float(rect.minX), Float(rect.minY), 0)
+        let high = renderLayer?.revealBounds.maximum ?? SIMD3(Float(rect.maxX), Float(rect.maxY), 0)
+        let x = Double(max(abs(low.x), abs(high.x)))
+        let y = Double(max(abs(low.y), abs(high.y)))
+        let overrun = Double(DioramaRevealStyle.support) + 2
         if let direction = arrivalDirection {
-            return (rect.width * abs(direction.x) + rect.height * abs(direction.y)) * 0.5 + 12
+            return x * abs(direction.x) + y * abs(direction.y) + overrun
         }
-        return max(rect.width, rect.height) * 0.5 + 12
+        return max(x, y) + overrun
     }
     private var labelClipID: String { layerID + "-label-clip" }
     private var labelSourceID: String { layerID + "-label-mask" }
@@ -548,7 +554,8 @@ final class DioramaTileManager {
                     self.state.frameReport = report + "\n" + self.contextTiles.report
                 }
             }
-            currentExtent = arrivalDirection == nil ? 0.8 : -fullExtent
+            renderLayer = host
+            currentExtent = emptyExtent
             host.setReveal(revealUniform)
             try map.addCustomLayer(withId: layerID, layerHost: host, layerPosition: nil)
             try map.setLayerProperty(for: layerID, property: "slot", value: "middle")
@@ -600,6 +607,7 @@ final class DioramaTileManager {
         appliedWireframe = nil
         shown = false
         isRetracting = false
+        revealEndpointPending = false
         if !preservingContext { suppressBasemapTerrain(false) }
         updateWaterClock()
         let completion = retractionCompletion
@@ -610,8 +618,9 @@ final class DioramaTileManager {
     /// One finite 30 Hz reveal, including cached tiles and explicit focus requests.
     private func beginReveal(fromCurrent: Bool = false) {
         isRetracting = false
-        transitionFrom = fromCurrent ? currentExtent : (arrivalDirection == nil ? 0.8 : -fullExtent)
+        transitionFrom = fromCurrent ? currentExtent : emptyExtent
         currentExtent = transitionFrom
+        revealEndpointPending = false
         revealClock?.invalidate()
         revealClock = nil
         guard shown, let renderLayer else { return }
@@ -652,13 +661,12 @@ final class DioramaTileManager {
             if let map { hide(on: map) }; return
         }
         revealClock?.invalidate()
-        if arrivalDirection != nil {
-            // A partial directional reveal must never flash fully visible on an exit.
-            if revealClock != nil { if let map { hide(on: map) }; return }
+        if arrivalDirection != nil, revealClock == nil {
             arrivalDirection = nil
             currentExtent = fullExtent
         }
         isRetracting = true
+        revealEndpointPending = false
         transitionFrom = currentExtent
         revealStarted = nil
         revealElapsed = 0
@@ -698,28 +706,44 @@ final class DioramaTileManager {
             }
             return
         }
+        if revealEndpointPending || finish {
+            completeReveal()
+            return
+        }
         revealRequested = now
         if revealStarted == nil { revealStarted = now; lastRevealTick = now }
         revealElapsed += min(1.0 / 30.0, max(0, now - lastRevealTick))
         lastRevealTick = now
         let progress = finish ? 1 : min(1, revealElapsed / 1.8)
         let eased = progress * progress * (3 - 2 * progress)
-        currentExtent = transitionFrom + ((isRetracting ? 0 : fullExtent) - transitionFrom) * eased
-        if isRetracting, progress >= 1 {
+        currentExtent = transitionFrom + ((isRetracting ? emptyExtent : fullExtent) - transitionFrom) * eased
+        renderLayer.setReveal(revealUniform)
+        setRevealClip(halfExtent: currentExtent)
+        revealEndpointPending = progress >= 1
+        map?.triggerRepaint()
+    }
+
+    private var emptyExtent: Double {
+        arrivalDirection == nil ? -Double(DioramaRevealStyle.support) - 2 : -fullExtent
+    }
+
+    /// The final active-mask endpoint must finish on the GPU before switching ownership.
+    private func completeReveal() {
+        revealEndpointPending = false
+        if isRetracting {
             if let map { hide(on: map); map.triggerRepaint() }
             return
         }
-        renderLayer.setReveal(progress >= 1 ? .zero : revealUniform)
-        setRevealClip(halfExtent: progress >= 1 ? nil : currentExtent)
-        map?.triggerRepaint()
-        if progress >= 1 {
-            revealClock?.invalidate(); revealClock = nil
-            if let outgoingTile, abs(outgoingTile.x - tile.x) > 1 || abs(outgoingTile.y - tile.y) > 1 {
-                outgoingCleanup?(); outgoingCleanup = nil; self.outgoingTile = nil
-            }
-            updateContextTiles()
-            scheduleUpdate(delay: 0.1)
+        currentExtent = fullExtent
+        renderLayer?.setReveal(.zero)
+        setRevealClip(halfExtent: nil)
+        revealClock?.invalidate(); revealClock = nil
+        if let outgoingTile, abs(outgoingTile.x - tile.x) > 1 || abs(outgoingTile.y - tile.y) > 1 {
+            outgoingCleanup?(); outgoingCleanup = nil; self.outgoingTile = nil
         }
+        updateContextTiles()
+        scheduleUpdate(delay: 0.1)
+        map?.triggerRepaint()
     }
 
     private var revealUniform: SIMD4<Float> {
@@ -729,7 +753,7 @@ final class DioramaTileManager {
         return SIMD4(0, 0, Float(currentExtent), 1)
     }
 
-    /// Native models and symbols follow the exact same square or directional clipping boundary.
+    /// Native clips are hard polygons: conservatively cover the outer soft support, not its midpoint.
     private func setRevealClip(halfExtent: Double?) {
         contextTiles.setFocusMask(tile: tile, reveal: halfExtent == nil ? .zero : revealUniform)
         guard let map, map.sourceExists(withId: clipSourceID) else { return }
@@ -740,10 +764,10 @@ final class DioramaTileManager {
             let points: [DV2]
             if let direction = arrivalDirection {
                 let outline = [DV2(rect.minX, rect.minY), DV2(rect.maxX, rect.minY), DV2(rect.maxX, rect.maxY), DV2(rect.minX, rect.maxY)]
-                let anchor = direction * e
+                let anchor = direction * (e + Double(DioramaRevealStyle.support))
                 points = DioramaGroundCutouts.halfPlane(outline, a: anchor, b: anchor + direction.left, inside: true)
             } else {
-                let extent = max(0.001, e)
+                let extent = max(0.001, e + Double(DioramaRevealStyle.support))
                 points = [DV2(max(rect.minX, -extent), max(rect.minY, -extent)), DV2(min(rect.maxX, extent), max(rect.minY, -extent)),
                           DV2(min(rect.maxX, extent), min(rect.maxY, extent)), DV2(max(rect.minX, -extent), min(rect.maxY, extent))]
             }

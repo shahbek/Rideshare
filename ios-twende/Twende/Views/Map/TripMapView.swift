@@ -77,7 +77,7 @@ struct TripMapView: UIViewRepresentable {
         mapView.ornaments.options.compass.visibility = .hidden
         mapView.ornaments.options.logo.margins = CGPoint(x: 8, y: 4)
         mapView.ornaments.options.attributionButton.margins = CGPoint(x: 2, y: 4)
-        mapView.gestures.options.pitchEnabled = false
+        mapView.gestures.options.pitchEnabled = interactionModes.contains(.tilt)
         mapView.gestures.delegate = context.coordinator
         context.coordinator.mapView = mapView
         context.coordinator.observe(mapView)
@@ -93,6 +93,7 @@ struct TripMapView: UIViewRepresentable {
         mapView.gestures.options.doubleTapToZoomInEnabled = interactionModes.contains(.zoom)
         mapView.gestures.options.quickZoomEnabled = interactionModes.contains(.zoom)
         mapView.gestures.options.rotateEnabled = interactionModes.contains(.rotate)
+        mapView.gestures.options.pitchEnabled = interactionModes.contains(.tilt)
 
         coordinator.updateLocationPuck(visible: showsUserLocation && env.location.isAuthorized)
         coordinator.applyCameraIfNeeded(camera)
@@ -551,8 +552,15 @@ extension TripMapView {
         // MARK: Camera
 
         func applyCameraIfNeeded(_ target: MapCameraTarget) {
-            guard !driverEyeCamera.isActive, !(parent.followsDriver && parent.driverPosition != nil) else { return }
             guard target != appliedCamera, target != .automatic, let mapView else { return }
+            let isTopDown: Bool
+            if case .topDown = target { isTopDown = true } else { isTopDown = false }
+            if isTopDown {
+                driverFollowInterrupted = true
+                driverEyeCamera.stop(on: mapView, restore: false)
+            } else {
+                guard !driverEyeCamera.isActive, !(parent.followsDriver && parent.driverPosition != nil) else { return }
+            }
             guard mapView.bounds.width > 0, mapView.bounds.height > 0 else {
                 pendingCamera = target
                 DispatchQueue.main.async { [weak self] in
@@ -568,6 +576,12 @@ extension TripMapView {
             switch target {
             case .automatic:
                 break
+            case .topDown:
+                mapView.camera.cancelAnimations()
+                let state = mapView.mapboxMap.cameraState
+                let options = CameraOptions(center: state.center, padding: state.padding, zoom: state.zoom, bearing: state.bearing, pitch: 0)
+                if parent.reduceMotion { mapView.mapboxMap.setCamera(to: options) }
+                else { mapView.camera.ease(to: options, duration: 0.45, curve: .easeInOut) }
             case .region(let region):
                 let widthPoints = Double(mapView.bounds.width)
                 let metersPerPoint = region.spanKm * 1000 / widthPoints
@@ -1029,7 +1043,8 @@ extension TripMapView {
             guard parent.followsDriver, !driverFollowInterrupted, activeGestures.isEmpty, let pose = driverShown else {
                 if driverEyeCamera.isActive {
                     driverEyeCamera.stop(on: mapView, restore: true)
-                    appliedCamera = parent.camera
+                    appliedCamera = nil
+                    applyCameraIfNeeded(parent.camera)
                     syncVehicles()
                 }
                 return
@@ -1074,6 +1089,10 @@ extension TripMapView {
         nonisolated func gestureManager(_ gestureManager: GestureManager, didBegin gestureType: GestureType) {
             MainActor.assumeIsolated {
                 activeGestures.insert(String(describing: gestureType))
+                mapView?.camera.cancelAnimations()
+                pendingCamera = nil
+                appliedCamera = .automatic
+                parent.camera = .automatic
                 if driverEyeCamera.isActive, let mapView {
                     driverFollowInterrupted = true
                     driverEyeCamera.stop(on: mapView, restore: false)

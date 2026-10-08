@@ -13,6 +13,7 @@ nonisolated enum LKey: Hashable, Sendable {
     // Common
     case back, close, cancel, continueAction, skip, change, remove, delete, clear, gotIt, verify
     case copy, copied, seeAll, saved, saveChanges, menu, recentre, request, notNow, tryAgain, backToHome
+    case birdsEye, birdsEyeHint
     case minutesShort, minuteUnit, darEsSalaam, madeInDar, nearPlace, droppedPin, yourLocation, recommended
 
     // Splash & language

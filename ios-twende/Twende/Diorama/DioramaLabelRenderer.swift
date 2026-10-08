@@ -32,13 +32,13 @@ nonisolated final class DioramaLabelRenderer {
         vertex LabelOut labelVertex(uint id [[vertex_id]], const device LabelVertex *vertices [[buffer(0)]]) {
             LabelOut o; o.position = vertices[id].position; o.uv = vertices[id].uv; return o;
         }
-        fragment float4 labelFragment(LabelOut in [[stage_in]], texture2d<float> image [[texture(0)]]) {
+        fragment float4 labelFragment(LabelOut in [[stage_in]], texture2d<float> image [[texture(0)]], constant float &coverage [[buffer(0)]]) {
             constexpr sampler s(filter::linear, address::clamp_to_edge);
-            if (in.uv.x < -1.5) return float4(1.0, 1.0, 1.0, 1.0);
-            if (in.uv.x < -0.5) return float4(0.20, 0.22, 0.24, 1.0);
+            if (in.uv.x < -1.5) return float4(coverage);
+            if (in.uv.x < -0.5) return float4(0.20, 0.22, 0.24, 1.0) * coverage;
             float4 c = image.sample(s, in.uv);
             if (c.a < 0.01) discard_fragment();
-            return c;
+            return c * coverage;
         }
         """
         do {
@@ -117,12 +117,11 @@ nonisolated final class DioramaLabelRenderer {
         let w = Float(width), h = Float(height)
         for label in labels {
             guard label.isNamed || zoom >= 17.8, occupied.count < 18, let image = images[label.title] else { continue }
-            if reveal.w > 0.5 {
-                let distance = reveal.w > 1.5
-                    ? label.anchor.x * reveal.x + label.anchor.y * reveal.y
-                    : max(abs(label.anchor.x - reveal.x), abs(label.anchor.y - reveal.y))
-                if distance + 3 > reveal.z { continue }
-            }
+            let revealed = DioramaRevealStyle.coverage(label.anchor, reveal: reveal)
+            var coverage: Float = min(1, max(0, (revealed - 0.55) / 0.45))
+            coverage = coverage * coverage * (3 - 2 * coverage)
+            guard coverage > 0.001 else { continue }
+            encoder.setFragmentBytes(&coverage, length: MemoryLayout<Float>.stride, index: 0)
             let roof = matrix * SIMD4(label.anchor, 1)
             let lift: Float = label.isNamed ? 5.5 : 3.5
             let p = matrix * SIMD4(label.anchor + SIMD3(0, 0, lift), 1)
