@@ -12,6 +12,7 @@ nonisolated final class DioramaShadowMap {
     private let corners: [SIMD3<Float>]
     private struct CacheKey: Equatable {
         let preset: DioramaTimeOfDay
+        let landmarkPresent: Bool
         let categories: Set<DioramaCategory>
         let low: SIMD3<Float>?
         let high: SIMD3<Float>?
@@ -70,13 +71,13 @@ nonisolated final class DioramaShadowMap {
     func update(command: MTLCommandBuffer, vertices: MTLBuffer, indices: MTLBuffer, instances: MTLBuffer?,
                 ranges: [DioramaRenderLayer.Range], groups: [DioramaInstanceGroup],
                 focus: (SIMD3<Float>, SIMD3<Float>)?,
-                sun: SIMD3<Float>, preset: DioramaTimeOfDay) -> simd_float4x4? {
+                sun: SIMD3<Float>, preset: DioramaTimeOfDay, landmarkPresent: Bool = false) -> simd_float4x4? {
         let casters = ranges.filter { !$0.category.isEmissive && $0.category != .water }
         let castingGroups = groups.filter { !$0.category.isEmissive }
         let snap: Float = 8
         let low = focus.map { floor($0.0 / snap) * snap }
         let high = focus.map { ceil($0.1 / snap) * snap }
-        let key = CacheKey(preset: preset, categories: Set(casters.map(\.category)).union(castingGroups.map(\.category)), low: low, high: high)
+        let key = CacheKey(preset: preset, landmarkPresent: landmarkPresent, categories: Set(casters.map(\.category)).union(castingGroups.map(\.category)), low: low, high: high)
         if cachedKey == key { return matrix }
         var focusCorners: [SIMD3<Float>] = []
         if let lo = low, let hi = high {
@@ -124,6 +125,7 @@ nonisolated final class DioramaShadowMap {
         encoder.setVertexBuffer(vertices, offset: 0, index: 0)
         encoder.setVertexBytes(&candidate, length: MemoryLayout<simd_float4x4>.stride, index: 1)
         for range in DioramaDrawPlan.ranges(casters.filter { $0.intersects(candidate) }) {
+            encoder.setCullMode(range.doubleSided ? .none : .back)
             encoder.drawIndexedPrimitives(type: .triangle, indexCount: range.count, indexType: .uint32,
                                           indexBuffer: indices, indexBufferOffset: range.start * MemoryLayout<UInt32>.stride)
         }
@@ -136,6 +138,7 @@ nonisolated final class DioramaShadowMap {
                     minimum: $0.minimum, maximum: $0.maximum).intersects(candidate)
             }
             for group in DioramaDrawPlan.instances(retained) {
+                encoder.setCullMode(group.doubleSided ? .none : .back)
                 encoder.drawIndexedPrimitives(type: .triangle, indexCount: group.count, indexType: .uint32,
                     indexBuffer: indices, indexBufferOffset: group.start * MemoryLayout<UInt32>.stride,
                     instanceCount: group.instanceCount, baseVertex: 0, baseInstance: group.firstInstance)

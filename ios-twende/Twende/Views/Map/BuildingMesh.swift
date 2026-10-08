@@ -38,6 +38,16 @@ struct BuildingMesh {
         }
     }
 
+    mutating func smoothTriangle(_ points: [SIMD3<Double>], normals ns: [SIMD3<Double>]) {
+        guard points.count == 3, ns.count == 3 else { return }
+        for i in 0..<3 {
+            let p = points[i], n = ns[i]
+            positions.append(SCNVector3(Float(p.x), Float(p.y), Float(p.z)))
+            normals.append(SCNVector3(Float(n.x), Float(n.y), Float(n.z)))
+            textureCoordinates.append(.zero)
+        }
+    }
+
     /// A single smooth surface of revolution, not a stack of cylinders or stair-stepped extrusions.
     mutating func revolve(centre: SIMD2<Double>, profile: [SIMD2<Double>], segments: Int = 64) {
         guard profile.count >= 2 else { return }
@@ -95,6 +105,16 @@ struct BuildingMesh {
                     smoothQuad(p(i, angle0), p(j, angle0), p(j, angle1), p(i, angle1), normals: [n(i, angle0), n(j, angle0), n(j, angle1), n(i, angle1)])
                 }
             }
+        }
+    }
+
+    /// Reuses the Slipway kit's closed chamfered surfaces without changing landmark pigment.
+    mutating func append(_ mesh: DioramaMesh) {
+        for id in mesh.indices {
+            let i = Int(id), p = mesh.positions[i], n = mesh.normals[i]
+            positions.append(SCNVector3(Float(p.x), Float(p.y), Float(p.z)))
+            normals.append(SCNVector3(Float(n.x), Float(n.y), Float(n.z)))
+            textureCoordinates.append(CGPoint(x: p.x / 3, y: p.z / 3))
         }
     }
 

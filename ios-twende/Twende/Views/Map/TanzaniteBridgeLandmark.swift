@@ -6,10 +6,12 @@ import SceneKit
 final class TanzaniteBridgeLandmark {
     static let layerID = "twende-tanzanite-bridge"
     private static var cachedScene: SCNScene?
-    private var host: BuildingRenderLayer?
+    var viewport: DioramaViewport?
+    private var host: DioramaLandmarkLayer?
     private var pending: Task<Void, Never>?
 
     func update(on map: MapboxMap) {
+        updateLighting()
         let camera = map.cameraState
         let distance = GeoPoint(camera.center).distanceKm(to: TanzaniteBridgeAlignment.anchor)
         guard camera.zoom >= 12.5, distance < 5 else { remove(from: map); return }
@@ -31,7 +33,15 @@ final class TanzaniteBridgeLandmark {
 
     private func install(scene: SCNScene, on map: MapboxMap) {
         do {
-            let host = BuildingRenderLayer(origin: TanzaniteBridgeAlignment.anchor.coordinate, scene: scene)
+            let host = DioramaLandmarkLayer(origin: TanzaniteBridgeAlignment.anchor.coordinate, scene: scene, usesSeaDatum: true)
+            host.viewport = viewport
+            host.onInitializationFailed = { [weak self, weak map, weak host] in
+                Task { @MainActor [weak self, weak map, weak host] in
+                    guard let self, let map, let host, self.host === host else { return }
+                    self.remove(from: map)
+                }
+            }
+            configureLighting(host)
             try map.addCustomLayer(withId: Self.layerID, layerHost: host, layerPosition: nil)
             try map.setLayerProperty(for: Self.layerID, property: "slot", value: "middle")
             self.host = host
@@ -40,6 +50,15 @@ final class TanzaniteBridgeLandmark {
             if map.layerExists(withId: Self.layerID) { try? map.removeLayer(withId: Self.layerID) }
             print("[TanzaniteBridge] Landmark layer unavailable")
         }
+    }
+
+    func updateLighting() { if let host { configureLighting(host) } }
+    private func configureLighting(_ host: DioramaLandmarkLayer) {
+        let state = DioramaState.shared
+        host.setLighting(time: state.isEnabled && !state.isBasemapOnly ? state.timeOfDay
+            : DioramaTimeOfDay(rawValue: AppSettings.shared.mapStyle.lightPreset) ?? .day,
+            reduced: ProcessInfo.processInfo.isLowPowerModeEnabled
+                || ProcessInfo.processInfo.thermalState.rawValue >= ProcessInfo.ThermalState.serious.rawValue)
     }
 
     func styleDidReload() { pending?.cancel(); pending = nil; host = nil }

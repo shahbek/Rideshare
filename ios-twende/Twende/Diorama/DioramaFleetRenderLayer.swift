@@ -25,6 +25,28 @@ nonisolated final class DioramaFleetRenderLayer: NSObject, CustomLayerHost {
         let host: ObjectIdentifier?
         let matrix: simd_float4x4
     }
+    private struct Receiver {
+        let model: simd_float4x4
+        let host: ObjectIdentifier?
+        let bounds: SIMD4<Float>
+        let points: [SIMD4<Float>]
+    }
+    private struct Draw {
+        let geometry: Geometry
+        var matrix: simd_float4x4
+        var uniforms: DioramaShaderUniforms
+        var model: simd_float4x4
+        let buffers: [MTLBuffer]
+        let shadowTexture: MTLTexture
+        let projected: DioramaProjectedShadow?
+        let field: DioramaProjectedShadow.Field?
+        let receiver: [SIMD4<Float>]
+        let tier: RideTier
+        let drawsBody: Bool
+    }
+    private var projectedShadows: [String: DioramaProjectedShadow] = [:]
+    private var receivers: [String: Receiver] = [:]
+    private var formats: SIMD2<UInt> = .zero
     private let lock = NSLock()
     private let viewport: DioramaViewport
 
@@ -70,6 +92,7 @@ nonisolated final class DioramaFleetRenderLayer: NSObject, CustomLayerHost {
 
     func renderingWillStart(_ device: MTLDevice, colorPixelFormat: UInt, depthStencilPixelFormat: UInt) {
         self.device = device
+        formats = SIMD2(colorPixelFormat, depthStencilPixelFormat)
         DioramaGPUPreparation.shared.capture(device: device, color: colorPixelFormat, depth: depthStencilPixelFormat)
         guard let library = DioramaShaderSource.library(for: device) else { return }
         let d = MTLRenderPipelineDescriptor()
@@ -142,12 +165,10 @@ nonisolated final class DioramaFleetRenderLayer: NSObject, CustomLayerHost {
                 geometry[tier] = Geometry(vertices: vb, indices: ib, count: mesh.indices.count, minimum: lo, maximum: hi)
             }
         }
-        guard let encoder = mtlCommandBuffer.makeRenderCommandEncoder(descriptor: mtlRenderPassDescriptor) else { return }
-        encoder.label = "Terrain-supported live fleet"
-        encoder.setViewport(MTLViewport(originX: 0, originY: 0, width: Double(target.width), height: Double(target.height),
-            znear: Double(parameters.depthRange.min), zfar: Double(parameters.depthRange.max)))
-        encoder.setRenderPipelineState(pipeline); encoder.setDepthStencilState(depth)
-        encoder.setFrontFacing(.counterClockwise); encoder.setCullMode(.none)
+        var draws: [Draw] = []
+        var retainedShadowIDs: Set<String> = []
+        projectedShadows = projectedShadows.filter { entry in poses.contains { $0.id == entry.key } }
+        receivers = receivers.filter { entry in poses.contains { $0.id == entry.key } }
         var projection = matrix_identity_double4x4
         for c in 0..<4 { for r in 0..<4 { projection[c, r] = parameters.projectionMatrix[c * 4 + r].doubleValue } }
         support = support.filter { cached in poses.contains { $0.id == cached.key } }
@@ -161,7 +182,7 @@ nonisolated final class DioramaFleetRenderLayer: NSObject, CustomLayerHost {
             var anchor = matrix_identity_double4x4
             anchor[0, 0] = scale; anchor[1, 1] = -scale; anchor[3, 0] = point.x; anchor[3, 1] = point.y
             let transform = projection * anchor
-            var matrix = simd_float4x4(columns: (SIMD4(transform.columns.0), SIMD4(transform.columns.1), SIMD4(transform.columns.2), SIMD4(transform.columns.3)))
+            let matrix = simd_float4x4(columns: (SIMD4(transform.columns.0), SIMD4(transform.columns.1), SIMD4(transform.columns.2), SIMD4(transform.columns.3)))
             let eye = MapRenderCamera.eye(transform: transform, parameters: parameters, origin: origin).position
             var uniforms = environment?.1.uniforms ?? DioramaLighting.uniforms(for: time, eye: eye)
             uniforms.eye = SIMD4(eye, 1); uniforms.post.x = 0
@@ -191,25 +212,76 @@ nonisolated final class DioramaFleetRenderLayer: NSObject, CustomLayerHost {
             }
             let bounds = DioramaRenderLayer.Range(category: .props, start: 0, count: 0,
                 minimum: geometry.minimum, maximum: geometry.maximum)
-            guard bounds.intersects(matrix * model) else { continue }
             let enlargement = Self.readableScale(matrix: matrix * model, geometry: geometry,
                 width: presentationSize.width > 1 ? presentationSize.width : parameters.width,
                 height: presentationSize.height > 1 ? presentationSize.height : parameters.height,
                 zoom: parameters.zoom, assigned: pose.isAssigned)
             for column in 0..<3 { model[column] *= enlargement }
-            guard bounds.intersects(matrix * model) else { continue }
+            let worldSun = SIMD3(uniforms.sunDirection.x, uniforms.sunDirection.y, uniforms.sunDirection.z)
+            let localSun = simd_normalize(SIMD3<Float>(
+                simd_dot(worldSun, simd_normalize(SIMD3(model[0].x,model[0].y,model[0].z))),
+                simd_dot(worldSun, simd_normalize(SIMD3(model[1].x,model[1].y,model[1].z))),
+                simd_dot(worldSun, simd_normalize(SIMD3(model[2].x,model[2].y,model[2].z)))))
+            let shadowBounds = DioramaProjectedShadow.receiverBounds(minimum: geometry.minimum, maximum: geometry.maximum, sun: localSun)
+            let drawsBody = bounds.intersects(matrix * model)
+            let receivesShadow = DioramaRenderLayer.Range(category: .ground, start: 0, count: 0,
+                minimum: SIMD3(shadowBounds.x,shadowBounds.y,-0.5), maximum: SIMD3(shadowBounds.z,shadowBounds.w,0.5)).intersects(matrix * model)
+            guard drawsBody || receivesShadow else { continue }
+            retainedShadowIDs.insert(pose.id)
+            if projectedShadows[pose.id] == nil {
+                projectedShadows[pose.id] = DioramaProjectedShadow(device: device, color: formats.x, depth: formats.y, size: 256)
+            }
+            let receiver: [SIMD4<Float>]
+            if let cached = receivers[pose.id], cached.model == model, cached.host == hostID, cached.bounds == shadowBounds {
+                receiver = cached.points
+            } else {
+                let geographic = DioramaProjection(origin: origin), inverse = simd_inverse(model)
+                receiver = (0..<25).map { i in
+                    let x = shadowBounds.x + (shadowBounds.z - shadowBounds.x) * Float(i % 5) / 4
+                    let y = shadowBounds.y + (shadowBounds.w - shadowBounds.y) * Float(i / 5) / 4
+                    let p = model * SIMD4(x,y,0,1)
+                    let c = geographic.coordinate(DV2(Double(p.x),Double(p.y)))
+                    let point = GeoPoint(latitude: c.latitude, longitude: c.longitude)
+                    let h = host?.groundHeight(at: point) ?? parameters.elevationData?.getElevationFor(point.coordinate)?.doubleValue ?? Double(p.z)
+                    return inverse * SIMD4(p.x,p.y,Float(h + 0.03),1)
+                }
+                receivers[pose.id] = Receiver(model: model, host: hostID, bounds: shadowBounds, points: receiver)
+            }
+            let projected = projectedShadows[pose.id]
+            let field = receivesShadow ? projected?.encode(command: mtlCommandBuffer, vertices: geometry.vertices,
+                indices: geometry.indices, count: geometry.count, minimum: geometry.minimum, maximum: geometry.maximum,
+                sun: localSun, receiver: receiver) : nil
             let buffers = environment?.1.buffers.prefix(3).map { $0 } ?? [blankLight, blankTable, blankIndex]
             let shadowTexture = environment?.1.textures[1] ?? blankShadow
             if environment?.1.textures[1] == nil { uniforms.shadowParams = .zero }
+            draws.append(Draw(geometry: geometry, matrix: matrix, uniforms: uniforms, model: model,
+                buffers: buffers, shadowTexture: shadowTexture, projected: projected, field: field,
+                receiver: receiver, tier: pose.tier, drawsBody: drawsBody))
+        }
+        projectedShadows = projectedShadows.filter { retainedShadowIDs.contains($0.key) }
+        receivers = receivers.filter { retainedShadowIDs.contains($0.key) }
+        guard !draws.isEmpty, let encoder = mtlCommandBuffer.makeRenderCommandEncoder(descriptor: mtlRenderPassDescriptor) else { return }
+        encoder.label = "Terrain-supported fleet and actual-mesh cast shadows"
+        encoder.setViewport(MTLViewport(originX: 0, originY: 0, width: Double(target.width), height: Double(target.height),
+            znear: Double(parameters.depthRange.min), zfar: Double(parameters.depthRange.max)))
+        encoder.setFrontFacing(.counterClockwise); encoder.setCullMode(.none)
+        for draw in draws {
+            if let projected = draw.projected, let field = draw.field {
+                projected.receive(encoder: encoder, field: field, points: draw.receiver, matrix: draw.matrix * draw.model,
+                    opacity: draw.uniforms.params.z > 1.5 ? 0.12 : 0.32)
+            }
+            guard draw.drawsBody else { continue }
+            let geometry = draw.geometry
+            var matrix = draw.matrix, uniforms = draw.uniforms, model = draw.model
             encoder.setVertexBuffer(geometry.vertices, offset: 0, index: 0)
             encoder.setVertexBytes(&matrix, length: MemoryLayout<simd_float4x4>.stride, index: 1)
             encoder.setVertexBytes(&uniforms, length: MemoryLayout<DioramaShaderUniforms>.stride, index: 2)
             encoder.setVertexBytes(&model, length: MemoryLayout<simd_float4x4>.stride, index: 3)
             encoder.setFragmentBytes(&uniforms, length: MemoryLayout<DioramaShaderUniforms>.stride, index: 0)
-            for (i, buffer) in buffers.enumerated() { encoder.setFragmentBuffer(buffer, offset: 0, index: i + 1) }
-            encoder.setFragmentTexture(shadowTexture, index: 0)
+            for (i, buffer) in draw.buffers.enumerated() { encoder.setFragmentBuffer(buffer, offset: 0, index: i + 1) }
+            encoder.setFragmentTexture(draw.shadowTexture, index: 0)
             if let contactPipeline, let contactDepth {
-                var dimensions = SIMD4<Float>(Float(pose.tier.modelLengthMetres * 0.29), Float(pose.tier.modelLengthMetres * 0.53), 0, 0)
+                var dimensions = SIMD4<Float>(Float(draw.tier.modelLengthMetres * 0.29), Float(draw.tier.modelLengthMetres * 0.53), 0, 0)
                 encoder.setVertexBytes(&dimensions, length: MemoryLayout<SIMD4<Float>>.stride, index: 4)
                 encoder.setRenderPipelineState(contactPipeline); encoder.setDepthStencilState(contactDepth)
                 encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6)
@@ -241,7 +313,8 @@ nonisolated final class DioramaFleetRenderLayer: NSObject, CustomLayerHost {
     }
 
     func renderingWillEnd() {
-        geometry.removeAll(); support.removeAll(); device = nil; pipeline = nil; depth = nil
+        geometry.removeAll(); support.removeAll(); projectedShadows.removeAll(); receivers.removeAll()
+        device = nil; pipeline = nil; depth = nil
         contactPipeline = nil; contactDepth = nil
         blankShadow = nil; blankLight = nil; blankTable = nil; blankIndex = nil
     }

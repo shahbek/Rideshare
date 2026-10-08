@@ -356,6 +356,7 @@ extension TripMapView {
         }
 
         private func applyFrameRatePolicy() {
+            tanzaniteBridge.updateLighting(); airtelHouse.updateLighting(); cityLandmarks.updateLighting()
             let reduced = ProcessInfo.processInfo.isLowPowerModeEnabled
                 || ProcessInfo.processInfo.thermalState.rawValue >= ProcessInfo.ThermalState.serious.rawValue
             mapView?.preferredFrameRateRange = reduced
@@ -365,6 +366,7 @@ extension TripMapView {
 
         private func configureStandardStyle() {
             guard let map = mapView?.mapboxMap else { return }
+            tanzaniteBridge.viewport = viewport; airtelHouse.viewport = viewport; cityLandmarks.viewport = viewport
             let style = AppSettings.shared.mapStyle
             appliedStyle = style
             for (key, value) in Self.standardConfig(for: style) {
@@ -533,6 +535,8 @@ extension TripMapView {
             let state = DioramaState.shared
             guard let mapView else { return }
             syncVehicles()
+            tanzaniteBridge.updateLighting(); airtelHouse.updateLighting(); cityLandmarks.updateLighting()
+            mapView.mapboxMap.triggerRepaint()
             if state.isEnabled, diorama == nil {
                 let manager = DioramaTileManager()
                 manager.viewport = viewport

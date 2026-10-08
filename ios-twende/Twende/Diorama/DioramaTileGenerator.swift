@@ -30,6 +30,7 @@ nonisolated struct DioramaInstanceGroup: Sendable {
     let firstInstance: Int
     let minimum: SIMD3<Float>
     let maximum: SIMD3<Float>
+    var landmarkPlaceholder: Bool = false
 }
 
 /// Everything the renderer needs for one generated tile: one interleaved vertex buffer, one index

@@ -5,7 +5,7 @@ import simd
 enum PSPFTowerGeometry {
     static func build(_ site: DarLandmarkSite, ring original: [SIMD2<Double>], root: SCNNode) {
         typealias P = DarLandmarkParts
-        let ring = BuildingContour.rounded(original, tangentDistance: 1.0, segments: 5)
+        let ring = BuildingContour.rounded(original, tangentDistance: 2.0, segments: 6)
         let lowX = ring.map(\.x).min() ?? -20, highX = ring.map(\.x).max() ?? 20
         let width = highX - lowX
         let roof: Double = 140.5
@@ -15,7 +15,7 @@ enum PSPFTowerGeometry {
         for i in ring.indices {
             let j = (i + 1) % ring.count, a = ring[i], b = ring[j], delta = b - a
             let length = simd_length(delta), direction = simd_normalize(delta), outward = SIMD2(direction.y, -direction.x)
-            let bays = max(1, Int(ceil(length / 1.5)))
+            let bays = max(1, Int(ceil(length / 2.4)))
             for bay in 0..<bays {
                 let t0 = Double(bay) / Double(bays), t1 = Double(bay + 1) / Double(bays)
                 let p = a + delta * t0, q = a + delta * t1

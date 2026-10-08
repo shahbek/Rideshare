@@ -8,7 +8,7 @@ enum AirtelBuildingGeometry {
     static let glassTop: Double = 24.8
     static let canopyHeight: Double = 26.7
     static let screenTop: Double = 31.2
-    private static let white = BuildingSurfaces.make("airtel.whiteAluminium", color: "#F3F5F2", roughness: 0.55, metalness: 0.12)
+    private static let white = BuildingSurfaces.make("airtel.whiteAluminium", color: "#F4EFE7", roughness: 0.55, metalness: 0.12)
     private static let silver = BuildingSurfaces.make("airtel.silverSpandrel", color: "#BFCBCB", roughness: 0.48, metalness: 0.25)
     private static let frame = BuildingSurfaces.make("airtel.charcoalAluminium", color: "#30494E", roughness: 0.46, metalness: 0.35)
     static let red = BuildingSurfaces.make("airtel.redEnamel", color: "#E22332", roughness: 0.42, metalness: 0.08)
@@ -18,7 +18,7 @@ enum AirtelBuildingGeometry {
     static func make(geometry: Geometry) -> SCNScene {
         let scene = SCNScene()
         guard let footprint = AirtelBuildingSite.footprint(geometry), let original = footprint.rings.first else { return scene }
-        let outline = BuildingContour.rounded(original, tangentDistance: 3.2, segments: 10)
+        let outline = BuildingContour.rounded(original, tangentDistance: 2.4, segments: 6)
         let front = AirtelBuildingSite.frontEdge(outline)
         let a = outline[front], b = outline[(front + 1) % outline.count]
         let direction = simd_normalize(b - a)
@@ -31,7 +31,7 @@ enum AirtelBuildingGeometry {
         let podium = outline.map { $0 * 0.965 }
         facade(ring: podium, bottom: 0.25, top: glassBase, rows: 2, bayWidth: 2.7,
                 colors: ["#BFCBCB", "#C6D6D6"], root: root, name: "airtelPodium")
-        facade(ring: body, bottom: glassBase, top: glassTop, rows: 16, bayWidth: 1.45,
+        facade(ring: body, bottom: glassBase, top: glassTop, rows: 8, bayWidth: 2.2,
                 colors: ["#326A72", "#417E86", "#558C94"], root: root, name: "airtelCurtainWall")
         for floor in 1..<4 {
             let z = glassBase + Double(floor) * 4.4
@@ -42,16 +42,16 @@ enum AirtelBuildingGeometry {
             moulding.perimeter(rings: [outline], bottom: z, top: z + thickness, projection: 0.32)
             root.addChildNode(moulding.node(name: "airtelWhiteFascia", material: white))
         }
-        root.addChildNode(BuildingFootprint(rings: [body]).deck(at: glassTop, thickness: 0.3, material: white, name: "airtelClosedRoof"))
-        root.addChildNode(BuildingFootprint(rings: [outline]).deck(at: 7.0, thickness: 0.25, material: white, name: "airtelPodiumDeck"))
+        root.addChildNode(LandmarkMesh.volume(body, bottom: glassTop, top: glassTop + 0.3, material: white, name: "airtelClosedRoof"))
+        root.addChildNode(LandmarkMesh.volume(outline, bottom: 7.0, top: 7.25, material: white, name: "airtelPodiumDeck"))
 
         let canopy = outline.map { $0 * 1.055 }
-        root.addChildNode(BuildingFootprint(rings: [canopy]).deck(at: canopyHeight, thickness: 0.32, material: white, name: "airtelCantileverCanopy"))
+        root.addChildNode(LandmarkMesh.volume(canopy, bottom: canopyHeight, top: canopyHeight + 0.5, material: white, name: "airtelCantileverCanopy"))
         let screen = outline.map { $0 * 0.88 }
         band(screen, bottom: 28.15, top: screenTop, offset: 0, material: white, root: root, name: "airtelRoofScreen")
         facade(ring: screen, bottom: 27.4, top: 28.15, rows: 1, bayWidth: 2.5,
                 colors: ["#558C94"], root: root, name: "airtelRoofRibbon")
-        root.addChildNode(BuildingFootprint(rings: [screen]).deck(at: screenTop - 0.12, thickness: 0.12, material: white, name: "airtelScreenCap"))
+        root.addChildNode(LandmarkMesh.volume(screen, bottom: screenTop - 0.22, top: screenTop, material: white, name: "airtelScreenCap"))
         var supports = BuildingMesh(), columns = BuildingMesh()
         for edge in outline.indices {
             let p = outline[edge], q = outline[(edge + 1) % outline.count]
@@ -81,8 +81,9 @@ enum AirtelBuildingGeometry {
         let entranceRing = [entrance - u - n, entrance + u - n, entrance + u + n, entrance - u + n]
         var ordered = entranceRing
         if BuildingFootprint.area(ordered) < 0 { ordered.reverse() }
-        root.addChildNode(BuildingFootprint(rings: [ordered]).deck(at: 3.0, thickness: 0.2, material: white, name: "airtelEntranceCanopy"))
+        root.addChildNode(LandmarkMesh.volume(ordered, bottom: 3.0, top: 3.28, material: white, name: "airtelEntranceCanopy"))
         mast(root: root, at: SIMD2(3, -3))
+        DioramaLandmarkEnvironment.add(to: scene, ring: original, airtel: true)
         return scene
     }
 
@@ -120,9 +121,9 @@ enum AirtelBuildingGeometry {
                     let ns = curved ? [v(n0, 0), v(n1, 0), v(n1, 0), v(n0, 0)] : Array(repeating: v(normal, 0), count: 4)
                     panes[colorIndex].smoothQuad(v(p, low), v(q, low), v(q, high), v(p, high), normals: ns)
                     let offset = normal * 0.045
-                    mullions.quad(v(p + offset, low), v(q + offset, low), v(q + offset, low + 0.055), v(p + offset, low + 0.055))
+                    mullions.quad(v(p + offset, low), v(q + offset, low), v(q + offset, low + 0.10), v(p + offset, low + 0.10))
                 }
-                let along = simd_normalize(d) * min(0.055, simd_length(d) * 0.2)
+                let along = simd_normalize(d) * min(0.10, simd_length(d) * 0.2)
                 let offset = normal * 0.055
                 mullions.quad(v(p + offset, bottom), v(p + along + offset, bottom), v(p + along + offset, top), v(p + offset, top))
             }

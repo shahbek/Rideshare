@@ -11,7 +11,7 @@ enum TanzaniteProceduralPylons {
         let origin = alignment.point(at: station, elevation: 0)
         let forward = alignment.tangent(at: station)
         let across = simd_cross(SIMD3<Double>(0, 0, 1), forward)
-        let concrete = BuildingSurfaces.make("surface.bridgeConcrete", color: "#E4E8E9", roughness: 0.7)
+        let concrete = BuildingSurfaces.make("surface.bridgeConcrete", color: "#F4EFE7", roughness: 0.7)
         for side in [-1.0, 1.0] {
             var leg = BuildingMesh()
             loft(&leg, sections: profile.sections, side: side, origin: origin, forward: forward, across: across)
@@ -45,11 +45,14 @@ enum TanzaniteProceduralPylons {
 
     private static func ring(_ section: TanzanitePylonProfile.Section, side: Double) -> [SIMD3<Double>] {
         let x = section.depth / 2, y = section.width / 2
-        let c = min(0.20, min(x, y) * 0.18)
-        let corners: [SIMD2<Double>] = [
-            SIMD2(-x + c, -y), SIMD2(x - c, -y), SIMD2(x, -y + c), SIMD2(x, y - c),
-            SIMD2(x - c, y), SIMD2(-x + c, y), SIMD2(-x, y - c), SIMD2(-x, -y + c)
-        ]
+        let c = min(0.65, min(x, y) * 0.28)
+        let corners = (0..<4).flatMap { corner -> [SIMD2<Double>] in
+            let centres = [SIMD2(x - c, y - c), SIMD2(-x + c, y - c), SIMD2(-x + c, -y + c), SIMD2(x - c, -y + c)]
+            return (0...6).map { step in
+                let angle = Double(corner) * .pi / 2 + Double(step) * .pi / 12
+                return centres[corner] + SIMD2(cos(angle), sin(angle)) * c
+            }
+        }
         return corners.map { SIMD3($0.x, $0.y + side * section.offset, section.elevation) }
     }
 
@@ -58,26 +61,31 @@ enum TanzaniteProceduralPylons {
         let rings = sections.map { ring($0, side: side) }
         func world(_ p: SIMD3<Double>) -> SIMD3<Double> { origin + forward * p.x + across * p.y + SIMD3(0, 0, p.z) }
         func worldNormal(_ n: SIMD3<Double>) -> SIMD3<Double> { forward * n.x + across * n.y + SIMD3(0, 0, n.z) }
+        let count = rings[0].count
         func normal(row: Int, face: Int) -> SIMD3<Double> {
-            let next = (face + 1) % 8
+            let next = (face + 1) % count
             let before = max(0, row - 1), after = min(rings.count - 1, row + 1)
             let edge = rings[row][next] - rings[row][face]
             let rise = (rings[after][face] + rings[after][next] - rings[before][face] - rings[before][next]) / 2
             return worldNormal(simd_normalize(simd_cross(edge, rise)))
         }
         for row in 0..<(rings.count - 1) {
-            for face in 0..<8 {
-                let next = (face + 1) % 8
-                let low = normal(row: row, face: face), high = normal(row: row + 1, face: face)
-                mesh.smoothQuad(world(rings[row][face]), world(rings[row][next]), world(rings[row + 1][next]), world(rings[row + 1][face]), normals: [low, low, high, high])
+            for face in 0..<count {
+                let next = (face + 1) % count
+                func n(_ level: Int, _ vertex: Int) -> SIMD3<Double> {
+                    if face % 7 == 6 { return normal(row: level, face: face) }
+                    let before = (vertex + count - 1) % count
+                    return simd_normalize(normal(row: level, face: before) + normal(row: level, face: vertex))
+                }
+                mesh.smoothQuad(world(rings[row][face]), world(rings[row][next]), world(rings[row + 1][next]), world(rings[row + 1][face]), normals: [n(row, face), n(row, next), n(row + 1, next), n(row + 1, face)])
             }
         }
         // End caps keep the structural volume closed and the concrete faces flat.
         for row in [0, rings.count - 1] {
             let section = sections[row]
             let centre = world(SIMD3(0, side * section.offset, section.elevation))
-            for face in 0..<8 {
-                let next = (face + 1) % 8
+            for face in 0..<count {
+                let next = (face + 1) % count
                 if row == 0 { mesh.triangle(centre, world(rings[row][next]), world(rings[row][face]), normal: SIMD3(0, 0, -1)) }
                 else { mesh.triangle(centre, world(rings[row][face]), world(rings[row][next]), normal: SIMD3(0, 0, 1)) }
             }

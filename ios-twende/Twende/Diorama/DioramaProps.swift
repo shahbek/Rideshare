@@ -202,7 +202,7 @@ nonisolated struct DioramaPropLibrary: Sendable {
 
     /// Coconut palm: a gently curving ringed trunk, a crown of arching fronds that rise then droop, a
     /// few young fronds pointing up and a cluster of coconuts under the crown.
-    private static func makePalm(seed: UInt64, lean: Double, light: Bool = false) -> DioramaMesh {
+    static func makePalm(seed: UInt64, lean: Double, light: Bool = false) -> DioramaMesh {
         var m = DioramaMesh()
         var rng = DioramaRandom(seed: seed, salt: 28)
         let height = rng.range(7.0...8.5)

@@ -4,7 +4,8 @@ import SceneKit
 /// Independently cached landmark layers. Only each mapped building is clipped; symbols and roads survive.
 @MainActor
 final class DarCityLandmarks {
-    private var hosts: [String: BuildingRenderLayer] = [:]
+    var viewport: DioramaViewport?
+    private var hosts: [String: DioramaLandmarkLayer] = [:]
     private static var scenes: [String: SCNScene] = [:]
     private var pending: Task<Void, Never>?
     private var revision: UInt = 0
@@ -14,6 +15,7 @@ final class DarCityLandmarks {
     static func sourceID(_ id: String) -> String { "twende-landmark-site-\(id)" }
 
     func update(on map: MapboxMap) {
+        updateLighting()
         let desired = DarLandmarkSite.all.filter { map.cameraState.zoom >= 14.5 && GeoPoint(map.cameraState.center).distanceKm(to: $0.anchor) < 1.6 }
         for id in Array(hosts.keys) where !desired.contains(where: { $0.id == id }) { remove(id: id, from: map) }
         guard pending == nil, desired.contains(where: { !map.layerExists(withId: Self.layerID($0.id)) }) else { return }
@@ -35,7 +37,15 @@ final class DarCityLandmarks {
         let scene = Self.scenes[site.id] ?? DarLandmarkGeometry.make(site)
         Self.scenes[site.id] = scene
         do {
-            let host = BuildingRenderLayer(origin: site.anchor.coordinate, scene: scene)
+            let host = DioramaLandmarkLayer(origin: site.anchor.coordinate, scene: scene, ring: site.footprint?.rings.first ?? [])
+            host.viewport = viewport
+            host.onInitializationFailed = { [weak self, weak map, weak host] in
+                Task { @MainActor [weak self, weak map, weak host] in
+                    guard let self, let map, let host, self.hosts[site.id] === host else { return }
+                    self.remove(id: site.id, from: map)
+                }
+            }
+            configureLighting(host)
             try map.addCustomLayer(withId: Self.layerID(site.id), layerHost: host, layerPosition: nil)
             try map.setLayerProperty(for: Self.layerID(site.id), property: "slot", value: "middle")
             var source = GeoJSONSource(id: Self.sourceID(site.id))
@@ -49,6 +59,15 @@ final class DarCityLandmarks {
             hosts[site.id] = host
             map.triggerRepaint()
         } catch { remove(id: site.id, from: map); throw error }
+    }
+
+    func updateLighting() { for host in hosts.values { configureLighting(host) } }
+    private func configureLighting(_ host: DioramaLandmarkLayer) {
+        let state = DioramaState.shared
+        host.setLighting(time: state.isEnabled && !state.isBasemapOnly ? state.timeOfDay
+            : DioramaTimeOfDay(rawValue: AppSettings.shared.mapStyle.lightPreset) ?? .day,
+            reduced: ProcessInfo.processInfo.isLowPowerModeEnabled
+                || ProcessInfo.processInfo.thermalState.rawValue >= ProcessInfo.ThermalState.serious.rawValue)
     }
 
     func styleDidReload() {

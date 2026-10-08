@@ -1107,7 +1107,7 @@ nonisolated enum DioramaShaderSource {
 
     /// Everything compiled into the diorama library: main shaders (which forward-declare the grade
     /// helper), the grade helper, then the screen-space passes.
-    static var fullSource: String { source + gradeSource + postSource }
+    static var fullSource: String { source + gradeSource + postSource + DioramaProjectedShadow.source }
 
     private static let lock = NSLock()
     nonisolated(unsafe) private static var cached: (device: ObjectIdentifier, library: MTLLibrary)?

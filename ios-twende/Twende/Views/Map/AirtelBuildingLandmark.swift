@@ -8,7 +8,8 @@ final class AirtelBuildingLandmark {
     static let clipID = "twende-airtel-native-clip"
     static let sourceID = "twende-airtel-footprint"
     private static var cached: (Geometry, SCNScene)?
-    private var host: BuildingRenderLayer?
+    var viewport: DioramaViewport?
+    private var host: DioramaLandmarkLayer?
     private var pending: Task<Void, Never>?
     private var query: Cancelable?
     private var revision: UInt = 0
@@ -19,7 +20,8 @@ final class AirtelBuildingLandmark {
 
     func update(on map: MapboxMap, settled: Bool = false) {
         let camera = map.cameraState
-        guard camera.zoom >= 14, GeoPoint(camera.center).distanceKm(to: AirtelBuildingSite.anchor) < 2.5 else {
+        updateLighting()
+        guard camera.zoom >= 12.5, GeoPoint(camera.center).distanceKm(to: AirtelBuildingSite.anchor) < 6 else {
             remove(from: map); return
         }
         guard pending == nil, query == nil,
@@ -52,7 +54,16 @@ final class AirtelBuildingLandmark {
         else { scene = AirtelBuildingGeometry.make(geometry: geometry); Self.cached = (geometry, scene) }
         removeLayers(from: map)
         do {
-            let host = BuildingRenderLayer(origin: AirtelBuildingSite.anchor.coordinate, scene: scene)
+            let host = DioramaLandmarkLayer(origin: AirtelBuildingSite.anchor.coordinate, scene: scene,
+                ring: AirtelBuildingSite.footprint(geometry)?.rings.first ?? [], isAirtel: true)
+            host.viewport = viewport
+            host.onInitializationFailed = { [weak self, weak map, weak host] in
+                Task { @MainActor [weak self, weak map, weak host] in
+                    guard let self, let map, let host, self.host === host else { return }
+                    self.remove(from: map)
+                }
+            }
+            configureLighting(host)
             try map.addCustomLayer(withId: Self.layerID, layerHost: host, layerPosition: nil)
             try map.setLayerProperty(for: Self.layerID, property: "slot", value: "middle")
             var source = GeoJSONSource(id: Self.sourceID)
@@ -72,6 +83,16 @@ final class AirtelBuildingLandmark {
             removeLayers(from: map)
             throw error
         }
+    }
+
+    func updateLighting() { if let host { configureLighting(host) } }
+
+    private func configureLighting(_ host: DioramaLandmarkLayer) {
+        let state = DioramaState.shared
+        let time = state.isEnabled && !state.isBasemapOnly ? state.timeOfDay
+            : DioramaTimeOfDay(rawValue: AppSettings.shared.mapStyle.lightPreset) ?? .day
+        host.setLighting(time: time, reduced: ProcessInfo.processInfo.isLowPowerModeEnabled
+            || ProcessInfo.processInfo.thermalState.rawValue >= ProcessInfo.ThermalState.serious.rawValue)
     }
 
     func styleDidReload() {

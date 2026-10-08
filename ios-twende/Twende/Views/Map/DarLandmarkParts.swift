@@ -3,7 +3,7 @@ import simd
 
 /// Small explicit-mesh construction vocabulary shared only by the researched city landmarks.
 enum DarLandmarkParts {
-    static let plaster = BuildingSurfaces.make("landmark.plaster", color: "#FAF9F4", roughness: 0.85, metalness: 0)
+    static let plaster = BuildingSurfaces.make("landmark.plaster", color: "#F4EFE7", roughness: 0.85, metalness: 0)
     static let trim = BuildingSurfaces.make("landmark.limestone", color: "#D9CDB7", roughness: 0.8, metalness: 0)
     static let clay = BuildingSurfaces.make("landmark.clay", color: "#AD583D", roughness: 0.82, metalness: 0)
     static let slate = BuildingSurfaces.make("landmark.slate", color: "#4C504F", roughness: 0.8, metalness: 0)
@@ -18,7 +18,7 @@ enum DarLandmarkParts {
     }
 
     static func volume(_ ring: [SIMD2<Double>], bottom: Double, top: Double, material: SCNMaterial, name: String, root: SCNNode) {
-        root.addChildNode(BuildingFootprint(rings: [ring]).deck(at: bottom, thickness: top - bottom, material: material, name: name))
+        root.addChildNode(LandmarkMesh.volume(ring, bottom: bottom, top: top, material: material, name: name))
     }
 
     static func beam(_ mesh: inout BuildingMesh, _ a: SIMD3<Double>, _ b: SIMD3<Double>, radius: Double = 0.12) {

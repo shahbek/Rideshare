@@ -21,6 +21,7 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost, @unchecke
         var maximum: SIMD3<Float> = SIMD3(repeating: .greatestFiniteMagnitude)
         /// Thin open surfaces (fronds, sails, canopies, sprites) drawn without back-face culling.
         var doubleSided: Bool = false
+        var landmarkPlaceholder: Bool = false
 
         /// Reject only boxes wholly behind the reveal front; crossing geometry still uses fragment clipping.
         func intersectsReveal(_ reveal: SIMD4<Float>) -> Bool {
@@ -135,6 +136,7 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost, @unchecke
     private let lock = NSLock()
     private var visible: Set<DioramaCategory>
     private var timeOfDay: DioramaTimeOfDay
+    private var elevationOffset: Double = 0
     private var diagnosticText: String = "not started"
     private var reveal: SIMD4<Float> = .zero
     private var completedReveal: SIMD4<Float>?
@@ -216,6 +218,7 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost, @unchecke
     // Render-thread-only preparation cache. Water/reveal uniforms still update every frame.
     private var selectionVisible: Set<DioramaCategory>?
     private var selectionGlow: Bool = false
+    private var selectionAirtel: Bool = false
     private var eligibleRanges: [Range] = []
     private var eligibleGroups: [DioramaInstanceGroup] = []
     private var eligibleCasters: [DioramaInstanceGroup] = []
@@ -274,9 +277,10 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost, @unchecke
         self.labels = labels
         self.displayScale = displayScale
         self.vertices = vertices
-        self.indices = indices
-        self.ranges = ranges
-        self.groups = groups
+        let ownership = DioramaLandmarkOwnership.partition(vertices: vertices, indices: indices, ranges: ranges, groups: groups, origin: origin)
+        self.indices = ownership.indices
+        self.ranges = ownership.ranges
+        self.groups = ownership.groups
         self.instances = instances
         self.lightGrid = lightGrid
         self.waterHeight = Float(waterHeight)
@@ -321,6 +325,11 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost, @unchecke
         visible = categories
         self.timeOfDay = timeOfDay
         lock.unlock()
+    }
+
+    /// Local landmark meshes may follow the resident ground without lifting saved tile geometry.
+    func setElevationOffset(_ height: Double) {
+        lock.lock(); elevationOffset = height.isFinite ? height : 0; lock.unlock()
     }
 
     func setWireframe(_ enabled: Bool) {
@@ -469,6 +478,7 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost, @unchecke
         }
         lock.lock()
         let visible = self.visible
+        let elevationOffset = self.elevationOffset
         let timeOfDay = self.timeOfDay
         let reducedEffects = self.reducedEffects
         let wireframe = self.wireframe
@@ -484,12 +494,13 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost, @unchecke
         DioramaGPUPreparation.shared.captureSize(width: texture.width, height: texture.height)
         let encodeStarted = CACurrentMediaTime()
         let glowOn = timeOfDay.showsLights
-        if selectionVisible != visible || selectionGlow != glowOn {
-            eligibleRanges = ranges.filter { $0.count > 0 && visible.contains($0.category) && (!$0.category.isEmissive || glowOn) }
-            eligibleGroups = groups.filter { !$0.instances.isEmpty && visible.contains($0.category) && (!$0.category.isEmissive || glowOn) }
+        let airtelPresent = DioramaLandmarkPresence.shared.hasAirtel(viewport: viewport)
+        if selectionVisible != visible || selectionGlow != glowOn || selectionAirtel != airtelPresent {
+            eligibleRanges = ranges.filter { $0.count > 0 && visible.contains($0.category) && (!$0.category.isEmissive || glowOn) && (!airtelPresent || !$0.landmarkPlaceholder) }
+            eligibleGroups = groups.filter { !$0.instances.isEmpty && visible.contains($0.category) && (!$0.category.isEmissive || glowOn) && (!airtelPresent || !$0.landmarkPlaceholder) }
             eligibleCasters = eligibleGroups.filter { !$0.category.isEmissive }
-            reflectionSignature = visible.map(\.rawValue).sorted().joined()
-            selectionVisible = visible; selectionGlow = glowOn; selectionTransform = nil
+            reflectionSignature = visible.map(\.rawValue).sorted().joined() + (airtelPresent ? "-airtel" : "-generic")
+            selectionVisible = visible; selectionGlow = glowOn; selectionAirtel = airtelPresent; selectionTransform = nil
         }
         let drawn = eligibleRanges
         guard !drawn.isEmpty || !eligibleGroups.isEmpty else {
@@ -514,7 +525,7 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost, @unchecke
         model[3, 1] = point.y
         // Vertex heights use Mapbox's absolute elevations, with no extra scene lift or scaling.
         // Adding the origin elevation again would lift the sea and double-count the terrain.
-        model[3, 2] = 0
+        model[3, 2] = elevationOffset
         let transform = projection * model
         viewport?.publish(DioramaViewport.Snapshot(transform: transform, origin: origin,
             latitude: parameters.latitude, longitude: parameters.longitude, zoom: parameters.zoom,
@@ -621,7 +632,7 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost, @unchecke
         let castingGroups = eligibleCasters
         if reveal.w < 0.5, lifecycleReveal.w < 0.5, unionState.x < 0.5, let shadowMap, let shadowMatrix = shadowMap.update(command: mtlCommandBuffer, vertices: vertexBuffer, indices: indexBuffer, instances: instanceBuffer,
             ranges: drawn, groups: castingGroups, focus: viewLow.x.isFinite && viewHigh.x > viewLow.x ? (viewLow, viewHigh) : nil,
-            sun: SIMD3(uniforms.sunDirection.x, uniforms.sunDirection.y, uniforms.sunDirection.z), preset: timeOfDay) {
+            sun: SIMD3(uniforms.sunDirection.x, uniforms.sunDirection.y, uniforms.sunDirection.z), preset: timeOfDay, landmarkPresent: airtelPresent) {
             uniforms.shadowMatrix = shadowMatrix
             uniforms.shadowParams = SIMD4(1, 1.0 / 2048.0, 0.00006, timeOfDay == .day ? 0.65 : 0.85)
         }
