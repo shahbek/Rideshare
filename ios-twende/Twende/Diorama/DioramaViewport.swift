@@ -5,7 +5,6 @@ import simd
 
 /// The exact SDK-to-Metal camera transform, shared without querying hundreds of SDK points on main.
 nonisolated final class DioramaViewport: @unchecked Sendable {
-    static let shared = DioramaViewport()
     struct Snapshot: Sendable {
         let transform: simd_double4x4
         let origin: CLLocationCoordinate2D
@@ -14,12 +13,25 @@ nonisolated final class DioramaViewport: @unchecked Sendable {
         let zoom: Double
         let bearing: Double
         let pitch: Double
+        let size: CGSize
     }
     private let lock = NSLock()
     private var value: Snapshot?
+    private var onRefresh: (@Sendable () -> Void)?
 
+    func setOnRefresh(_ callback: @escaping @Sendable () -> Void) {
+        lock.lock(); onRefresh = callback; lock.unlock()
+    }
     func publish(_ snapshot: Snapshot) {
-        lock.lock(); value = snapshot; lock.unlock()
+        lock.lock()
+        let refreshed = value == nil
+        value = snapshot
+        let callback = onRefresh
+        lock.unlock()
+        if refreshed { callback?() }
+    }
+    func invalidate() {
+        lock.lock(); value = nil; lock.unlock()
     }
     func snapshot() -> Snapshot? {
         lock.lock(); defer { lock.unlock() }; return value

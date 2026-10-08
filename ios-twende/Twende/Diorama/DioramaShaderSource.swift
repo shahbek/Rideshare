@@ -155,6 +155,8 @@ nonisolated enum DioramaShaderSource {
     };
 
     float3 dioramaGrade(float3 color, float3 worldPosition, constant DioramaUniforms &u);
+    float3 dioramaPointLights(float3 p, float3 n, constant DioramaUniforms &u,
+        const device DioramaLight *lights, const device uint2 *table, const device uint *indices);
 
     float dioramaFieldDistance(float3 p, float4 reveal) {
         float ripple = \(DioramaRevealStyle.variation) * (0.6 * sin(p.x * 0.025 + p.y * 0.011)
@@ -375,6 +377,29 @@ nonisolated enum DioramaShaderSource {
             visibility += shadowMap.sample_compare(shadowSampler, uv + offset, receiverDepth);
         }
         return visibility / 9.0;
+    }
+
+    // Fleet shading deliberately has no ground/reflection/AO/paint dependencies. It must render
+    // before any saved scenery is loaded, and keep its own LED emission in every light preset.
+    fragment float4 dioramaFleetFragment(DioramaVarying in [[stage_in]], bool isFront [[front_facing]],
+        constant DioramaUniforms &u [[buffer(0)]], const device DioramaLight *lights [[buffer(1)]],
+        const device uint2 *lightTable [[buffer(2)]], const device uint *lightIndices [[buffer(3)]],
+        depth2d<float> shadowMap [[texture(0)]]) {
+        if (in.appearance.w > 3.5) return float4(min(in.color.rgb * 1.35, float3(1.0)), 1.0);
+        float3 n = normalize(in.normal) * (isFront ? 1.0 : -1.0);
+        float3 view = normalize(u.eye.xyz - in.worldPosition);
+        float hemi = saturate(n.z * 0.5 + 0.5);
+        float3 ambient = max(mix(u.groundColor.rgb, u.skyColor.rgb, hemi) * 0.65, float3(0.30, 0.30, 0.32));
+        float shadow = dioramaShadow(in.worldPosition, n, u, shadowMap);
+        float diffuse = saturate(dot(n, u.sunDirection.xyz));
+        float3 local = dioramaPointLights(in.worldPosition, n, u, lights, lightTable, lightIndices);
+        float3 lit = in.color.rgb * (ambient + u.sunColor.rgb * diffuse * shadow + local);
+        float3 halfVector = normalize(view + u.sunDirection.xyz);
+        float roughness = clamp(in.appearance.z, 0.14, 0.90);
+        float spec = pow(saturate(dot(n, halfVector)), mix(90.0, 12.0, roughness));
+        float fresnel = pow(1.0 - saturate(dot(n, view)), 4.0);
+        lit += u.sunColor.rgb * spec * shadow * 0.42 + u.skyColor.rgb * fresnel * 0.12;
+        return float4(min(lit, float3(1.0)), 1.0);
     }
 
     float dioramaHash(float2 p) {

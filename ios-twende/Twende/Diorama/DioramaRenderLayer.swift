@@ -497,7 +497,8 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost, @unchecke
         let transform = projection * model
         viewport?.publish(DioramaViewport.Snapshot(transform: transform, origin: origin,
             latitude: parameters.latitude, longitude: parameters.longitude, zoom: parameters.zoom,
-            bearing: parameters.bearing, pitch: parameters.pitch))
+            bearing: parameters.bearing, pitch: parameters.pitch,
+            size: CGSize(width: parameters.width, height: parameters.height)))
         var matrix = simd_float4x4(columns: (
             SIMD4<Float>(transform.columns.0), SIMD4<Float>(transform.columns.1),
             SIMD4<Float>(transform.columns.2), SIMD4<Float>(transform.columns.3)
@@ -643,7 +644,8 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost, @unchecke
         DioramaFleetLighting.shared.publish(host: self, snapshot: .init(origin: origin, uniforms: uniforms,
             buffers: [lightBuffer, lightTableBuffer, lightIndexBuffer, paintBuffer, paintTableBuffer, paintIndexBuffer],
             textures: [reflected ?? blankReflection, shadowMap?.texture, groundTexture ?? blankReflection,
-                       postProcess?.occlusion ?? blankReflection, surfaceTexture ?? blankReflection], fullDetail: !contextOnly))
+                       postProcess?.occlusion ?? blankReflection, surfaceTexture ?? blankReflection], fullDetail: !contextOnly,
+            viewportID: viewport.map(ObjectIdentifier.init)))
 
         guard let encoder = mtlCommandBuffer.makeRenderCommandEncoder(descriptor: mtlRenderPassDescriptor) else { return }
         encoder.label = "Zuri diorama"

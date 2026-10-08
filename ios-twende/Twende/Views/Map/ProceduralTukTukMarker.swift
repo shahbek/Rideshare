@@ -82,7 +82,7 @@ final class ProceduralTukTukMarker {
     /// One continuous zoom curve for every tier, independent of UI illustrations.
     /// Stays large from high above: 72pt floor at city overview, 96pt at z15, capped at 130pt up close.
     /// The assigned (tracked) vehicle renders 1.35x larger so it reads at any zoom.
-    static func canvasSide(at zoom: Double, isAssigned: Bool = false) -> CGFloat {
+    nonisolated static func canvasSide(at zoom: Double, isAssigned: Bool = false) -> CGFloat {
         guard zoom.isFinite else { return isAssigned ? 130 : 96 }
         let base = min(130, max(72, 96 * pow(2, (zoom - 15) * 0.3)))
         return CGFloat(isAssigned ? min(170, max(96, base * 1.35)) : base)

@@ -85,7 +85,10 @@ nonisolated struct DioramaFleetMesh: Sendable {
                     }
                     let roughness = (material?.roughness.contents as? NSNumber)?.floatValue ?? 0.4
                     let glass: Float = roughness < 0.25 && red + green + blue < 0.6 ? 6 : 0
-                    let emission: Float = (material?.emission.contents as? UIColor) != nil && material?.lightingModel == .constant ? 4 : 0
+                    var er: CGFloat = 0, eg: CGFloat = 0, eb: CGFloat = 0, ea: CGFloat = 1
+                    (material?.emission.contents as? UIColor)?.getRed(&er, green: &eg, blue: &eb, alpha: &ea)
+                    let isEmissive = max(er, eg, eb) > 0.001 && (material?.emission.intensity ?? 0) > 0
+                    let emission: Float = isEmissive ? 4 : 0
                     let firstVertex = UInt32(vertices.count)
                     for i in positions.indices {
                         let p = positions[i] * sourceScale + sourceOffset
@@ -101,6 +104,7 @@ nonisolated struct DioramaFleetMesh: Sendable {
                             tint *= SIMD4(Float(pixels[offset]) / 255, Float(pixels[offset + 1]) / 255,
                                           Float(pixels[offset + 2]) / 255, 1)
                         }
+                        if isEmissive { tint = SIMD4(Float(er), Float(eg), Float(eb), 1) }
                         vertices.append(BuildingRenderVertex(position: SIMD4(world.x * metricScale, -world.z * metricScale, world.y * metricScale, 1),
                             normal: SIMD4(n.x, -n.z, n.y, 0), color: tint,
                             appearance: SIMD4(1, glass > 0 ? glass : 14, roughness, emission)))
@@ -129,6 +133,22 @@ nonisolated struct DioramaFleetMesh: Sendable {
             for child in node.childNodes { visit(child, parent: transform) }
         }
         visit(root, parent: matrix_identity_float4x4)
+        // CPU primitive bounds and nested imported transforms can differ from SceneKit's bounds.
+        // Normalize the actual converted mesh, not a nominal canvas, and keep tyres at ground zero.
+        if let first = vertices.first {
+            var lo = first.position, hi = first.position
+            for vertex in vertices { lo = simd_min(lo, vertex.position); hi = simd_max(hi, vertex.position) }
+            let length = hi.y - lo.y
+            if length.isFinite, length > 0.001 {
+                let factor = Float(tier.modelLengthMetres) / length
+                let centre = SIMD3((lo.x + hi.x) * 0.5, (lo.y + hi.y) * 0.5, lo.z)
+                for i in vertices.indices {
+                    let vertex = vertices[i], p = vertex.position
+                    vertices[i] = BuildingRenderVertex(position: SIMD4((SIMD3(p.x, p.y, p.z) - centre) * factor, 1),
+                        normal: vertex.normal, color: vertex.color, appearance: vertex.appearance)
+                }
+            }
+        }
         let mesh = DioramaFleetMesh(vertices: vertices, indices: indices)
         cache[tier] = mesh
         return mesh

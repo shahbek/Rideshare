@@ -68,7 +68,7 @@ final class DioramaTileManager {
     var setBasemapTerrainEnabled: ((Bool) -> Void)? = nil
     /// Live map bounds in the same coordinate space as Mapbox's screen-to-ground conversion.
     var viewportBounds: (() -> CGRect)?
-    private let viewport = DioramaViewport.shared
+    var viewport = DioramaViewport()
     private var viewportFocus: DioramaTileID?
     private var visibleTilePriority: [DioramaTileID] = []
     private var pendingUpdateDeadline: CFTimeInterval = 0
@@ -87,6 +87,8 @@ final class DioramaTileManager {
     private var tile: DioramaTileID
     private var requestedTile: DioramaTileID?
     private var selectionTask: Task<Void, Never>?
+    private var selectionIdentity: UUID?
+    private var fullRetryAfter: [DioramaTileID: Date] = [:]
     private var packageTask: Task<Void, Never>?
     private var lifecycleObservers: [NSObjectProtocol] = []
     private var areaName: String { tile == DioramaMasakiSource.slipway ? "Slipway" : "Masaki" }
@@ -326,7 +328,10 @@ final class DioramaTileManager {
             return
         }
         let camera = map.cameraState
-        refreshViewportInterest(on: map)
+        guard refreshViewportInterest(on: map) else {
+            scheduleUpdate(delay: 0.1)
+            return
+        }
         guard let target = viewportFocus else {
             selectionTask?.cancel(); selectionTask = nil; requestedTile = nil
             beginRetraction()
@@ -373,11 +378,18 @@ final class DioramaTileManager {
                 installationTask = Task { [weak self] in
                     guard let self else { return }
                     await self.show(artifacts, on: map)
-                    if self.installationRevision == expected { self.installationTask = nil }
+                    if self.installationRevision == expected {
+                        self.installationTask = nil
+                        if self.installed { self.scheduleUpdate(delay: 0.1) }
+                    }
                 }
             }
             else if shown, isRetracting { beginReveal(fromCurrent: true) }
         case .failed:
+            if let retry = fullRetryAfter[tile] {
+                if retry <= Date() { generate() }
+                else { scheduleUpdate(delay: retry.timeIntervalSinceNow) }
+            }
             state.status = "Saved tile unavailable · resume Masaki preparation to repair"
         }
         if requestedTile != nil {
@@ -386,33 +398,66 @@ final class DioramaTileManager {
         applyMotionPolicy()
     }
 
-    private func refreshViewportInterest(on map: MapboxMap) {
+    @discardableResult private func refreshViewportInterest(on map: MapboxMap) -> Bool {
         let camera = map.cameraState
         let bounds = viewportBounds?() ?? .zero
         var weights: [DioramaTileID: Double] = [:]
-        guard bounds.width > 1, bounds.height > 1 else { return }
+        guard bounds.width > 1, bounds.height > 1 else { return false }
         let snapshot = viewport.snapshot()
         let current = snapshot.flatMap { value -> DioramaViewport.Snapshot? in
             guard abs(value.zoom - camera.zoom) < 0.0001,
                   abs(value.latitude - camera.center.latitude) < 0.000001,
                   abs(value.longitude - camera.center.longitude) < 0.000001,
                   abs(value.bearing - camera.bearing) < 0.0001,
-                  abs(value.pitch - camera.pitch) < 0.0001 else { return nil }
+                  abs(value.pitch - camera.pitch) < 0.0001,
+                  value.size.height > 1,
+                  abs(value.size.width / value.size.height - bounds.width / bounds.height) < 0.001 else { return nil }
             return value
         }
         // Padding positions the camera; it does not make the padded map pixels invisible.
         // Intersect every prepared tile, not a sparse grid or a guessed camera-centre ring.
-        for candidate in DioramaOfflineStore.tiles {
-            let area: Double
-            if let current {
+        if let current {
+            for candidate in DioramaOfflineStore.tiles {
                 let ground = DioramaViewport.area(tile: candidate, snapshot: current, viewport: bounds)
                 let upper = DioramaViewport.area(tile: candidate, snapshot: current, viewport: bounds, height: 60)
-                area = max(ground, upper * 0.15)
-            } else {
-                // Bootstrap before the first custom frame; SDK projection uses the actual camera.
-                area = DioramaViewport.screenArea(candidate.outline.dropLast().map { map.point(for: $0) }, viewport: bounds)
+                let area = max(ground, upper * 0.15)
+                if area > 1 { weights[candidate] = area }
             }
-            if area > 1 { weights[candidate] = area }
+        }
+        // SDK ground probes are an independent admission safety net, not a speculative ring.
+        // Corner-only projections fold across the horizon during pitched-camera bootstrap.
+        let samples = current == nil ? 9 : 5
+        let sampleWeight = Double(bounds.width * bounds.height) / Double(samples * samples)
+        var observedWeights: [DioramaTileID: Double] = [:]
+        for row in 0..<samples {
+            for column in 0..<samples {
+                let screen = CGPoint(x: bounds.minX + bounds.width * (Double(column) + 0.5) / Double(samples),
+                                     y: bounds.minY + bounds.height * (Double(row) + 0.5) / Double(samples))
+                let coordinate = map.coordinate(for: screen)
+                guard coordinate.latitude.isFinite, coordinate.longitude.isFinite,
+                      abs(coordinate.latitude) <= 85, abs(coordinate.longitude) <= 180 else { continue }
+                let projected = map.point(for: coordinate)
+                guard projected.x.isFinite, projected.y.isFinite,
+                      hypot(projected.x - screen.x, projected.y - screen.y) < 4 else { continue }
+                let observed = DioramaTileID(latitude: coordinate.latitude, longitude: coordinate.longitude, zoom: 16)
+                guard DioramaOfflineStore.tiles.contains(observed) else { continue }
+                observedWeights[observed, default: 0] += sampleWeight
+            }
+        }
+        for (observed, area) in observedWeights { weights[observed] = max(weights[observed] ?? 0, area) }
+        if current == nil {
+            // Bound SDK work to ground-observed tiles during bootstrap, not every saved tile.
+            for candidate in observedWeights.keys {
+                let corners = Array(candidate.outline.dropLast())
+                let points = corners.map { map.point(for: $0) }
+                let valid = zip(corners, points).allSatisfy { coordinate, screen in
+                    guard screen.x.isFinite, screen.y.isFinite else { return false }
+                    let restored = map.coordinate(for: screen)
+                    return abs(restored.latitude - coordinate.latitude) < 0.00001
+                        && abs(restored.longitude - coordinate.longitude) < 0.00001
+                }
+                if valid { weights[candidate] = max(weights[candidate] ?? 0, DioramaViewport.screenArea(points, viewport: bounds)) }
+            }
         }
         visibleTilePriority = weights.keys.sorted {
             let a = weights[$0] ?? 0, b = weights[$1] ?? 0
@@ -422,10 +467,21 @@ final class DioramaTileManager {
         // Screen-area hysteresis only: keep a near-tie, never wait to cross a metre threshold.
         if let first = target, let currentWeight = weights[tile],
            currentWeight >= (weights[first] ?? 0) * 0.85 { target = tile }
+        // Finish useful local reads/uploads while their tile remains visible. Requiring the
+        // largest-area tile to stay identical through a cold upload starves continuous panning.
+        if let preparing = installingTile ?? (selectionTask != nil ? requestedTile : nil), weights[preparing] != nil {
+            target = preparing
+        } else if !shown, weights[tile] != nil {
+            switch status {
+            case .generating, .loaded: target = tile
+            case .idle, .failed: break
+            }
+        }
         if target != viewportFocus {
             viewportFocus = target
-            if let target { print("[Diorama viewport] focus=\(target.key) visible=\(visibleTilePriority.count)") }
+            if let target { print("[Diorama viewport] focus=\(target.key) visible=\(visibleTilePriority.count) matrix=\(current != nil) ground_probes=\(observedWeights.count)") }
         }
+        return true
     }
 
     private func updateEffectStatus() {
@@ -447,10 +503,24 @@ final class DioramaTileManager {
     /// residency to one full-detail tile plus the bounded low-detail neighbour ring.
     private func requestTile(_ next: DioramaTileID) {
         // Finish the current finite handoff before accepting the latest settled camera target.
-        guard !isRetracting, requestedTile != next else { return }
+        guard !isRetracting, requestedTile != next || selectionTask == nil else { return }
+        if let retry = fullRetryAfter[next], retry > Date() {
+            scheduleUpdate(delay: retry.timeIntervalSinceNow)
+            return
+        }
         selectionTask?.cancel()
+        let identity = UUID()
+        selectionIdentity = identity
         requestedTile = next
         selectionTask = Task { [weak self] in
+            defer {
+                if let self, self.selectionIdentity == identity {
+                    self.selectionIdentity = nil
+                    self.requestedTile = nil
+                    self.selectionTask = nil
+                    if self.installed { self.scheduleUpdate(delay: 0.1) }
+                }
+            }
             do { try await Task.sleep(for: .seconds(0.18)) } catch { return }
             guard let self, let map = self.map, self.installed, self.retractionCompletion == nil,
                   self.requestedTile == next, self.state.isEnabled, !self.state.isBasemapOnly,
@@ -466,7 +536,7 @@ final class DioramaTileManager {
                 await job.value
             } onCancel: { job.cancel() }
             // Decode overlaps the current GPU handoff; only installation waits for its completion.
-            while prepared != nil, self.revealClock != nil || self.outgoingTile != nil || self.installingTile != nil {
+            while prepared != nil, self.revealClock != nil || self.installingTile != nil {
                 guard !Task.isCancelled, self.viewportFocus == next, CACurrentMediaTime() - started < 25 else {
                     if self.requestedTile == next { self.requestedTile = nil; self.selectionTask = nil }
                     return
@@ -477,12 +547,13 @@ final class DioramaTileManager {
                   self.retractionCompletion == nil, self.state.isEnabled, !self.state.isBasemapOnly,
                   map.cameraState.zoom >= config.minimumZoom, self.viewportFocus == next else { return }
             guard let prepared else {
-                // Retain the old tile and suppress automatic repeated source requests until the
-                // camera leaves this request or the user explicitly chooses Regenerate.
-                self.selectionTask = nil
+                // Keep visible coverage and retry saved bytes with backoff, never regenerate or fetch.
+                self.fullRetryAfter[next] = Date().addingTimeInterval(30)
                 self.state.status = "Saved tile needs repair · resume Masaki preparation"
                 return
             }
+            self.fullRetryAfter[next] = nil
+            guard self.selectionIdentity == identity else { return }
             await self.show(prepared, on: map, replacing: true)
             // Prepared archives are never recompressed or regenerated during viewing.
         }
@@ -511,9 +582,12 @@ final class DioramaTileManager {
                 self.generationTask = nil
                 guard var artifacts else {
                     self.status = .failed
+                    self.fullRetryAfter[tile] = Date().addingTimeInterval(30)
+                    self.scheduleUpdate(delay: 30)
                     self.state.status = "Saved tile needs repair · resume Masaki preparation"
                     return
                 }
+                self.fullRetryAfter[tile] = nil
                 artifacts.stageTimings.append("source/cache → renderer-ready: \(String(format: "%.3f", readySeconds))s (not first visible)")
                 if tile != DioramaMasakiSource.slipway {
                     artifacts.stageTimings.append("Masaki camera-follow preview · one full-detail tile + bounded coarse neighbours · mapped sources + Terrain-RGB")
@@ -528,6 +602,7 @@ final class DioramaTileManager {
     /// Reloads the saved package without network access or geometry generation.
     func regenerate() {
         guard let map else { return }
+        fullRetryAfter.removeAll()
         selectionTask?.cancel(); selectionTask = nil; requestedTile = nil
         bypassDiskOnNextGeneration = true
         packageTask?.cancel(); packageTask = nil

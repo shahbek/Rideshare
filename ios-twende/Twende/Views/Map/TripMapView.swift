@@ -18,7 +18,7 @@ nonisolated struct MapInteraction: OptionSet, Sendable {
 /// Every Twende element is a native map object: the route is a `GeoJSONSource` with three `LineLayer`s
 /// (white casing, green→ink gradient core revealed with `line-trim-offset`, and a light pulse whose
 /// gradient is re-timed at 30fps); search rings are ground-aligned native circle layers. Pins use
-/// view annotations; vehicles are procedural miniatures with alpha shadows in zoom-scaled annotations.
+/// view annotations; vehicles share map depth with a readable zoom-aware miniature scale.
 struct TripMapView: UIViewRepresentable {
     @Environment(AppEnvironment.self) private var env
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -240,7 +240,8 @@ extension TripMapView {
             "colorBuildingHighlight": "#D3B07E",
         ]
 
-        private let fleet = DioramaFleetRenderLayer()
+        private let viewport = DioramaViewport()
+        private lazy var fleet = DioramaFleetRenderLayer(viewport: viewport)
         private static let fleetLayerID = "zuri-live-fleet"
         private var nearbyVehicles: [String: Vehicle] = [:]
 
@@ -267,6 +268,9 @@ extension TripMapView {
         }
 
         func observe(_ mapView: MapView) {
+            viewport.setOnRefresh { [weak self] in
+                Task { @MainActor [weak self] in self?.diorama?.scheduleUpdate(delay: 0.08) }
+            }
             for name in [ProcessInfo.thermalStateDidChangeNotification, Notification.Name.NSProcessInfoPowerStateDidChange] {
                 NotificationCenter.default.publisher(for: name).sink { [weak self] _ in self?.applyFrameRatePolicy() }
                     .store(in: &settingsCancelables)
@@ -289,6 +293,7 @@ extension TripMapView {
             }.store(in: &cancelables)
             mapView.mapboxMap.onStyleLoaded.observe { [weak self] _ in
                 guard let self else { return }
+                self.viewport.invalidate()
                 self.styleReady = true
                 self.configureStandardStyle()
                 self.tanzaniteBridge.styleDidReload()
@@ -330,6 +335,8 @@ extension TripMapView {
                 if let mapView = self.mapView, self.parent.onBillboardTap != nil {
                     for teaser in self.billboardTeasers { teaser.update(on: mapView) }
                 }
+                if let mapView = self.mapView { self.fleet.setViewportSize(mapView.bounds.size) }
+                self.viewport.invalidate()
                 self.diorama?.scheduleUpdate(delay: 0.08)
                 self.scheduleCameraSettlement()
             }.store(in: &cancelables)
@@ -372,7 +379,7 @@ extension TripMapView {
                 do { try map.addCustomLayer(withId: Self.fleetLayerID, layerHost: fleet, layerPosition: nil) }
                 catch { print("[Fleet map] layer installation unavailable") }
             }
-            DarServiceMask.install(on: map)
+            DarServiceMask.install(on: map, viewport: viewport)
             syncVehicles()
         }
 
@@ -528,6 +535,7 @@ extension TripMapView {
             syncVehicles()
             if state.isEnabled, diorama == nil {
                 let manager = DioramaTileManager()
+                manager.viewport = viewport
                 manager.viewportBounds = { [weak mapView] in mapView?.bounds ?? .zero }
                 manager.setBasemapTerrainEnabled = { [weak self] enabled in
                     guard let self else { return }
@@ -938,7 +946,7 @@ extension TripMapView {
 
         // MARK: 3D vehicles
 
-        /// One map-native Metal fleet, with physical metre scale and resident terrain/light support.
+        /// One independently lit map-native fleet, with readable scale and resident terrain/light support.
         private func syncVehicles() {
             guard let mapView else { return }
             var poses = nearbyVehicles.mapValues(\.pose)
@@ -946,9 +954,14 @@ extension TripMapView {
             let items = poses.keys.sorted().compactMap { id -> DioramaFleetRenderLayer.Pose? in
                 guard let pose = poses[id], DarEsSalaam.isInServiceZone(pose.point) else { return nil }
                 return .init(id: id, tier: id == Self.driverModelID ? driverTier : (nearbyVehicles[id]?.tier ?? .economy),
-                             point: pose.point, heading: pose.heading)
+                             point: pose.point, heading: pose.heading, isAssigned: id == Self.driverModelID)
             }
-            if fleet.update(items, time: DioramaState.shared.timeOfDay) { mapView.mapboxMap.triggerRepaint() }
+            let state = DioramaState.shared
+            let usesDiorama = state.isEnabled && !state.isBasemapOnly
+            let nativeTime = DioramaTimeOfDay(rawValue: AppSettings.shared.mapStyle.lightPreset) ?? .dusk
+            if fleet.update(items, time: nativeTime, usesDiorama: usesDiorama, viewportSize: mapView.bounds.size) {
+                mapView.mapboxMap.triggerRepaint()
+            }
         }
 
         func removeVehicles() {

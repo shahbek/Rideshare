@@ -11,11 +11,17 @@ nonisolated final class DarServiceMask: NSObject, CustomLayerHost {
     private var pipeline: MTLRenderPipelineState?
     private var depth: MTLDepthStencilState?
     private let origin = DarEsSalaam.centre.coordinate
+    private let viewport: DioramaViewport
 
-    @MainActor static func install(on map: MapboxMap) {
+    init(viewport: DioramaViewport) {
+        self.viewport = viewport
+        super.init()
+    }
+
+    @MainActor static func install(on map: MapboxMap, viewport: DioramaViewport) {
         guard !map.layerExists(withId: layerID) else { return }
         do {
-            try map.addCustomLayer(withId: layerID, layerHost: DarServiceMask(), layerPosition: nil)
+            try map.addCustomLayer(withId: layerID, layerHost: DarServiceMask(viewport: viewport), layerPosition: nil)
             // No slot: after all imported Standard labels, terrain, models and custom content.
             try map.setCameraBounds(with: CameraBoundsOptions(bounds: bounds, minZoom: 9, maxPitch: 75))
         } catch { print("[Map service area] mask/bounds unavailable") }
@@ -74,8 +80,9 @@ nonisolated final class DarServiceMask: NSObject, CustomLayerHost {
         var model = matrix_identity_double4x4
         model[0, 0] = scale; model[1, 1] = -scale; model[3, 0] = p.x; model[3, 1] = p.y
         let transform = projection * model
-        DioramaViewport.shared.publish(.init(transform: transform, origin: origin, latitude: parameters.latitude,
-            longitude: parameters.longitude, zoom: parameters.zoom, bearing: parameters.bearing, pitch: parameters.pitch))
+        viewport.publish(.init(transform: transform, origin: origin, latitude: parameters.latitude,
+            longitude: parameters.longitude, zoom: parameters.zoom, bearing: parameters.bearing, pitch: parameters.pitch,
+            size: CGSize(width: parameters.width, height: parameters.height)))
         DioramaGPUPreparation.shared.captureSize(width: mtlRenderPassDescriptor.colorAttachments[0].texture?.width ?? 0,
                                                  height: mtlRenderPassDescriptor.colorAttachments[0].texture?.height ?? 0)
         let inverse = simd_inverse(transform)

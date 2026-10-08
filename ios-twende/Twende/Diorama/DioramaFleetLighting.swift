@@ -11,6 +11,7 @@ nonisolated final class DioramaFleetLighting: @unchecked Sendable {
         let buffers: [MTLBuffer]
         let textures: [MTLTexture?]
         let fullDetail: Bool
+        let viewportID: ObjectIdentifier?
     }
     private final class Entry {
         weak var host: DioramaRenderLayer?
@@ -29,12 +30,12 @@ nonisolated final class DioramaFleetLighting: @unchecked Sendable {
     func remove(host: DioramaRenderLayer) {
         lock.lock(); entries[ObjectIdentifier(host)] = nil; lock.unlock()
     }
-    func environment(at point: GeoPoint) -> (DioramaRenderLayer, Snapshot)? {
+    func environment(at point: GeoPoint, viewport: DioramaViewport) -> (DioramaRenderLayer, Snapshot)? {
         let tile = DioramaTileID(latitude: point.latitude, longitude: point.longitude, zoom: 16)
         lock.lock(); defer { lock.unlock() }
         let candidates = entries.values.filter { entry in
             let c = entry.snapshot.origin
-            return entry.host != nil && DioramaTileID(latitude: c.latitude, longitude: c.longitude, zoom: 16) == tile
+            return entry.host != nil && entry.snapshot.viewportID == ObjectIdentifier(viewport) && DioramaTileID(latitude: c.latitude, longitude: c.longitude, zoom: 16) == tile
         }.sorted { $0.snapshot.fullDetail && !$1.snapshot.fullDetail }
         guard let entry = candidates.first, let host = entry.host else { return nil }
         return (host, entry.snapshot)
