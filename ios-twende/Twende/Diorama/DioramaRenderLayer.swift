@@ -169,12 +169,26 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
     }
 
     private func didComplete(_ value: SIMD4<Float>, lifecycle: SIMD4<Float>) {
-        lock.lock(); completedReveal = value; completedLifecycleReveal = lifecycle; lock.unlock()
+        lock.lock()
+        let changed = completedLifecycleReveal != lifecycle
+        completedReveal = value; completedLifecycleReveal = lifecycle
+        lock.unlock()
+        if changed { onLifecycleCompleted?() }
+    }
+
+    private func publishWaterVisibility(_ visible: Bool) {
+        lock.lock()
+        let changed = waterInView != visible
+        waterInView = visible
+        lock.unlock()
+        if changed { onWaterVisibilityChanged?() }
     }
     private var labelsReady: Bool = false
     private var acceptedLabels: Set<UInt64> = []
     var onLabelsChanged: (@Sendable (Set<UInt64>) -> Void)?
     var onFrameReport: (@Sendable (String) -> Void)?
+    var onWaterVisibilityChanged: (@Sendable () -> Void)?
+    var onLifecycleCompleted: (@Sendable () -> Void)?
     private let frameMetrics = DioramaFrameMetrics()
     // Render-thread-only preparation cache. Water/reveal uniforms still update every frame.
     private var selectionVisible: Set<DioramaCategory>?
@@ -344,7 +358,7 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
             let materialUpload = DioramaLegacyFoliageMaterial.tagged(vertices, indices: indices, ranges: ranges, groups: groups)
             vertexBuffer = upload(materialUpload.vertices, fallback: vertices[0])
             #if DEBUG
-            print("[Diorama material] legacy_foliage_vertices=\(materialUpload.count) legacy_architecture_vertices=\(materialUpload.architectureCount) preset=\(timeOfDay.rawValue) color_format=\(colorPixelFormat) natural_finish=coverage-v2 reveal=persistent-v2 vegetation=savanna-v4")
+            print("[Diorama material] legacy_foliage_vertices=\(materialUpload.count) legacy_architecture_vertices=\(materialUpload.architectureCount) preset=\(timeOfDay.rawValue) color_format=\(colorPixelFormat) natural_finish=coverage-v2 reveal=narrow-v3 vegetation=savanna-fine-v5 water=coherent-v5")
             #endif
             indexBuffer = upload(indices, fallback: 0)
             instanceBuffer = upload(instances, fallback: .identity)
@@ -396,7 +410,9 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
         guard let pipeline, let vertexBuffer, let indexBuffer, let lightBuffer, let lightTableBuffer, let lightIndexBuffer,
               let depthState, let noWriteDepthState, let paintBuffer, let paintTableBuffer, let paintIndexBuffer,
               let texture = mtlRenderPassDescriptor.colorAttachments[0].texture,
-              parameters.projectionMatrix.count == 16 else { publishLabels([]); return }
+              parameters.projectionMatrix.count == 16 else {
+            publishWaterVisibility(false); publishLabels([]); return
+        }
         lock.lock()
         let visible = self.visible
         let timeOfDay = self.timeOfDay
@@ -407,7 +423,6 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
         let tileEdges = self.tileEdges
         let tileState = self.tileState
         let waterMotionEnabled = self.waterMotionEnabled
-        waterInView = false
         lock.unlock()
         let encodeStarted = CACurrentMediaTime()
         let glowOn = timeOfDay.showsLights
@@ -419,6 +434,7 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
         }
         let drawn = eligibleRanges
         guard !drawn.isEmpty || !eligibleGroups.isEmpty else {
+            publishWaterVisibility(false)
             publishLabels([])
             mtlCommandBuffer.addCompletedHandler { [weak self] command in
                 if command.status == .completed { self?.didComplete(reveal, lifecycle: lifecycleReveal) }
@@ -471,6 +487,7 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
         let mainRanges = selectedRanges
         let drawnGroups = selectedGroups
         guard !mainRanges.isEmpty || !drawnGroups.isEmpty else {
+            publishWaterVisibility(false)
             publishLabels([])
             mtlCommandBuffer.addCompletedHandler { [weak self] command in
                 if command.status == .completed { self?.didComplete(reveal, lifecycle: lifecycleReveal) }
@@ -485,9 +502,10 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
             print("[Diorama camera] finite-eye fallback pitch=\(parameters.pitch) depth=\(parameters.depthRange.min)…\(parameters.depthRange.max)")
         }
         #endif
-        let poolVisible = visible.contains(.props) && poolBounds?.intersects(matrix) == true
+        let poolVisible = (visible.contains(.props) || (contextOnly && visible.contains(.ground)))
+            && poolBounds?.intersects(matrix) == true && poolBounds?.intersectsReveal(reveal) == true
             && poolBounds?.intersectsReveal(lifecycleReveal) == true
-        lock.lock(); waterInView = mainRanges.contains { $0.category == .water } || poolVisible; lock.unlock()
+        publishWaterVisibility(mainRanges.contains { $0.category == .water } || poolVisible)
 
         var uniforms = DioramaLighting.uniforms(for: timeOfDay, eye: eye)
         uniforms.groundColor.w = surfaceTexture == nil ? 0 : 1
@@ -663,6 +681,7 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
     }
 
     func renderingWillEnd() {
+        publishWaterVisibility(false)
         pipeline = nil
         glowPipeline = nil
         waterPipeline = nil

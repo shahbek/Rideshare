@@ -3,10 +3,10 @@ import simd
 
 /// Shared finite reveal and permanent edge fields; CPU labels match the Metal coverage.
 nonisolated enum DioramaRevealStyle {
-    static let feather: Float = 48
-    static let variation: Float = 10
+    static let feather: Float = 8
+    static let variation: Float = 1.5
     static let support: Float = feather + variation
-    static let edgeWidth: Float = 80
+    static let edgeWidth: Float = 12
 
     static func distance(_ p: SIMD3<Float>, reveal: SIMD4<Float>) -> Float {
         let ripple = variation * (0.6 * sin(p.x * 0.025 + p.y * 0.011)
@@ -15,7 +15,7 @@ nonisolated enum DioramaRevealStyle {
             let d = p.x * reveal.x + p.y * reveal.y - reveal.z + ripple
             return reveal.w > 2.5 ? -d : d
         }
-        let radius = min(48, max(0, reveal.z) * 0.16)
+        let radius = min(12, max(0, reveal.z) * 0.08)
         let q = SIMD2(abs(p.x - reveal.x), abs(p.y - reveal.y)) - SIMD2(repeating: reveal.z - radius)
         return simd_length(simd_max(q, .zero)) + min(max(q.x, q.y), 0) - radius + ripple
     }
@@ -26,12 +26,11 @@ nonisolated enum DioramaRevealStyle {
     }
 
     static func edgeCoverage(_ p: SIMD3<Float>, bounds: SIMD4<Float>, edges: SIMD4<Float>, frame: SIMD4<Float>) -> Float {
-        let world = SIMD2(p.x, p.y) * frame.z + SIMD2(frame.x, frame.y)
-        let ripple = variation * (0.6 * sin(world.x * 0.025 + world.y * 0.011)
-            + 0.4 * sin(world.y * 0.037 - world.x * 0.009))
         let d = SIMD4(p.x - bounds.x, p.y - bounds.y, bounds.z - p.x, bounds.w - p.y)
         var result: Float = 1
-        for i in 0..<4 { result *= 1 - edges[i] * (1 - smooth((d[i] - variation + ripple) / edgeWidth)) }
+        for i in 0..<4 where edges[i] > 0 && d[i] < edgeWidth {
+            result *= 1 - edges[i] * (1 - smooth(d[i] / edgeWidth))
+        }
         return result
     }
 

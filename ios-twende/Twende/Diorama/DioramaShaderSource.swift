@@ -163,7 +163,7 @@ nonisolated enum DioramaShaderSource {
             float d = dot(p.xy, reveal.xy) - reveal.z + ripple;
             return reveal.w > 2.5 ? -d : d;
         }
-        float radius = min(48.0, max(0.0, reveal.z) * 0.16);
+        float radius = min(12.0, max(0.0, reveal.z) * 0.08);
         float2 q = abs(p.xy - reveal.xy) - (reveal.z - radius);
         return length(max(q, float2(0.0))) + min(max(q.x, q.y), 0.0) - radius + ripple;
     }
@@ -172,11 +172,9 @@ nonisolated enum DioramaShaderSource {
         return 1.0 - smoothstep(-\(DioramaRevealStyle.feather), \(DioramaRevealStyle.feather), dioramaFieldDistance(p, field));
     }
     float dioramaEdgeCoverage(float3 p, float4 edges, constant DioramaUniforms &u) {
-        float2 world = p.xy * u.materialFrame.z + u.materialFrame.xy;
-        float ripple = \(DioramaRevealStyle.variation) * (0.6 * sin(world.x * 0.025 + world.y * 0.011)
-            + 0.4 * sin(world.y * 0.037 - world.x * 0.009));
         float4 d = float4(p.xy - u.tileBounds.xy, u.tileBounds.zw - p.xy);
-        float4 c = 1.0 - edges * (1.0 - smoothstep(float4(0.0), float4(\(DioramaRevealStyle.edgeWidth)), d - \(DioramaRevealStyle.variation) + ripple));
+        if (all((d >= float4(\(DioramaRevealStyle.edgeWidth))) | (edges <= float4(0.0)))) return 1.0;
+        float4 c = 1.0 - edges * (1.0 - smoothstep(float4(0.0), float4(\(DioramaRevealStyle.edgeWidth)), d));
         return c.x * c.y * c.z * c.w;
     }
     float dioramaFocusCoverage(float3 p, constant DioramaUniforms &u) {
@@ -186,15 +184,19 @@ nonisolated enum DioramaShaderSource {
         float focus = u.tileState.y > 1.5 ? 1.0 - dioramaFocusCoverage(p, u) : dioramaFieldCoverage(p, u.reveal);
         return focus * dioramaEdgeCoverage(p, u.tileEdges, u) * dioramaFieldCoverage(p, u.lifecycleReveal) * u.tileState.x;
     }
-    float dioramaRevealAlpha(float3 p, float2 pixel, constant DioramaUniforms &u) {
+    float dioramaRevealAlpha(float3 p, float2 pixel, float coverage, constant DioramaUniforms &u) {
         if (u.tileState.w > 0.5 && u.params.w < 0.5) {
-            float threshold = fract(52.9829189 * fract(dot(floor(pixel), float2(0.06711056, 0.00583715))));
             float full = dioramaFocusCoverage(p, u);
-            bool selected = u.tileState.y > 1.5 ? threshold >= full : threshold < full;
-            if (!selected) discard_fragment();
+            if (full > 0.001 && full < 0.999) {
+                float threshold = fract(52.9829189 * fract(dot(floor(pixel), float2(0.06711056, 0.00583715))));
+                bool selected = u.tileState.y > 1.5 ? threshold >= full : threshold < full;
+                if (!selected) discard_fragment();
+            } else if (u.tileState.y > 1.5 ? full >= 0.999 : full <= 0.001) {
+                discard_fragment();
+            }
             return u.tileState.y > 1.5 ? dioramaEdgeCoverage(p, u.tileEdges, u) * dioramaFieldCoverage(p, u.lifecycleReveal) * u.tileState.x : u.tileState.x;
         }
-        return dioramaRevealCoverage(p, u);
+        return coverage;
     }
     float4 dioramaRevealColor(float3 color, float alpha, float coverage, constant DioramaUniforms &u) {
         // Reflection stores premultiplied coverage; the water sampler later unpremultiplies it.
@@ -426,6 +428,24 @@ nonisolated enum DioramaShaderSource {
         return dot(eg, eg) < dot(el, el) ? tg : tl;
     }
 
+    // Non-grid fields avoid the square value-noise lattice in water pigment and caustics.
+    float dioramaWaterField(float2 p, float time) {
+        float3 phase = float3(dot(p, float2(0.83, 0.56)) - time * 0.71,
+                              dot(p, float2(-0.47, 0.91)) + time * 0.53,
+                              dot(p, float2(0.29, -1.13)) - time * 0.39);
+        float3 resolved = 1.0 - smoothstep(float3(0.7), float3(2.5), fwidth(phase));
+        return 0.5 + dot(sin(phase) * resolved, float3(0.22, 0.17, 0.11));
+    }
+
+    float dioramaWaterCaustic(float2 p, float time) {
+        float3 phase = float3(dot(p, float2(1.7, 0.8)) + time * 0.61,
+                              dot(p, float2(-0.9, 1.9)) - time * 0.47,
+                              dot(p, float2(1.1, -1.4)) + time * 0.38);
+        float3 resolved = 1.0 - smoothstep(float3(0.6), float3(2.0), fwidth(phase));
+        float ridge = dot(sin(phase) * resolved, float3(0.40, 0.35, 0.25));
+        return smoothstep(0.38, 0.84, ridge);
+    }
+
     float2 dioramaWaterSlope(float2 p, float time) {
         float3 phase = float3(dot(p, float2(0.19, 0.12)) - time * 0.62,
                               dot(p, float2(-0.31, 0.49)) - time * 0.94,
@@ -450,14 +470,18 @@ nonisolated enum DioramaShaderSource {
                                     texture2d<float> groundImage [[texture(2)]],
                                     texture2d<float> occlusion [[texture(3)]],
                                     texture2d<float> microdetail [[texture(4)]]) {
-        dioramaRevealClip(in.worldPosition, u);
+        if (u.shoreline.w > 0.5) {
+            float2 uv = (in.worldPosition.xy - u.groundImage.xy) * u.groundImage.zw;
+            if (any(uv < float2(0.0)) || any(uv >= float2(1.0))) discard_fragment();
+        }
         float code = in.appearance.w;
         float glow = u.params.x;
         bool mirrored = u.params.w > 0.5;
 
         if (mirrored && (in.clipHeight < -0.05 || (code > 0.5 && code < 1.5))) discard_fragment();
         float revealCoverage = dioramaRevealCoverage(in.worldPosition, u);
-        float revealAlpha = dioramaRevealAlpha(in.worldPosition, in.position.xy, u);
+        if (revealCoverage < 0.001) discard_fragment();
+        float revealAlpha = dioramaRevealAlpha(in.worldPosition, in.position.xy, revealCoverage, u);
         // Reflection pass: only what is above the water surface reflects; never the water itself.
         if (mirrored) {
             if (in.clipHeight < -0.05) discard_fragment();
@@ -532,8 +556,10 @@ nonisolated enum DioramaShaderSource {
             // Stable moisture/dryness fields at landscape, lawn and tuft scales. No moving noise.
             // All fields use the original material coordinates, including mirrored reflections.
             float broad = dioramaNoise(vegetationPosition * 0.027 + float2(11.4, -7.2));
-            float patches = dioramaNoise(vegetationPosition * 0.105 + float2(-4.1, 19.7));
-            float tufts = dioramaNoise(vegetationPosition * 0.42);
+            float2 patchPosition = float2(dot(vegetationPosition, float2(0.80, -0.60)),
+                                          dot(vegetationPosition, float2(0.60, 0.80)));
+            float patches = dioramaNoise(patchPosition * 0.105 + float2(-4.1, 19.7));
+            float tufts = dioramaNoise(patchPosition * 0.73);
             float tone = smoothstep(0.32, 0.66, broad * 0.62 + patches * 0.28 + tufts * 0.10);
             float3 deepGrass = float3(54.0, 90.0, 45.0) / 255.0;
             float3 livingGrass = float3(104.0, 121.0, 54.0) / 255.0;
@@ -597,7 +623,7 @@ nonisolated enum DioramaShaderSource {
         bool textured = grassSurface ? grassDetailWeight > 0.0001
             : ((tex > 0.5 && tex < 4.5) || (tex > 9.5 && tex < 13.5));
         if (textured && u.shoreline.z < 0.5 && u.groundColor.w > 0.5) {
-            float repeatSize = grassSurface ? 4.0 : (foliage ? 2.4 : 1.4);
+            float repeatSize = grassSurface ? 1.6 : (foliage ? 2.4 : 1.4);
             float2 detailUV = vegetationPosition / repeatSize;
             if (foliage) {
                 float3 axis = abs(surfaceNormal);
@@ -610,15 +636,15 @@ nonisolated enum DioramaShaderSource {
                 detailUV = float2(dot(vegetationPosition, tangent), surfacePosition.z) / repeatSize;
             }
             float resolved = 1.0 - smoothstep(0.04, 0.16, max(length(dfdx(detailUV)), length(dfdy(detailUV))));
-            constexpr sampler detailSampler(coord::normalized, address::repeat, filter::linear, mip_filter::linear);
+            constexpr sampler detailSampler(coord::normalized, address::repeat, filter::linear, mip_filter::linear, max_anisotropy(8));
             float4 grain = microdetail.sample(detailSampler, detailUV);
             float value = (grassSurface || foliage) ? grain.r : grain.g;
-            float strength = grassSurface ? 0.035 * grassDetailWeight : (foliage ? 0.025 : (roadSurface ? 0.16 : 0.09));
+            float strength = grassSurface ? 0.060 * grassDetailWeight : (foliage ? 0.025 : (roadSurface ? 0.16 : 0.09));
             albedo *= 1.0 + (value - 0.502) * strength * resolved;
             if (grassSurface || foliage || roadSurface || roofSurface || plasterSurface) {
                 float reliefWeight = resolved * (grassSurface ? grassDetailWeight : 1.0);
                 float relief = foliage ? grain.b : (grassSurface ? grain.a : grain.g);
-                float height = relief * (foliage ? 0.016 : (grassSurface ? 0.035 : (roadSurface ? 0.008 : 0.006)));
+                float height = relief * (foliage ? 0.016 : (grassSurface ? 0.012 : (roadSurface ? 0.008 : 0.006)));
                 float3 dx = dfdx(surfacePosition), dy = dfdy(surfacePosition);
                 float3 rx = cross(dy, surfaceNormal), ry = cross(surfaceNormal, dx);
                 float determinant = dot(dx, rx);
@@ -630,7 +656,7 @@ nonisolated enum DioramaShaderSource {
                     float3 reliefNormal = normalize(surfaceNormal - slope * 0.65);
                     detailNormal = normalize(mix(surfaceNormal, reliefNormal, reliefWeight));
                 }
-                albedo *= 1.0 + relief * (foliage ? 0.018 : 0.012) * reliefWeight;
+                albedo *= 1.0 + relief * (foliage ? 0.018 : (grassSurface ? 0.025 : 0.012)) * reliefWeight;
             }
         }
 
@@ -745,10 +771,7 @@ nonisolated enum DioramaShaderSource {
         if (tex > 4.5 && tex < 5.5) {
             // Pool water: bright turquoise with slow caustic shimmer and a soft sky sheen.
             float2 poolPosition = vegetationPosition;
-            float c1 = sin(dot(poolPosition, float2(2.1, 1.3)) + time * 0.65);
-            float c2 = sin(dot(poolPosition, float2(-1.6, 2.4)) - time * 0.48);
-            float resolved = 1.0 - smoothstep(0.7, 2.5, fwidth(c1) + fwidth(c2));
-            float caustic = pow(1.0 - abs(c1 * c2), 9.0) * resolved;
+            float caustic = dioramaWaterCaustic(poolPosition, time);
             float3 poolNormal = normalize(float3(-dioramaWaterSlope(poolPosition, time) * 0.55, 1.0));
             float fresnel = 0.08 + 0.32 * pow(1.0 - saturate(dot(poolNormal, view)), 4.0);
             color = albedo * light * (0.88 + 0.22 * caustic);
@@ -764,36 +787,35 @@ nonisolated enum DioramaShaderSource {
             float shallow = 1.0 - smoothstep(0.0, max(1.0, u.shoreline.x), shore);
             float3 body = mix(u.waterDeep.rgb, u.waterShallow.rgb, shallow);
             float2 waterPosition = vegetationPosition;
-            float depthMottle = dioramaNoise(waterPosition * 0.032 + float2(17.4, -8.2));
+            float depthMottle = dioramaWaterField(waterPosition * 0.032 + float2(17.4, -8.2), 0.0);
             body *= 0.78 + 0.34 * smoothstep(0.20, 0.78, depthMottle);
 
-            // Swells: bands of brightness keyed to the distance from shore, so they always run parallel
-            // to the beach, plus a soft 2D choppiness that drifts across the bay.
-            // Gentle current: a slow drift of the whole pattern plus quiet swells towards the shore.
-            float2 flow = float2(time * 0.18, time * 0.07);
-            float phase = shore * 0.55 - time * 0.8 + dioramaNoise((waterPosition + flow) * 0.05) * 2.5;
-            float swell = sin(phase) * 0.5 + 0.5;
-            swell = pow(swell, 3.0);
-            float chop = dioramaNoise((waterPosition + flow) * 0.22) * 0.6
-                       + dioramaNoise((waterPosition + flow * 1.6) * 0.6) * 0.4;
-            float nearShoreWeight = 0.35 + 0.65 * shallow;
-            body *= 0.90 + 0.19 * (chop - 0.5) + 0.20 * swell * nearShoreWeight;
+            // Positive phase time advances crests towards smaller mapped shore distances. Restrict
+            // this field to the coast: archived offshore distances are capped, not a wave coordinate.
+            float coastal = 1.0 - smoothstep(5.0, 16.0, shore);
+            float along = sin(dot(waterPosition, float2(0.041, -0.029))) * 0.42;
+            float phase = shore * 0.78 + time * 1.10 + along;
+            float resolvedShore = 1.0 - smoothstep(0.7, 2.5, fwidth(phase));
+            float swell = (sin(phase) * 0.5 + 0.5) * resolvedShore;
+            float chop = dioramaWaterField(waterPosition * 0.23, time);
+            body *= 0.94 + 0.20 * (chop - 0.5) + 0.14 * swell * coastal;
             float2 slope = dioramaWaterSlope(waterPosition, time);
             float3 waveNormal = normalize(float3(-slope, 1.0));
             float glint = pow(saturate(dot(waveNormal, normalize(view + u.sunDirection.xyz))), 48.0);
 
-            // Broken, transient foam patches, not the former continuous near-white perimeter stroke.
-            float lace = dioramaNoise(waterPosition * 0.8 + float2(time * 0.12, -time * 0.09));
-            float breath = smoothstep(0.65, 0.98, sin(time * 0.65 + waterPosition.x * 0.16 + waterPosition.y * 0.11) * 0.5 + 0.5);
-            float foamWidth = max(0.05, u.shoreline.y);
-            float contact = exp(-pow(shore / foamWidth, 2.0));
-            float breaker = smoothstep(0.85, 0.99, swell) * (1.0 - smoothstep(1.0, 12.0, shore));
-            float foam = (contact * breath * 0.25 + breaker * 0.18) * smoothstep(0.40, 0.78, lace) * (1.0 - u.shoreline.z);
-            float caustic = pow(1.0 - abs(sin(dot(waterPosition, float2(1.6, 0.9)) + time * 0.52)
-                * sin(dot(waterPosition, float2(-1.1, 1.8)) - time * 0.43)), 12.0);
-            caustic *= shallow * (1.0 - smoothstep(0.45, 1.4, length(fwidth(waterPosition)))) * (1.0 - u.shoreline.z);
+            // A widening/receding wash and travelling broken crest, not a fixed white outline.
+            float lace = dioramaWaterField(waterPosition * 0.62, time * 0.45);
+            float breath = sin(time * 1.10 + along) * 0.5 + 0.5;
+            float washWidth = max(0.3, u.shoreline.y) * (0.55 + 2.4 * breath);
+            float shoreAA = max(0.12, min(1.0, fwidth(shore)));
+            float contact = (1.0 - smoothstep(washWidth - shoreAA, washWidth + shoreAA, shore))
+                * smoothstep(0.12, 0.80, breath);
+            float breaker = smoothstep(0.70, 0.98, swell) * (1.0 - smoothstep(0.8, 9.0, shore));
+            float foam = (contact * 0.52 + breaker * 0.42) * smoothstep(0.26, 0.74, lace) * (1.0 - u.shoreline.z);
+            float caustic = dioramaWaterCaustic(waterPosition, time) * shallow * (1.0 - u.shoreline.z);
             color = body * (ambient * 0.35 + float3(u.params.z < 0.5 ? 0.58 : 0.18) + u.sunColor.rgb * 0.32);
             color += u.sunColor.rgb * caustic * 0.11;
+            color *= 1.0 + dot(slope, float2(0.65, -0.45)) * 0.45;
             color = mix(color, float3(0.78, 0.87, 0.83), foam);
             float fresnelSky = 0.05 + 0.28 * pow(1.0 - saturate(dot(waveNormal, view)), 4.0);
             color = mix(color, u.skyColor.rgb * 0.80, fresnelSky);
@@ -812,7 +834,7 @@ nonisolated enum DioramaShaderSource {
                 color = mix(color, reflected.rgb / max(reflected.a, 0.001), fresnel * reflected.a * edgeFade * (1.0 - foam));
             }
             // Shallow water still reveals submerged sand and coral beneath the reflection.
-            return dioramaRevealColor(color, mix(1.0, 0.48, shallow), revealAlpha, u);
+            return dioramaRevealColor(color, mix(mix(1.0, 0.48, shallow), 0.94, foam), revealAlpha, u);
         }
 
         if (tex > 5.5 && tex < 6.5 && in.appearance.y < 8.5) {

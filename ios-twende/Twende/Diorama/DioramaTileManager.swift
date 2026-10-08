@@ -193,7 +193,7 @@ final class DioramaTileManager {
         outgoingHost?.setReducedEffects(reducesEffects)
         outgoingHost?.setVisible(state.visibleCategories, timeOfDay: state.timeOfDay)
         contextTiles.setReducedEffects(reducesEffects, waterMotion: motion)
-        let needsFrames = motion && (renderLayer?.hasWaterInView == true || contextTiles.hasWaterInView)
+        let needsFrames = motion && (renderLayer?.hasWaterInView == true || outgoingHost?.hasWaterInView == true || contextTiles.hasWaterInView)
         guard needsFrames else { waterClock?.invalidate(); waterClock = nil; return }
         guard waterClock == nil else { return }
         let timer = Timer(timeInterval: 1.0 / 12, repeats: true) { [weak self] _ in
@@ -572,6 +572,9 @@ final class DioramaTileManager {
                 groundRect: DioramaProjection(origin: tile.centre).rect(of: tile), visible: state.visibleCategories, timeOfDay: state.timeOfDay,
                 animates: animates, config: config, labels: artifacts.buildingLabels, displayScale: Float(UIScreen.main.scale)
             )
+            host.onWaterVisibilityChanged = { [weak self] in
+                Task { @MainActor [weak self] in self?.updateWaterClock() }
+            }
             host.onFrameReport = { [weak self, weak host] report in
                 Task { @MainActor [weak self, weak host] in
                     guard let self, let host, self.renderLayer === host, self.shown else { return }
@@ -833,6 +836,7 @@ final class DioramaTileManager {
             self.scheduleUpdate(delay: 0.1)
         }
         contextTiles.onUnavailable = contextTiles.onReady
+        contextTiles.onWaterVisibilityChanged = { [weak self] in self?.updateWaterClock() }
         contextTiles.onFocusFallback = { [weak self] ready, paired in
             guard let self, self.tile == ready else { return }
             self.renderLayer?.setTileCoverage(edges: SIMD4(repeating: 1), role: 1, paired: paired)
