@@ -10,9 +10,10 @@ final class DioramaContextTiles {
         let bytes: Int
         let triangles: Int
         var isReady: Bool
+        var arrival: Task<Void, Never>?
         init(host: DioramaRenderLayer, artifacts: DioramaTileArtifacts) {
             self.host = host; bytes = artifacts.decodedBytes; triangles = artifacts.totalTriangles
-            isReady = host.diagnostic.hasPrefix("ready")
+            isReady = host.isRendererReady
         }
     }
     private struct HDMask {
@@ -28,6 +29,7 @@ final class DioramaContextTiles {
     private var revision: UInt = 0
     private var retryAfter: [DioramaTileID: Date] = [:]
     private var wantedTiles: [DioramaTileID] = []
+    private var visibleTiles: Set<DioramaTileID> = []
     private weak var map: MapboxMap?
     private var visible: Set<DioramaCategory> = []
     private var time: DioramaTimeOfDay = .day
@@ -36,16 +38,30 @@ final class DioramaContextTiles {
     private var waterMotion: Bool = true
     var onReady: ((DioramaTileID) -> Void)?
     var onUnavailable: ((DioramaTileID) -> Void)?
+    var onHDFrameCompleted: ((DioramaTileID) -> Void)?
 
     func groundHeight(at point: GeoPoint) -> Double? {
         let tile = DioramaTileID(latitude: point.latitude, longitude: point.longitude, zoom: 16)
         return residents[tile]?.host.groundHeight(at: point)
     }
-    func isReady(_ tile: DioramaTileID) -> Bool { residents[tile]?.isReady == true }
+    func isReady(_ tile: DioramaTileID) -> Bool {
+        guard let resident = residents[tile] else { return false }
+        return resident.isReady && resident.arrival == nil
+    }
+    func readinessReport(_ tile: DioramaTileID) -> String {
+        guard let resident = residents[tile] else {
+            return retryAfter[tile] == nil ? "waiting for saved base" : "base awaiting local retry/repair"
+        }
+        if !resident.isReady { return "waiting for base GPU initialization · \(resident.host.diagnostic)" }
+        return resident.arrival == nil ? "base ready" : "base reveal in progress"
+    }
+    func hasCompletedHDReveal(tile: DioramaTileID, state: SIMD4<Float>) -> Bool {
+        residents[tile]?.host.hasCompleted(reveal: state) == true
+    }
     func hasCompletedHDUnion(tile: DioramaTileID, state: SIMD4<Float>) -> Bool {
         residents[tile]?.host.hasCompletedUnion(state) == true
     }
-    func hasReadyCoverage(in tiles: [DioramaTileID]) -> Bool { tiles.contains { isReady($0) } }
+    func hasReadyCoverage(in tiles: [DioramaTileID]) -> Bool { tiles.contains { residents[$0]?.isReady == true } }
     var retryDelay: TimeInterval? {
         return wantedTiles.filter { residents[$0] == nil }.compactMap { retryAfter[$0] }
             .filter { $0 > Date() }.min().map { max(0.1, $0.timeIntervalSinceNow) }
@@ -66,6 +82,13 @@ final class DioramaContextTiles {
                 visible: Set<DioramaCategory>, time: DioramaTimeOfDay, wireframe: Bool,
                 priorityTiles: [DioramaTileID] = [], allowsLoading: Bool = true) {
         self.map = map
+        visibleTiles = Set(priorityTiles)
+        for (tile, resident) in residents where resident.arrival != nil && !visibleTiles.contains(tile) {
+            resident.arrival?.cancel(); resident.arrival = nil; resident.host.setLifecycleReveal(.zero)
+            refreshNeighbours(of: tile)
+            if isReady(tile) { onReady?(tile) }
+            map.triggerRepaint()
+        }
         if self.visible != visible || self.time != time || self.wireframe != wireframe {
             self.visible = visible; self.time = time; self.wireframe = wireframe
             for resident in residents.values {
@@ -106,10 +129,11 @@ final class DioramaContextTiles {
     func clear() {
         pauseLoading()
         for tile in Array(residents.keys) { remove(tile) }
-        hdMasks.removeAll(); retryAfter.removeAll(); wantedTiles.removeAll()
+        hdMasks.removeAll(); retryAfter.removeAll(); wantedTiles.removeAll(); visibleTiles.removeAll()
     }
     private func id(_ tile: DioramaTileID) -> String { "zuri-context-\(tile.key)" }
     private func remove(_ tile: DioramaTileID) {
+        residents[tile]?.arrival?.cancel()
         if let map {
             for layer in [id(tile) + "-clip", id(tile)] where map.layerExists(withId: layer) { try? map.removeLayer(withId: layer) }
             if map.sourceExists(withId: id(tile) + "-source") { try? map.removeSource(withId: id(tile) + "-source") }
@@ -139,6 +163,23 @@ final class DioramaContextTiles {
             if let resident = residents[t] { applyCoverage(t, resident: resident) }
         }
     }
+    private func startArrival(_ tile: DioramaTileID, resident: Resident) {
+        let host = resident.host
+        let extent = max(abs(host.revealBounds.minimum.x), abs(host.revealBounds.maximum.x),
+            abs(host.revealBounds.minimum.y), abs(host.revealBounds.maximum.y)) + DioramaRevealStyle.support + 50
+        resident.arrival = Task { [weak self, weak resident] in
+            guard let self, let resident else { return }
+            let finished = await DioramaTileTransition.run(host: host, from: -DioramaRevealStyle.support - 2, to: extent) {
+                [weak self] _, _ in self?.map?.triggerRepaint()
+            }
+            guard !Task.isCancelled, self.residents[tile] === resident else { return }
+            resident.arrival = nil
+            // A stopped SDK drawable must not strand healthy saved base geometry behind an empty mask.
+            host.setLifecycleReveal(.zero)
+            if !finished { print("[Diorama base] reveal did not complete \(tile.key); base retained · \(host.diagnostic)") }
+            self.refreshNeighbours(of: tile); self.onReady?(tile); self.map?.triggerRepaint()
+        }
+    }
     private func setSlot(_ id: String, on map: MapboxMap) throws {
         try map.setLayerProperty(for: id, property: "slot", value: "middle")
     }
@@ -157,11 +198,18 @@ final class DioramaContextTiles {
               UIApplication.shared.applicationState == .active else { return }
         if host.diagnostic.contains("failed") || host.diagnostic.contains("missing") { markUnavailable(tile); return }
         host.viewport = viewport
-        host.onLifecycleCompleted = { [weak self, weak host] in
+        host.onInitialized = { [weak self, weak host] in
             Task { @MainActor [weak self, weak host] in
                 guard let self, let host, let resident = self.residents[tile], resident.host === host, !resident.isReady else { return }
-                resident.isReady = true
+                resident.isReady = host.isRendererReady
+                guard resident.isReady else { return }
                 self.refreshNeighbours(of: tile); self.onReady?(tile); self.map?.triggerRepaint()
+            }
+        }
+        host.onRevealCompleted = { [weak self, weak host] _ in
+            Task { @MainActor [weak self, weak host] in
+                guard let self, let host, self.residents[tile]?.host === host, self.hdMasks[tile] != nil else { return }
+                self.onHDFrameCompleted?(tile)
             }
         }
         host.onInitializationFailed = { [weak self, weak host] in
@@ -173,6 +221,9 @@ final class DioramaContextTiles {
         host.setVisible(visible, timeOfDay: time); host.setReducedEffects(reducedEffects)
         host.setWireframe(wireframe); host.setWaterMotion(waterMotion)
         let resident = Resident(host: host, artifacts: artifacts)
+        let revealsArrival = visibleTiles.contains(tile) && !UIAccessibility.isReduceMotionEnabled
+            && ProcessInfo.processInfo.thermalState != .critical
+        if revealsArrival { host.setLifecycleReveal(SIMD4(0, 0, -DioramaRevealStyle.support - 2, 1)) }
         residents[tile] = resident; applyCoverage(tile, resident: resident)
         do {
             try map.addCustomLayer(withId: id(tile), layerHost: host, layerPosition: nil)
@@ -183,9 +234,11 @@ final class DioramaContextTiles {
             var clip = ClipLayer(id: id(tile) + "-clip", source: source.id)
             clip.slot = .top; clip.clipLayerScope = .constant(["basemap"]); clip.clipLayerTypes = .constant([.model])
             try map.addLayer(clip)
-            retryAfter[tile] = nil; refreshNeighbours(of: tile)
+            retryAfter[tile] = nil
+            if revealsArrival { startArrival(tile, resident: resident) }
+            refreshNeighbours(of: tile)
             print("[Diorama base] installed \(tile.key) preload=\(residents.count)/\(DioramaOfflineStore.tiles.count) decoded=\(resident.bytes)")
-            if resident.isReady { onReady?(tile) }
+            if isReady(tile) { onReady?(tile) }
             map.triggerRepaint()
         } catch {
             remove(tile); refreshNeighbours(of: tile); markUnavailable(tile)

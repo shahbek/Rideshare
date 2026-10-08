@@ -24,6 +24,7 @@ actor DioramaOfflineStore {
     }
     private var directoryNames: [String]?
     private var candidates: [ReadKey: [String]] = [:]
+    private var readFailures: [ReadKey: String] = [:]
     private var inFlight: [ReadKey: Task<DioramaTileArtifacts?, Never>] = [:]
     private var readIdentities: [ReadKey: UUID] = [:]
     private var decoded: [ReadKey: CachedRead] = [:]
@@ -66,6 +67,7 @@ actor DioramaOfflineStore {
             return await consume(pending, identity: identity)
         }
         let identity = UUID()
+        readFailures[request] = nil
         let names = candidateNames(tile, context: context)
         let directory = root
         let revision = dataRevision
@@ -75,9 +77,11 @@ actor DioramaOfflineStore {
             await self.acquireReadSlot(focus: !context)
             guard !Task.isCancelled else { await self.releaseReadSlot(); return nil }
             let decode = Task.detached(priority: context ? .utility : .userInitiated) { () -> DioramaTileArtifacts? in
+                var failure: String = "Saved full-detail package is missing"
                 for name in names {
                     if Task.isCancelled { return nil }
                     let location = directory.appendingPathComponent(name)
+                    guard FileManager.default.fileExists(atPath: location.appendingPathComponent("manifest.json").path) else { continue }
                     do {
                         let artifact = try DioramaTileArchive.read(from: location, key: name)
                         guard artifact.tile == tile else { continue }
@@ -86,10 +90,23 @@ actor DioramaOfflineStore {
                         result.prepareForRendering()
                         return result
                     } catch {
+                        if Task.isCancelled { return nil }
+                        switch error {
+                        case DioramaTileArchive.ArchiveError.incompatible:
+                            failure = "Saved package layout is incompatible"
+                        case DioramaTileArchive.ArchiveError.invalid:
+                            failure = "Saved package failed geometry/checksum validation"
+                        case DioramaTileArchive.ArchiveError.compression:
+                            failure = "Saved package could not be decompressed"
+                        default:
+                            failure = "Saved package could not be read/decoded"
+                        }
+                        print("[Diorama load] \(tile.key) context=\(context) candidate=\(name) rejected: \(failure)")
                         // Keep user-owned bytes and try an older compatible copy.
                         continue
                     }
                 }
+                await self.recordReadFailure(request, message: failure, revision: revision)
                 return nil
             }
             let result = await withTaskCancellationHandler { await decode.value } onCancel: { decode.cancel() }
@@ -110,6 +127,14 @@ actor DioramaOfflineStore {
         }
         print("[Diorama load] \(tile.key) context=\(context) saved-to-ready=\(String(format: "%.3f", Date().timeIntervalSince(started)))s bytes=\(result?.totalBytes ?? 0)")
         return Task.isCancelled ? nil : result
+    }
+
+    func readFailure(_ tile: DioramaTileID, context: Bool = false) -> String {
+        readFailures[ReadKey(tile: tile, context: context)] ?? "Saved package unavailable"
+    }
+    private func recordReadFailure(_ request: ReadKey, message: String, revision: UInt) {
+        guard revision == dataRevision else { return }
+        readFailures[request] = message
     }
 
     private func consume(_ job: Task<DioramaTileArtifacts?, Never>, identity: UUID) async -> DioramaTileArtifacts? {
@@ -149,7 +174,7 @@ actor DioramaOfflineStore {
         dataRevision &+= 1
         for job in inFlight.values { job.cancel() }
         inFlight.removeAll(); readIdentities.removeAll(); readConsumers.removeAll()
-        decoded.removeAll(); candidates.removeAll(); directoryNames = nil
+        decoded.removeAll(); candidates.removeAll(); readFailures.removeAll(); directoryNames = nil
     }
     func save(_ artifact: DioramaTileArtifacts, context: Bool) throws {
         invalidateReads()

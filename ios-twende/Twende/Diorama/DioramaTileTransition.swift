@@ -6,6 +6,7 @@ import UIKit
 nonisolated enum DioramaTileTransition {
     @MainActor
     static func run(host: DioramaRenderLayer, from: Float, to: Float, lifecycle: Bool = true,
+                    pairedCompletion: (@MainActor (SIMD4<Float>) -> Bool)? = nil,
                     step: @MainActor (SIMD4<Float>, Float) -> Void) async -> Bool {
         var elapsed: Double = 0
         var previous = CACurrentMediaTime()
@@ -22,7 +23,8 @@ nonisolated enum DioramaTileTransition {
             let finish = UIAccessibility.isReduceMotionEnabled || UIApplication.shared.applicationState != .active
                 || ProcessInfo.processInfo.thermalState == .critical
             if host.diagnostic.contains("failed") || host.diagnostic.contains("missing") || now - requested > 20 { return false }
-            let completed = lifecycle ? host.hasCompletedLifecycle(current) : host.hasCompleted(reveal: current)
+            let ownFrameCompleted = lifecycle ? host.hasCompletedLifecycle(current) : host.hasCompleted(reveal: current)
+            let completed = ownFrameCompleted && (pairedCompletion?(current) ?? true)
             if finish {
                 apply(SIMD4(0, 0, to, 1), progress: 1)
                 return true

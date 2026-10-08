@@ -138,6 +138,7 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost, @unchecke
     private var timeOfDay: DioramaTimeOfDay
     private var elevationOffset: Double = 0
     private var diagnosticText: String = "not started"
+    private var rendererReady: Bool = false
     private var reveal: SIMD4<Float> = .zero
     private var completedReveal: SIMD4<Float>?
     private var lifecycleReveal: SIMD4<Float> = .zero
@@ -195,9 +196,11 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost, @unchecke
     private func didComplete(_ value: SIMD4<Float>, lifecycle: SIMD4<Float>, union: SIMD4<Float>) {
         lock.lock()
         let changed = completedLifecycleReveal != lifecycle
+        let revealChanged = completedReveal != value
         completedReveal = value; completedLifecycleReveal = lifecycle; completedUnion = union
         lock.unlock()
         if changed { onLifecycleCompleted?() }
+        if revealChanged { onRevealCompleted?(value) }
     }
 
     private func publishWaterVisibility(_ visible: Bool) {
@@ -213,7 +216,15 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost, @unchecke
     var onFrameReport: (@Sendable (String) -> Void)?
     var onWaterVisibilityChanged: (@Sendable () -> Void)?
     var onLifecycleCompleted: (@Sendable () -> Void)?
+    var onRevealCompleted: (@Sendable (SIMD4<Float>) -> Void)?
     var onInitializationFailed: (@Sendable () -> Void)?
+    var onInitialized: (@Sendable () -> Void)?
+
+    /// Resource readiness is independent of diagnostic wording and offscreen frame callbacks.
+    var isRendererReady: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return rendererReady
+    }
     private let frameMetrics = DioramaFrameMetrics()
     // Render-thread-only preparation cache. Water/reveal uniforms still update every frame.
     private var selectionVisible: Set<DioramaCategory>?
@@ -351,7 +362,8 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost, @unchecke
     func renderingWillStart(_ metalDevice: MTLDevice, colorPixelFormat: UInt, depthStencilPixelFormat: UInt) {
         DioramaGPUPreparation.shared.capture(device: metalDevice, color: colorPixelFormat, depth: depthStencilPixelFormat)
         let formats = SIMD2(colorPixelFormat, depthStencilPixelFormat)
-        if preparedFormats == formats, pipeline != nil, vertexBuffer != nil, indexBuffer != nil { return }
+        if preparedFormats == formats, isRendererReady { onInitialized?(); return }
+        lock.lock(); rendererReady = false; lock.unlock()
         let uploadStarted = CACurrentMediaTime()
         guard !vertices.isEmpty, !indices.isEmpty,
               let library = DioramaShaderSource.library(for: metalDevice),
@@ -458,9 +470,19 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost, @unchecke
             if !contextOnly, !labels.isEmpty {
                 labelRenderer = DioramaLabelRenderer(device: metalDevice, labels: labels, scale: displayScale, color: colorFormat, depthFormat: depthFormat)
             }
-            lock.lock(); labelsReady = labelRenderer != nil; lock.unlock()
+            guard vertexBuffer != nil, indexBuffer != nil, instanceBuffer != nil,
+                  lightBuffer != nil, lightTableBuffer != nil, lightIndexBuffer != nil,
+                  paintBuffer != nil, paintTableBuffer != nil, paintIndexBuffer != nil,
+                  depthState != nil, noWriteDepthState != nil, blankReflection != nil,
+                  groundImage == nil || groundTexture != nil else {
+                setDiagnostic("GPU resource allocation failed")
+                onInitializationFailed?()
+                return
+            }
+            lock.lock(); labelsReady = labelRenderer != nil; rendererReady = true; lock.unlock()
             preparedFormats = formats
             setDiagnostic("ready vertices=\(vertices.count) triangles=\(indices.count / 3) instances=\(instances.count) lights=\(lightGrid.lights.count)")
+            onInitialized?()
             print("[Diorama load] context=\(contextOnly) GPU-setup=\(String(format: "%.3f", CACurrentMediaTime() - uploadStarted))s (not GPU execution)")
         } catch {
             setDiagnostic("pipeline creation failed")
@@ -810,7 +832,7 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost, @unchecke
         postProcess = nil
         labelRenderer = nil
         publishLabels([])
-        lock.lock(); labelsReady = false; lock.unlock()
+        lock.lock(); labelsReady = false; rendererReady = false; lock.unlock()
     }
 
     private func setDiagnostic(_ text: String) {

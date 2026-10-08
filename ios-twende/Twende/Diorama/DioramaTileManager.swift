@@ -87,6 +87,7 @@ final class DioramaTileManager {
         styling = DioramaMapStyling(config: config)
         contextTiles.onReady = { [weak self] _ in self?.scheduleUpdate(delay: 0) }
         contextTiles.onUnavailable = { [weak self] _ in self?.scheduleUpdate(delay: 30) }
+        contextTiles.onHDFrameCompleted = { [weak self] tile in self?.hdTiles.resumeArrivalIfStalled(tile) }
         hdTiles.onChanged = { [weak self] in self?.scheduleUpdate(delay: 0.1) }
         hdTiles.onArtifact = { [weak self] tile, artifacts in self?.state.loadedTiles[tile] = artifacts }
         hdTiles.onFrameReport = { [weak self] report in
@@ -109,6 +110,7 @@ final class DioramaTileManager {
                         self.contextTiles.pauseLoading(); self.hdTiles.clear()
                         Task { await DioramaOfflineStore.shared.releaseDecodedMemory() }
                         self.hdSuspendedUntil = Date().addingTimeInterval(30)
+                        print("[Diorama HD] memory warning; overlays released, base retained; loading paused 30s")
                     }
                     self.applyPolicy(); self.scheduleUpdate(delay: 0)
                 }
@@ -183,14 +185,25 @@ final class DioramaTileManager {
             allowsLoading: Date() >= hdSuspendedUntil)
         contextTiles.setReducedEffects(reducesEffects, waterMotion: motion)
         suppressBasemapTerrain(contextTiles.hasReadyCoverage(in: visibleTilePriority))
-        if !validViewport { scheduleUpdate(delay: 0.1); return }
+        if !validViewport {
+            hdTiles.setRequestState("Waiting for map layout")
+            state.status = contextTiles.report + "\n" + hdTiles.report
+            scheduleUpdate(delay: 0.1); return
+        }
         let wanted: [DioramaTileID]
         if map.cameraState.zoom >= config.minimumZoom, let focus = viewportFocus, Date() >= hdSuspendedUntil {
             // Focus plus neighbouring tiles actually intersecting the view; never preload the HD region.
             wanted = [focus] + visibleTilePriority.filter {
                 $0 != focus && abs($0.x - focus.x) <= 1 && abs($0.y - focus.y) <= 1
             }
-        } else { wanted = [] }
+            hdTiles.setRequestState("Full-detail focus requested · \(focus.key)")
+        } else {
+            wanted = []
+            if Date() < hdSuspendedUntil { hdTiles.setRequestState("HD temporarily paused after a memory warning · base retained") }
+            else if map.cameraState.zoom < config.minimumZoom {
+                hdTiles.setRequestState("Zoom in for full detail · HD starts at z\(config.minimumZoom)")
+            } else { hdTiles.setRequestState("No prepared Masaki tile intersects the current view") }
+        }
         hdTiles.update(wanted: wanted, visibleTiles: visibleTilePriority, map: map, base: contextTiles, viewport: viewport, config: config,
             categories: state.visibleCategories, time: state.timeOfDay, wireframe: state.showsWireframe,
             reduced: reducesEffects, motion: motion)
@@ -281,6 +294,14 @@ final class DioramaTileManager {
                     return abs(restored.latitude - coordinate.latitude) < 0.00001 && abs(restored.longitude - coordinate.longitude) < 0.00001
                 }
                 if valid { weights[candidate] = max(weights[candidate] ?? 0, DioramaViewport.screenArea(points, viewport: bounds)) }
+            }
+        }
+        if weights.isEmpty, camera.center.latitude.isFinite, camera.center.longitude.isFinite {
+            // The camera anchor remains authoritative when SDK horizon/roundtrip probes yield no ground.
+            // Only admit that one known viewed tile, never a speculative ring or the entire HD region.
+            let anchor = DioramaTileID(latitude: camera.center.latitude, longitude: camera.center.longitude, zoom: 16)
+            if DioramaOfflineStore.tiles.contains(anchor) {
+                weights[anchor] = sampleWeight
             }
         }
         visibleTilePriority = weights.keys.sorted {
