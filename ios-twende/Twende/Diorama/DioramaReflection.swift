@@ -11,6 +11,9 @@ nonisolated final class DioramaReflection {
     private var depth: MTLTexture?
     private var lastMatrix: simd_float4x4?
     private var lastReveal: SIMD4<Float> = .zero
+    private var lastLifecycle: SIMD4<Float> = .zero
+    private var lastEdges: SIMD4<Float> = .zero
+    private var lastTileState: SIMD4<Float> = .zero
     private var lastSignature: String = ""
 
     init?(device: MTLDevice, library: MTLLibrary) {
@@ -20,6 +23,11 @@ nonisolated final class DioramaReflection {
             d.vertexFunction = library.makeFunction(name: instanced ? "dioramaInstancedVertex" : "dioramaVertex")
             d.fragmentFunction = library.makeFunction(name: "dioramaFragment")
             d.colorAttachments[0].pixelFormat = .bgra8Unorm
+            d.colorAttachments[0].isBlendingEnabled = true
+            d.colorAttachments[0].sourceRGBBlendFactor = .one
+            d.colorAttachments[0].destinationRGBBlendFactor = .oneMinusSourceAlpha
+            d.colorAttachments[0].sourceAlphaBlendFactor = .one
+            d.colorAttachments[0].destinationAlphaBlendFactor = .oneMinusSourceAlpha
             d.depthAttachmentPixelFormat = .depth32Float
             return d
         }
@@ -47,7 +55,8 @@ nonisolated final class DioramaReflection {
             lastMatrix = nil
         }
         guard let color, let depth else { return nil }
-        if lastMatrix == matrix, lastReveal == uniforms.reveal, lastSignature == signature { return color }
+        if lastMatrix == matrix, lastReveal == uniforms.reveal, lastLifecycle == uniforms.lifecycleReveal,
+           lastEdges == uniforms.tileEdges, lastTileState == uniforms.tileState, lastSignature == signature { return color }
         let pass = MTLRenderPassDescriptor()
         pass.colorAttachments[0].texture = color; pass.colorAttachments[0].loadAction = .clear; pass.colorAttachments[0].storeAction = .store
         pass.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 0)
@@ -57,7 +66,7 @@ nonisolated final class DioramaReflection {
         var m = matrix, u = uniforms
         u.params.w = 1; u.water.y = 0; u.post.x = 0
         e.label = "Diorama cached water reflection"
-        e.setViewport(.init(originX: 0, originY: 0, width: Double(w), height: Double(h), znear: depthRange.0, zfar: depthRange.1))
+        e.setViewport(.init(originX: 0, originY: 0, width: Double(w), height: Double(h), znear: 0, zfar: 1))
         e.setFrontFacing(.clockwise)
         e.setDepthStencilState(depthState)
         e.setVertexBuffer(vertices, offset: 0, index: 0)
@@ -92,6 +101,7 @@ nonisolated final class DioramaReflection {
         }
         e.endEncoding()
         lastMatrix = matrix; lastReveal = uniforms.reveal; lastSignature = signature
+        lastLifecycle = uniforms.lifecycleReveal; lastEdges = uniforms.tileEdges; lastTileState = uniforms.tileState
         return color
     }
 }

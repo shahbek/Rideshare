@@ -113,6 +113,8 @@ final class DioramaTileManager {
     private var lastRevealTick: CFTimeInterval = 0
     private var outgoingCleanup: (() -> Void)?
     private var outgoingTile: DioramaTileID?
+    private var outgoingHost: DioramaRenderLayer?
+    private var outgoingRetiring: Bool = false
     private var isRetracting: Bool = false
     /// Pan arrivals sweep in world space from the previously focused tile, unlike initial focus.
     private var arrivalDirection: DV2? = nil
@@ -126,7 +128,7 @@ final class DioramaTileManager {
         let high = renderLayer?.revealBounds.maximum ?? SIMD3(Float(rect.maxX), Float(rect.maxY), 0)
         let x = Double(max(abs(low.x), abs(high.x)))
         let y = Double(max(abs(low.y), abs(high.y)))
-        let overrun = Double(DioramaRevealStyle.support) + 2
+        let overrun = Double(DioramaRevealStyle.support) + 50
         if let direction = arrivalDirection {
             return x * abs(direction.x) + y * abs(direction.y) + overrun
         }
@@ -172,7 +174,7 @@ final class DioramaTileManager {
                 self.map?.triggerRepaint()
             }
         }
-        for name in [UIApplication.didBecomeActiveNotification, UIApplication.willResignActiveNotification] {
+        for name in [UIApplication.didBecomeActiveNotification, UIApplication.willResignActiveNotification, UIAccessibility.reduceMotionStatusDidChangeNotification] {
             lifecycleObservers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated {
                     self?.updateWaterClock()
@@ -184,8 +186,25 @@ final class DioramaTileManager {
     }
 
     private func updateWaterClock() {
-        // Battery-first: no idle animation clock. Camera changes still redraw the static scene.
-        waterClock?.invalidate(); waterClock = nil
+        let motion = shown && !reducesEffects && !UIAccessibility.isReduceMotionEnabled
+            && UIApplication.shared.applicationState == .active
+        renderLayer?.setWaterMotion(motion)
+        outgoingHost?.setWaterMotion(motion)
+        outgoingHost?.setReducedEffects(reducesEffects)
+        outgoingHost?.setVisible(state.visibleCategories, timeOfDay: state.timeOfDay)
+        contextTiles.setReducedEffects(reducesEffects, waterMotion: motion)
+        let needsFrames = motion && (renderLayer?.hasWaterInView == true || contextTiles.hasWaterInView)
+        guard needsFrames else { waterClock?.invalidate(); waterClock = nil; return }
+        guard waterClock == nil else { return }
+        let timer = Timer(timeInterval: 1.0 / 12, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.updateWaterClock()
+                if self.waterClock != nil { self.map?.triggerRepaint() }
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        waterClock = timer
     }
 
     // MARK: Install / remove
@@ -201,7 +220,7 @@ final class DioramaTileManager {
     func styleDidReload() {
         contextTiles.clear()
         selectionTask?.cancel(); selectionTask = nil; requestedTile = nil
-        outgoingCleanup = nil; outgoingTile = nil
+        outgoingCleanup = nil; outgoingTile = nil; outgoingHost = nil; outgoingRetiring = false
         installed = false
         shown = false
         revealClock?.invalidate()
@@ -251,7 +270,7 @@ final class DioramaTileManager {
 
     /// Camera options for the opening shot over the tile.
     func introCamera() -> CameraOptions {
-        if shown { arrivalDirection = nil; beginReveal() }
+        if shown, isRetracting { beginReveal(fromCurrent: true) }
         if let kind = state.inspectionTarget,
            let data = DioramaBundledTile.load(config: config),
            let segment = data.shorelines.filter({ $0.kind == kind }).max(by: { $0.length < $1.length }) {
@@ -292,7 +311,7 @@ final class DioramaTileManager {
             clearPrefetch()
             selectionTask?.cancel(); selectionTask = nil; requestedTile = nil
             generationTask?.cancel(); generationTask = nil; generationRevision &+= 1
-            if shown { hide(on: map) }
+            if shown { beginRetraction() }
             status = .idle
             state.loadedTiles.removeAll()
             state.status = "Download and prepare all Masaki tiles before viewing · open Offline maps"
@@ -349,6 +368,7 @@ final class DioramaTileManager {
         if requestedTile != nil {
             state.status = selectionTask == nil ? "Adjacent tile unavailable · current area retained. Try Regenerate online." : "Preparing adjacent tile… · current area stays visible"
         } else if shown && !isRetracting && revealClock == nil { updateContextTiles() }
+        updateWaterClock()
     }
 
     private func clearPrefetch() {
@@ -506,16 +526,18 @@ final class DioramaTileManager {
     func regenerate() {
         guard let map else { return }
         selectionTask?.cancel(); selectionTask = nil; requestedTile = nil
-        arrivalDirection = nil
         bypassDiskOnNextGeneration = true
         packageTask?.cancel(); packageTask = nil
         generationRevision &+= 1
         generationTask?.cancel(); generationTask = nil
         DioramaTileGenerator.clearCache(for: tile, config: config)
-        hide(on: map)
-        status = .idle
-        state.loadedTiles[tile] = nil
-        scheduleUpdate(delay: 0.05)
+        retract { [weak self, weak map] in
+            guard let self, map != nil else { return }
+            self.arrivalDirection = nil
+            self.status = .idle
+            self.state.loadedTiles[self.tile] = nil
+            self.scheduleUpdate(delay: 0.05)
+        }
     }
 
     // MARK: Showing
@@ -528,6 +550,8 @@ final class DioramaTileManager {
         let sources = [clipSourceID, labelSourceID]
         let oldHost = renderLayer
         outgoingTile = tile
+        outgoingHost = oldHost
+        outgoingRetiring = false
         outgoingCleanup = { [weak map, oldHost] in
             _ = oldHost // Retain the renderer until its replacement context is ready.
             guard let map else { return }
@@ -541,7 +565,7 @@ final class DioramaTileManager {
     private func show(_ artifacts: DioramaTileArtifacts, on map: MapboxMap) {
         do {
             hide(on: map, preservingContext: true)
-            let animates = false // Static water: no perpetual idle GPU wakeups.
+            let animates = true // Repaint only visible water at 12 Hz under normal-power motion policy.
             let host = DioramaRenderLayer(
                 origin: tile.centre, vertices: artifacts.vertices, indices: artifacts.indices, ranges: artifacts.ranges,
                 groups: artifacts.groups, instances: artifacts.allInstances, lightGrid: artifacts.lightGrid, waterHeight: artifacts.waterHeight, groundImage: artifacts.groundImage,
@@ -584,6 +608,7 @@ final class DioramaTileManager {
             appliedWireframe = state.showsWireframe
             state.loadedTiles[tile] = artifacts
             updateEffectStatus()
+            updateContextTiles()
             updateWaterClock()
             map.triggerRepaint()
         } catch {
@@ -596,7 +621,7 @@ final class DioramaTileManager {
     private func hide(on map: MapboxMap, preservingContext: Bool = false) {
         if !preservingContext {
             contextTiles.clear()
-            outgoingCleanup?(); outgoingCleanup = nil; outgoingTile = nil
+            outgoingCleanup?(); outgoingCleanup = nil; outgoingTile = nil; outgoingHost = nil; outgoingRetiring = false
         }
         revealClock?.invalidate()
         revealClock = nil
@@ -655,13 +680,15 @@ final class DioramaTileManager {
 
     private func beginRetraction() {
         guard shown, !isRetracting else { return }
-        contextTiles.clear()
+        retireOutgoing()
+        contextTiles.retractAll()
         guard !UIAccessibility.isReduceMotionEnabled, UIApplication.shared.applicationState == .active,
               renderLayer?.diagnostic.hasPrefix("ready") == true else {
             if let map { hide(on: map) }; return
         }
-        revealClock?.invalidate()
-        if arrivalDirection != nil, revealClock == nil {
+        let wasAnimating = revealClock != nil
+        revealClock?.invalidate(); revealClock = nil
+        if arrivalDirection != nil, !wasAnimating {
             arrivalDirection = nil
             currentExtent = fullExtent
         }
@@ -731,6 +758,12 @@ final class DioramaTileManager {
     private func completeReveal() {
         revealEndpointPending = false
         if isRetracting {
+            if contextTiles.isTransitioning, UIApplication.shared.applicationState == .active,
+               !UIAccessibility.isReduceMotionEnabled, ProcessInfo.processInfo.thermalState != .critical {
+                revealEndpointPending = true
+                map?.triggerRepaint()
+                return
+            }
             if let map { hide(on: map); map.triggerRepaint() }
             return
         }
@@ -739,9 +772,10 @@ final class DioramaTileManager {
         setRevealClip(halfExtent: nil)
         revealClock?.invalidate(); revealClock = nil
         if let outgoingTile, abs(outgoingTile.x - tile.x) > 1 || abs(outgoingTile.y - tile.y) > 1 {
-            outgoingCleanup?(); outgoingCleanup = nil; self.outgoingTile = nil
+            retireOutgoing()
         }
         updateContextTiles()
+        updateWaterClock()
         scheduleUpdate(delay: 0.1)
         map?.triggerRepaint()
     }
@@ -793,13 +827,32 @@ final class DioramaTileManager {
     private func updateContextTiles() {
         guard shown, !isRetracting, !state.isBasemapOnly, let map else { return }
         contextTiles.onReady = { [weak self] ready in
-            guard let self, self.outgoingTile == ready else { return }
-            self.outgoingCleanup?(); self.outgoingCleanup = nil; self.outgoingTile = nil
+            guard let self else { return }
+            if self.outgoingTile == ready { self.retireOutgoing() }
+            self.updateWaterClock()
             self.scheduleUpdate(delay: 0.1)
         }
         contextTiles.onUnavailable = contextTiles.onReady
+        contextTiles.onFocusFallback = { [weak self] ready, paired in
+            guard let self, self.tile == ready else { return }
+            self.renderLayer?.setTileCoverage(edges: SIMD4(repeating: 1), role: 1, paired: paired)
+            self.map?.triggerRepaint()
+        }
+        contextTiles.setReducedEffects(reducesEffects, waterMotion: !UIAccessibility.isReduceMotionEnabled)
+        contextTiles.setFocusMask(tile: tile, reveal: revealClock == nil ? .zero : revealUniform)
         contextTiles.update(focus: tile, config: config, map: map, visible: state.visibleCategories,
                             time: state.timeOfDay, wireframe: state.showsWireframe)
+    }
+
+    private func retireOutgoing() {
+        guard !outgoingRetiring, let host = outgoingHost, let oldTile = outgoingTile else { return }
+        outgoingRetiring = true
+        contextTiles.retire(host: host, tile: oldTile) { [weak self] in
+            guard let self, self.outgoingTile == oldTile else { return }
+            self.outgoingCleanup?(); self.outgoingCleanup = nil; self.outgoingTile = nil
+            self.outgoingHost = nil; self.outgoingRetiring = false
+            self.scheduleUpdate(delay: 0.1)
+        }
     }
 
     // MARK: Style state

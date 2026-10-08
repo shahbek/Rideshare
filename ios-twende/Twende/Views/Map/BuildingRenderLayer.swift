@@ -100,9 +100,8 @@ nonisolated final class BuildingRenderLayer: NSObject, CustomLayerHost {
             SIMD4<Float>(transform.columns.0), SIMD4<Float>(transform.columns.1),
             SIMD4<Float>(transform.columns.2), SIMD4<Float>(transform.columns.3)
         ))
-        let eyeH = simd_inverse(transform) * SIMD4<Double>(0, 0, 1, 0)
-        guard abs(eyeH.w) > 0.00000001 else { return }
-        var eyeAndDetail = SIMD4<Float>(Float(eyeH.x / eyeH.w), Float(eyeH.y / eyeH.w), Float(eyeH.z / eyeH.w), Float(0.65 + 0.35 * max(0, min(1, parameters.zoom - 15.5))))
+        let eye = MapRenderCamera.eye(transform: transform, parameters: parameters, origin: origin).position
+        var eyeAndDetail = SIMD4<Float>(eye, Float(0.65 + 0.35 * max(0, min(1, parameters.zoom - 15.5))))
         guard let encoder = mtlCommandBuffer.makeRenderCommandEncoder(descriptor: mtlRenderPassDescriptor) else { return }
         encoder.label = "Twende restrained architecture"
         encoder.setViewport(MTLViewport(originX: 0, originY: 0, width: Double(texture.width), height: Double(texture.height), znear: Double(parameters.depthRange.min), zfar: Double(parameters.depthRange.max)))

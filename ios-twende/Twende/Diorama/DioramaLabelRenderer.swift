@@ -106,7 +106,7 @@ nonisolated final class DioramaLabelRenderer {
         return Image(texture: texture, width: Float(width), height: Float(height))
     }
 
-    func draw(encoder: MTLRenderCommandEncoder, matrix: simd_float4x4, width: Int, height: Int, zoom: Double, reveal: SIMD4<Float>) -> Set<UInt64> {
+    func draw(encoder: MTLRenderCommandEncoder, matrix: simd_float4x4, width: Int, height: Int, zoom: Double, uniforms: DioramaShaderUniforms) -> Set<UInt64> {
         guard zoom >= 15.8 else { return [] }
         var accepted: Set<UInt64> = []
         encoder.setRenderPipelineState(pipeline)
@@ -117,7 +117,9 @@ nonisolated final class DioramaLabelRenderer {
         let w = Float(width), h = Float(height)
         for label in labels {
             guard label.isNamed || zoom >= 17.8, occupied.count < 18, let image = images[label.title] else { continue }
-            let revealed = DioramaRevealStyle.coverage(label.anchor, reveal: reveal)
+            let revealed = DioramaRevealStyle.sceneCoverage(label.anchor, reveal: uniforms.reveal,
+                bounds: uniforms.tileBounds, edges: uniforms.tileEdges, state: uniforms.tileState, frame: uniforms.materialFrame)
+                * DioramaRevealStyle.coverage(label.anchor, reveal: uniforms.lifecycleReveal)
             var coverage: Float = min(1, max(0, (revealed - 0.55) / 0.45))
             coverage = coverage * coverage * (3 - 2 * coverage)
             guard coverage > 0.001 else { continue }

@@ -9,7 +9,8 @@ import simd
 /// per frame without rebuilding anything.
 ///
 /// Directional shadows are cached. Spatial batches outside the camera frustum never draw;
-/// only water/halos blend at rest; finite reveals also blend their coverage. Water samples a cached,
+/// permanent exposed tile edges blend at rest; paired full/coarse coverage owns disjoint pixels.
+/// Water samples a cached,
 /// reduced-resolution reflected scene.
 nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
     nonisolated struct Range: Sendable {
@@ -90,6 +91,7 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
     private var instancedGlowPipeline: MTLRenderPipelineState?
     private let lightGrid: DioramaLightGrid
     private let waterHeight: Float
+    private let poolBounds: Range?
     private let groundImage: DioramaGroundImage?
     private let groundRect: DioramaRect
     private let materialFrame: SIMD4<Float>
@@ -102,7 +104,9 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
     /// Whether the water animates (false when Reduce Motion is on: waves then freeze mid-roll).
     private let contextOnly: Bool
     private let animates: Bool
-    private let startTime: CFTimeInterval = CACurrentMediaTime()
+    private var waterMotionEnabled: Bool = true
+    private var waterInView: Bool = false
+    private var loggedCameraFallback: Bool = false
     private var vertexBuffer: MTLBuffer?
     private var indexBuffer: MTLBuffer?
     private var lightBuffer: MTLBuffer?
@@ -128,6 +132,35 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
     private var diagnosticText: String = "not started"
     private var reveal: SIMD4<Float> = .zero
     private var completedReveal: SIMD4<Float>?
+    private var lifecycleReveal: SIMD4<Float> = .zero
+    private var completedLifecycleReveal: SIMD4<Float>?
+    private var tileEdges: SIMD4<Float> = SIMD4(repeating: 1)
+    private var tileState: SIMD4<Float> = SIMD4(1, 0, 0, 0)
+
+    var hasWaterInView: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return waterInView
+    }
+
+    func setWaterMotion(_ enabled: Bool) {
+        lock.lock(); waterMotionEnabled = enabled; lock.unlock()
+    }
+
+    func setTileCoverage(edges: SIMD4<Float>, role: Float, paired: Bool) {
+        lock.lock()
+        tileEdges = edges
+        tileState = SIMD4(1, role, 0, paired ? 1 : 0)
+        lock.unlock()
+    }
+
+    func setLifecycleReveal(_ value: SIMD4<Float>) {
+        lock.lock(); lifecycleReveal = value; lock.unlock()
+    }
+
+    func hasCompletedLifecycle(_ value: SIMD4<Float>) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        return completedLifecycleReveal == value
+    }
 
     /// GPU completion, not a claim that the drawable has reached the display.
     func hasCompleted(reveal value: SIMD4<Float>) -> Bool {
@@ -135,8 +168,8 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
         return completedReveal == value
     }
 
-    private func didComplete(_ value: SIMD4<Float>) {
-        lock.lock(); completedReveal = value; lock.unlock()
+    private func didComplete(_ value: SIMD4<Float>, lifecycle: SIMD4<Float>) {
+        lock.lock(); completedReveal = value; completedLifecycleReveal = lifecycle; lock.unlock()
     }
     private var labelsReady: Bool = false
     private var acceptedLabels: Set<UInt64> = []
@@ -151,6 +184,9 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
     private var eligibleCasters: [DioramaInstanceGroup] = []
     private var selectionTransform: simd_double4x4?
     private var selectedReveal: SIMD4<Float>?
+    private var selectedLifecycle: SIMD4<Float>?
+    private var selectedEdges: SIMD4<Float>?
+    private var selectedTileState: SIMD4<Float>?
     private var drawRevision: UInt64 = 0
     private var cameraRanges: [Range] = []
     private var cameraGroups: [DioramaInstanceGroup] = []
@@ -187,6 +223,7 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
         }
         revealBounds = low.x < high.x ? (low, high) : (SIMD3(Float(groundRect.minX), Float(groundRect.minY), 0), SIMD3(Float(groundRect.maxX), Float(groundRect.maxY), 0))
         self.contextOnly = contextOnly
+        tileState.y = contextOnly ? 0 : 1
         self.origin = origin
         self.labels = labels
         self.displayScale = displayScale
@@ -197,6 +234,13 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
         self.instances = instances
         self.lightGrid = lightGrid
         self.waterHeight = Float(waterHeight)
+        var poolLow = SIMD3<Float>(repeating: .greatestFiniteMagnitude)
+        var poolHigh = SIMD3<Float>(repeating: -.greatestFiniteMagnitude)
+        for vertex in vertices where vertex.appearance.y > 4.5 && vertex.appearance.y < 5.5 && vertex.appearance.w < 0.5 {
+            let p = SIMD3(vertex.position.x, vertex.position.y, vertex.position.z)
+            poolLow = simd_min(poolLow, p); poolHigh = simd_max(poolHigh, p)
+        }
+        poolBounds = poolLow.x <= poolHigh.x ? Range(category: .water, start: 0, count: 0, minimum: poolLow, maximum: poolHigh) : nil
         self.groundImage = groundImage
         self.groundRect = groundRect
         let referenceLatitude = -6.75
@@ -300,7 +344,7 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
             let materialUpload = DioramaLegacyFoliageMaterial.tagged(vertices, indices: indices, ranges: ranges, groups: groups)
             vertexBuffer = upload(materialUpload.vertices, fallback: vertices[0])
             #if DEBUG
-            print("[Diorama material] legacy_foliage_vertices=\(materialUpload.count) preset=\(timeOfDay.rawValue) color_format=\(colorPixelFormat) natural_finish=coverage-v2 reveal=soft-v1 vegetation=layered-v3")
+            print("[Diorama material] legacy_foliage_vertices=\(materialUpload.count) legacy_architecture_vertices=\(materialUpload.architectureCount) preset=\(timeOfDay.rawValue) color_format=\(colorPixelFormat) natural_finish=coverage-v2 reveal=persistent-v2 vegetation=savanna-v4")
             #endif
             indexBuffer = upload(indices, fallback: 0)
             instanceBuffer = upload(instances, fallback: .identity)
@@ -359,6 +403,11 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
         let reducedEffects = self.reducedEffects
         let wireframe = self.wireframe
         let reveal = self.reveal
+        let lifecycleReveal = self.lifecycleReveal
+        let tileEdges = self.tileEdges
+        let tileState = self.tileState
+        let waterMotionEnabled = self.waterMotionEnabled
+        waterInView = false
         lock.unlock()
         let encodeStarted = CACurrentMediaTime()
         let glowOn = timeOfDay.showsLights
@@ -372,7 +421,7 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
         guard !drawn.isEmpty || !eligibleGroups.isEmpty else {
             publishLabels([])
             mtlCommandBuffer.addCompletedHandler { [weak self] command in
-                if command.status == .completed { self?.didComplete(reveal) }
+                if command.status == .completed { self?.didComplete(reveal, lifecycle: lifecycleReveal) }
             }
             return
         }
@@ -404,13 +453,19 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
             }
             selectionTransform = transform
         }
-        let planChanged = selectionChanged || selectedReveal != reveal
+        let planChanged = selectionChanged || selectedReveal != reveal || selectedLifecycle != lifecycleReveal
+            || selectedEdges != tileEdges || selectedTileState != tileState
         if planChanged {
-            selectedRanges = cameraRanges.filter { $0.intersectsReveal(reveal) }
+            let selectionMask = tileState.y > 1.5 ? SIMD4<Float>.zero : reveal
+            selectedRanges = cameraRanges.filter { $0.intersectsReveal(selectionMask) && $0.intersectsReveal(lifecycleReveal) }
             selectedGroups = cameraGroups.filter { group in
-                Range(category: group.category, start: 0, count: 0, minimum: group.minimum, maximum: group.maximum).intersectsReveal(reveal)
+                let bounds = Range(category: group.category, start: 0, count: 0, minimum: group.minimum, maximum: group.maximum)
+                return bounds.intersectsReveal(selectionMask) && bounds.intersectsReveal(lifecycleReveal)
             }
             selectedReveal = reveal
+            selectedLifecycle = lifecycleReveal
+            selectedEdges = tileEdges
+            selectedTileState = tileState
             drawRevision &+= 1
         }
         let mainRanges = selectedRanges
@@ -418,18 +473,29 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
         guard !mainRanges.isEmpty || !drawnGroups.isEmpty else {
             publishLabels([])
             mtlCommandBuffer.addCompletedHandler { [weak self] command in
-                if command.status == .completed { self?.didComplete(reveal) }
+                if command.status == .completed { self?.didComplete(reveal, lifecycle: lifecycleReveal) }
             }
             return
         }
-        let eyeH = simd_inverse(transform) * SIMD4<Double>(0, 0, 1, 0)
-        guard abs(eyeH.w) > 0.00000001 else { return }
-        let eye = SIMD3<Float>(Float(eyeH.x / eyeH.w), Float(eyeH.y / eyeH.w), Float(eyeH.z / eyeH.w))
-        guard eye.x.isFinite, eye.y.isFinite, eye.z.isFinite else { return }
+        let cameraEye = MapRenderCamera.eye(transform: transform, parameters: parameters, origin: origin)
+        let eye = cameraEye.position
+        #if DEBUG
+        if cameraEye.usedFallback && !loggedCameraFallback {
+            loggedCameraFallback = true
+            print("[Diorama camera] finite-eye fallback pitch=\(parameters.pitch) depth=\(parameters.depthRange.min)…\(parameters.depthRange.max)")
+        }
+        #endif
+        let poolVisible = visible.contains(.props) && poolBounds?.intersects(matrix) == true
+            && poolBounds?.intersectsReveal(lifecycleReveal) == true
+        lock.lock(); waterInView = mainRanges.contains { $0.category == .water } || poolVisible; lock.unlock()
 
         var uniforms = DioramaLighting.uniforms(for: timeOfDay, eye: eye)
         uniforms.groundColor.w = surfaceTexture == nil ? 0 : 1
         uniforms.reveal = reveal
+        uniforms.lifecycleReveal = lifecycleReveal
+        uniforms.tileBounds = SIMD4(Float(groundRect.minX), Float(groundRect.minY), Float(groundRect.maxX), Float(groundRect.maxY))
+        uniforms.tileEdges = tileEdges
+        uniforms.tileState = tileState
         uniforms.shoreline = shorelineSettings
         uniforms.shoreline.z = reducedEffects ? 1 : 0
         uniforms.shoreline.w = contextOnly ? 1 : 0
@@ -439,7 +505,7 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
         uniforms.materialFrame = materialFrame
         uniforms.lightGrid = SIMD4<Float>(lightGrid.minX, lightGrid.minY, lightGrid.cellSize, Float(lightGrid.cells))
         // Wrapped so the float stays precise however long the map is open; 1.7 s into the cycle when frozen.
-        uniforms.params.y = animates && !reducedEffects ? Float((CACurrentMediaTime() - startTime).truncatingRemainder(dividingBy: 3600)) : 1.7
+        uniforms.params.y = animates && waterMotionEnabled && !reducedEffects ? Float(CACurrentMediaTime().truncatingRemainder(dividingBy: 3600)) : 1.7
 
         // Shadows are fitted to what the camera can see: the union of the visible batches, so the
         // 2048 texels cover a street when zoomed in and the whole tile only when zoomed out.
@@ -452,7 +518,7 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
             viewLow = simd_min(viewLow, group.minimum); viewHigh = simd_max(viewHigh, group.maximum)
         }
         let castingGroups = eligibleCasters
-        if reveal.w < 0.5, let shadowMap, let shadowMatrix = shadowMap.update(command: mtlCommandBuffer, vertices: vertexBuffer, indices: indexBuffer, instances: instanceBuffer,
+        if reveal.w < 0.5, lifecycleReveal.w < 0.5, let shadowMap, let shadowMatrix = shadowMap.update(command: mtlCommandBuffer, vertices: vertexBuffer, indices: indexBuffer, instances: instanceBuffer,
             ranges: drawn, groups: castingGroups, focus: viewLow.x.isFinite && viewHigh.x > viewLow.x ? (viewLow, viewHigh) : nil,
             sun: SIMD3(uniforms.sunDirection.x, uniforms.sunDirection.y, uniforms.sunDirection.z), preset: timeOfDay) {
             uniforms.shadowMatrix = shadowMatrix
@@ -507,7 +573,7 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
         guard let encoder = mtlCommandBuffer.makeRenderCommandEncoder(descriptor: mtlRenderPassDescriptor) else { return }
         encoder.label = "Zuri diorama"
         encoder.setViewport(MTLViewport(originX: 0, originY: 0, width: Double(texture.width), height: Double(texture.height), znear: Double(parameters.depthRange.min), zfar: Double(parameters.depthRange.max)))
-        encoder.setRenderPipelineState(reveal.w > 0.5 ? (waterPipeline ?? pipeline) : pipeline)
+        encoder.setRenderPipelineState(waterPipeline ?? pipeline)
         // Geometric winding is counter-clockwise seen from outside; closed meshes cull their backs.
         // Thin double-sided pieces (fronds, sails, canopies) carry appearance.x = 0 and are drawn
         // in a second pass with culling off.
@@ -553,7 +619,7 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
         }
         if let instanceBuffer, let instancedPipeline {
             encoder.setVertexBuffer(instanceBuffer, offset: 0, index: 3)
-            encoder.setRenderPipelineState(reveal.w > 0.5 ? (instancedGlowPipeline ?? instancedPipeline) : instancedPipeline)
+            encoder.setRenderPipelineState(instancedGlowPipeline ?? instancedPipeline)
             for group in submittedGroups where group.category != .propGlow { drawGroup(group) }
         }
         encoder.setDepthStencilState(noWriteDepthState)
@@ -577,7 +643,7 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
         }
         let labelIDs: Set<UInt64>
         if visible.contains(.buildings), !wireframe {
-            labelIDs = labelRenderer?.draw(encoder: encoder, matrix: matrix, width: texture.width, height: texture.height, zoom: parameters.zoom, reveal: reveal) ?? []
+            labelIDs = labelRenderer?.draw(encoder: encoder, matrix: matrix, width: texture.width, height: texture.height, zoom: parameters.zoom, uniforms: uniforms) ?? []
         } else { labelIDs = [] }
         publishLabels(labelIDs)
         encoder.endEncoding()
@@ -590,7 +656,7 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
         let callback = onFrameReport
         mtlCommandBuffer.addCompletedHandler { [weak self] command in
             guard command.status == .completed else { return }
-            self?.didComplete(reveal)
+            self?.didComplete(reveal, lifecycle: lifecycleReveal)
             let gpuMS = command.gpuEndTime > command.gpuStartTime ? (command.gpuEndTime - command.gpuStartTime) * 1000 : nil
             if let report = metrics.record(triangles: triangles, cpuMS: cpuMS, gpuMS: gpuMS, drawCalls: drawCalls, unmergedDrawCalls: unmergedDrawCalls) { callback?(report) }
         }
