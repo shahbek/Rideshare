@@ -279,7 +279,11 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
             lightBuffer = upload(lightGrid.lights, fallback: DioramaShaderLight(position: .zero, color: .zero))
             lightTableBuffer = upload(lightGrid.table, fallback: SIMD2<UInt32>(0, 0))
             lightIndexBuffer = upload(lightGrid.indices, fallback: UInt32(0))
-            vertexBuffer = upload(vertices, fallback: vertices[0])
+            let materialUpload = DioramaLegacyFoliageMaterial.tagged(vertices, indices: indices, ranges: ranges, groups: groups)
+            vertexBuffer = upload(materialUpload.vertices, fallback: vertices[0])
+            #if DEBUG
+            print("[Diorama material] legacy_foliage_vertices=\(materialUpload.count) preset=\(timeOfDay.rawValue) color_format=\(colorPixelFormat)")
+            #endif
             indexBuffer = upload(indices, fallback: 0)
             instanceBuffer = upload(instances, fallback: .identity)
             let paint = groundImage?.paint ?? DioramaVectorPaint()
@@ -433,7 +437,7 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
             ranges: drawn, groups: castingGroups, focus: viewLow.x.isFinite && viewHigh.x > viewLow.x ? (viewLow, viewHigh) : nil,
             sun: SIMD3(uniforms.sunDirection.x, uniforms.sunDirection.y, uniforms.sunDirection.z), preset: timeOfDay) {
             uniforms.shadowMatrix = shadowMatrix
-            uniforms.shadowParams = SIMD4(1, 1.0 / 2048.0, 0.00006, 0)
+            uniforms.shadowParams = SIMD4(1, 1.0 / 2048.0, 0.00006, timeOfDay == .day ? 0.65 : 0.85)
         }
 
         uniforms.water = SIMD4<Float>(waterHeight, 0, Float(texture.width), Float(texture.height))

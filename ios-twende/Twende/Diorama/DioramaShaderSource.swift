@@ -17,7 +17,7 @@ nonisolated struct DioramaShaderUniforms {
     /// x: water surface height, y: clip plane enabled, z/w: reflection texture size.
     var water: SIMD4<Float>
     var shadowMatrix: simd_float4x4
-    /// x: shadow enabled, y: texel size, z: depth bias.
+    /// x: shadow enabled, y: texel size, z: depth bias, w: world-space soft edge (metres).
     var shadowParams: SIMD4<Float>
     /// x: shallow distance, y: foam width, z: reduced effects, w: reserved.
     var shoreline: SIMD4<Float>
@@ -42,17 +42,16 @@ nonisolated struct DioramaPostUniforms {
     var blur: SIMD4<Float>
 }
 
-/// Lighting presets per time of day: a warm low sun and violet sky at dusk (the default), a cool
-/// moonlit night, a plain bright day.
+/// Reference-led warm daylight (default), warm low sun/violet dusk, and cool moonlit night.
 nonisolated enum DioramaLighting {
     static func uniforms(for time: DioramaTimeOfDay, eye: SIMD3<Float>) -> DioramaShaderUniforms {
         let sun: SIMD3<Float>, sunColor: SIMD3<Float>, sky: SIMD3<Float>, ground: SIMD3<Float>, glow: Float
         switch time {
         case .day:
-            sun = simd_normalize(SIMD3<Float>(-0.45, -0.35, 0.82))
-            sunColor = SIMD3<Float>(1.0, 0.97, 0.91) * 0.72
-            sky = SIMD3<Float>(0.66, 0.70, 0.75)
-            ground = SIMD3<Float>(0.38, 0.37, 0.34)
+            sun = simd_normalize(SIMD3<Float>(-0.64, -0.48, 0.60))
+            sunColor = SIMD3<Float>(1.0, 0.985, 0.86) * 0.80
+            sky = SIMD3<Float>(0.86, 0.87, 0.72)
+            ground = SIMD3<Float>(0.55, 0.56, 0.34)
             glow = 0
         case .dusk:
             sun = simd_normalize(SIMD3<Float>(-0.75, -0.45, 0.34))
@@ -270,13 +269,21 @@ nonisolated enum DioramaShaderSource {
             gradient = float2(dy.y * dzdx - dx.y * dzdy, dx.x * dzdy - dy.x * dzdx) / det;
         }
         float footprintBias = min(dot(abs(gradient), float2(u.shadowParams.y)) * 0.75, 0.003);
+        float2 worldToUV = 0.5 * float2(
+            length(float3(u.shadowMatrix[0].x, u.shadowMatrix[1].x, u.shadowMatrix[2].x)),
+            length(float3(u.shadowMatrix[0].y, u.shadowMatrix[1].y, u.shadowMatrix[2].y)));
+        float2 stepSize = clamp(worldToUV * u.shadowParams.w,
+                                float2(u.shadowParams.y), float2(u.shadowParams.y * 5.0));
+        constexpr float2 taps[9] = {
+            float2(0.0, 0.0), float2(0.78, 0.18), float2(-0.72, -0.26),
+            float2(0.21, -0.82), float2(-0.18, 0.76), float2(0.56, 0.64),
+            float2(-0.60, 0.55), float2(0.59, -0.57), float2(-0.54, -0.66)
+        };
         float visibility = 0.0;
-        for (int y = -1; y <= 1; y++) {
-            for (int x = -1; x <= 1; x++) {
-                float2 offset = float2(x, y) * u.shadowParams.y;
-                float receiverDepth = q.z + dot(gradient, offset) - bias - footprintBias;
-                visibility += shadowMap.sample_compare(shadowSampler, uv + offset, receiverDepth);
-            }
+        for (int i = 0; i < 9; i++) {
+            float2 offset = taps[i] * stepSize;
+            float receiverDepth = q.z + dot(gradient, offset) - bias - footprintBias;
+            visibility += shadowMap.sample_compare(shadowSampler, uv + offset, receiverDepth);
         }
         return visibility / 9.0;
     }
@@ -371,6 +378,13 @@ nonisolated enum DioramaShaderSource {
         if (!isFront) n = -n;
         float3 view = normalize(u.eye.xyz - in.worldPosition);
         float3 albedo = in.color.rgb;
+        float3 surfacePosition = in.worldPosition;
+        float3 surfaceNormal = n;
+        if (mirrored) {
+            surfacePosition.z = 2.0 * u.water.x - surfacePosition.z;
+            surfaceNormal.z = -surfaceNormal.z;
+        }
+        float3 detailNormal = surfaceNormal;
 
         // Walls grade lighter towards the top and darker at the base (height carried in appearance.z).
         if (in.appearance.z > 50.0 && code < 0.5) {
@@ -381,7 +395,7 @@ nonisolated enum DioramaShaderSource {
         // Procedural ground textures (appearance.y), kept very quiet so the toy-town surfaces read as
         // smooth painted material with only a faint mottle: grass, sand, asphalt, paving.
         float tex = in.appearance.y;
-        float2 wp = in.worldPosition.xy;
+        float2 wp = surfacePosition.xy;
         if (tex > 8.5 && tex < 9.5) {
             // Painted ground: albedo from the tile image, grain code from its alpha (×32).
             constexpr sampler groundSampler(coord::normalized, address::clamp_to_edge, filter::linear, mip_filter::linear, max_anisotropy(8));
@@ -421,13 +435,21 @@ nonisolated enum DioramaShaderSource {
         if (tex > 0.5 && tex < 1.5) {
             // Regrade existing painted downloads without replacing their material boundaries.
             float luminance = dot(albedo, float3(0.2126, 0.7152, 0.0722));
-            albedo = mix(albedo, float3(0.514, 0.678, 0.196) * (0.60 + luminance * 0.85), 0.72);
+            float naturalCoverage = in.appearance.y > 8.5 ? saturate(in.appearance.z) : 0.0;
+            float greenMask = smoothstep(0.015, 0.10, albedo.g - max(albedo.r, albedo.b));
+            float3 grass = mix(float3(171.0, 197.0, 45.0), float3(181.0, 206.0, 54.0),
+                               smoothstep(0.42, 0.72, luminance)) / 255.0;
+            albedo = mix(albedo, grass, greenMask * (1.0 - naturalCoverage));
             float mottle = dioramaNoise(wp * 0.09) * 0.7 + dioramaNoise(wp * 0.35) * 0.3;
-            albedo *= 0.96 + 0.08 * (mottle - 0.5);
+            albedo *= 0.99 + 0.04 * (mottle - 0.5);
         } else if (tex > 1.5 && tex < 2.5) {
             albedo *= 0.98 + 0.04 * (dioramaNoise(wp * 0.5) - 0.5);
         } else if (tex > 2.5 && tex < 3.5) {
-            albedo *= 0.98 + 0.04 * (dioramaNoise(wp * 0.4) - 0.5);
+            // Quiet warm-grey asphalt, not the old dark violet. Preserve white/yellow paint and earth.
+            float coolAsphalt = smoothstep(-0.015, 0.045, albedo.b - albedo.g)
+                * (1.0 - smoothstep(0.60, 0.80, min(albedo.r, min(albedo.g, albedo.b))));
+            albedo = mix(albedo, float3(173.0, 163.0, 160.0) / 255.0, coolAsphalt);
+            albedo *= 0.99 + 0.025 * (dioramaNoise(wp * 0.4) - 0.5);
         } else if (tex > 3.5 && tex < 4.5) {
             albedo *= 0.98 + 0.04 * (dioramaNoise(wp * 0.6) - 0.5);
         } else if (tex > 5.5 && tex < 6.5 && in.appearance.y > 8.5) {
@@ -436,23 +458,60 @@ nonisolated enum DioramaShaderSource {
             albedo *= 0.96 + 0.10 * (clods - 0.5);
         }
 
+        if (tex > 9.5 && tex < 10.5) {
+            // Same chartreuse ramp for tagged legacy foliage and current prototypes. Flowers/trunks
+            // never enter this material. Keep source palette bytes stable for exact roof replay.
+            float luminance = dot(albedo, float3(0.2126, 0.7152, 0.0722));
+            float tone = smoothstep(0.22, 0.74, luminance);
+            float3 shade = float3(145.0, 170.0, 39.0) / 255.0;
+            float3 middle = float3(174.0, 198.0, 49.0) / 255.0;
+            float3 crown = float3(202.0, 220.0, 77.0) / 255.0;
+            albedo = tone < 0.60 ? mix(shade, middle, tone / 0.60)
+                                 : mix(middle, crown, (tone - 0.60) / 0.40);
+        }
+
         // Legacy saved wall vertices already carry height grading; texture them without a rebuild.
         if (tex < 0.5 && in.appearance.z > 100.0 && abs(n.z) < 0.25) tex = 12.0;
-        // One packed, mipmapped CC0 sample; no extra render pass, UV mesh or normal map.
-        // Detail fades when its repeat covers fewer than four pixels and in reduced-effects mode.
+        // One mipmapped sample: CC0 luminance in RG, original miniature leaf relief/pigment in BA.
+        // Surface-gradient shading adds relief without displacement or additional geometry/passes.
+        bool foliage = tex > 9.5 && tex < 10.5;
+        bool grassSurface = tex > 0.5 && tex < 1.5;
         bool textured = (tex > 0.5 && tex < 4.5) || (tex > 9.5 && tex < 13.5);
         if (textured && u.shoreline.z < 0.5 && u.groundColor.w > 0.5) {
-            float2 detailUV = wp / 1.4;
-            if (tex > 11.5) {
-                float2 tangent = normalize(float2(-n.y, n.x) + float2(0.0001, 0.0));
-                detailUV = float2(dot(wp, tangent), in.worldPosition.z) / 1.4;
+            float repeatSize = grassSurface ? 3.2 : (foliage ? 1.6 : 1.4);
+            float2 detailUV = wp / repeatSize;
+            if (foliage) {
+                float3 axis = abs(surfaceNormal);
+                if (axis.z < max(axis.x, axis.y)) {
+                    detailUV = (axis.x > axis.y ? surfacePosition.yz : surfacePosition.xz) / repeatSize;
+                }
+            } else if (tex > 11.5) {
+                float2 tangent = normalize(float2(-surfaceNormal.y, surfaceNormal.x) + float2(0.0001, 0.0));
+                detailUV = float2(dot(wp, tangent), surfacePosition.z) / repeatSize;
             }
-            float resolved = 1.0 - smoothstep(0.08, 0.28, max(length(dfdx(detailUV)), length(dfdy(detailUV))));
+            float resolved = 1.0 - smoothstep(0.04, 0.16, max(length(dfdx(detailUV)), length(dfdy(detailUV))));
             constexpr sampler detailSampler(coord::normalized, address::repeat, filter::linear, mip_filter::linear);
             float4 grain = microdetail.sample(detailSampler, detailUV);
-            float value = (tex < 1.5 || (tex > 9.5 && tex < 10.5)) ? grain.r : grain.g;
-            float strength = tex < 1.5 ? 0.20 : (tex > 9.5 && tex < 10.5 ? 0.16 : 0.075);
+            float value = (grassSurface || foliage) ? grain.r : grain.g;
+            float strength = grassSurface ? 0.10 : (foliage ? 0.055 : 0.075);
             albedo *= 1.0 + (value - 0.502) * strength * resolved;
+            if (grassSurface || foliage) {
+                float naturalCoverage = grassSurface && in.appearance.y > 8.5 ? saturate(in.appearance.z) : 0.0;
+                float reliefWeight = resolved * (1.0 - naturalCoverage);
+                float height = grain.b * (foliage ? 0.009 : 0.016);
+                float3 dx = dfdx(surfacePosition), dy = dfdy(surfacePosition);
+                float3 rx = cross(dy, surfaceNormal), ry = cross(surfaceNormal, dx);
+                float determinant = dot(dx, rx);
+                float3 gradient = (rx * dfdx(height) + ry * dfdy(height)) * sign(determinant);
+                if (abs(determinant) > 1e-8) {
+                    float3 slope = gradient / abs(determinant);
+                    slope *= min(1.0, 0.45 / max(length(slope), 1e-6));
+                    // Bounded tilt avoids projection-seam spikes; geometric shadow normals stay intact.
+                    float3 reliefNormal = normalize(surfaceNormal - slope * 0.65);
+                    detailNormal = normalize(mix(surfaceNormal, reliefNormal, reliefWeight));
+                }
+                albedo *= 1.0 + (grain.a - 0.502) * 0.24 * reliefWeight;
+            }
         }
 
         if (tex > 6.5 && tex < 7.5 && abs(n.z) > 0.7) {
@@ -495,9 +554,8 @@ nonisolated enum DioramaShaderSource {
         }
 
         // Shadows and lighting always use the original scene, including in the reflection pass.
-        float3 litPos = in.worldPosition;
-        float3 litN = n;
-        if (mirrored) { litPos.z = 2.0 * u.water.x - litPos.z; litN.z = -litN.z; }
+        float3 litPos = surfacePosition;
+        float3 litN = surfaceNormal;
         float hemi = litN.z * 0.5 + 0.5;
         float3 ambient = mix(u.groundColor.rgb, u.skyColor.rgb, hemi);
         // Screen-space contact shadow wherever surfaces meet: walls and ground, trees and grass.
@@ -507,10 +565,10 @@ nonisolated enum DioramaShaderSource {
             float2 suv = in.position.xy / u.water.zw;
             ao = 1.0 - u.post.x * (1.0 - occlusion.sample(aoSampler, suv).r);
         }
-        float ndl = dot(litN, u.sunDirection.xyz);
+        float ndl = dot(detailNormal, u.sunDirection.xyz);
         float sun = max(ndl, 0.0);
         float visibility = dioramaShadow(litPos, litN, u, shadowMap);
-        float ambientStrength = u.params.z < 0.5 ? 0.58 : 0.78;
+        float ambientStrength = u.params.z < 0.5 ? 0.50 : 0.78;
         float3 light = ambient * ambientStrength * ao + u.sunColor.rgb * sun * visibility * (0.75 + 0.25 * ao);
         float3 pointLight = glow > 0.01 ? dioramaPointLights(litPos, litN, u, lights, lightTable, lightIndices) : float3(0.0);
         light += pointLight * glow * (0.6 + 0.4 * ao);
