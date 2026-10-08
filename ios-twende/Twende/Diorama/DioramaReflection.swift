@@ -15,6 +15,8 @@ nonisolated final class DioramaReflection {
     private var lastEdges: SIMD4<Float> = .zero
     private var lastTileState: SIMD4<Float> = .zero
     private var lastSignature: String = ""
+    private var lastUnion: SIMD4<Float> = .zero
+    private var lastFocusEdges: SIMD4<Float> = .zero
 
     init?(device: MTLDevice, library: MTLLibrary) {
         self.device = device
@@ -61,7 +63,8 @@ nonisolated final class DioramaReflection {
         prepareSize(width: width, height: height)
         guard let color, let depth else { return nil }
         if lastMatrix == matrix, lastReveal == uniforms.reveal, lastLifecycle == uniforms.lifecycleReveal,
-           lastEdges == uniforms.tileEdges, lastTileState == uniforms.tileState, lastSignature == signature { return color }
+           lastEdges == uniforms.tileEdges, lastTileState == uniforms.tileState, lastSignature == signature,
+           lastUnion == uniforms.unionState, lastFocusEdges == uniforms.focusEdges { return color }
         let pass = MTLRenderPassDescriptor()
         pass.colorAttachments[0].texture = color; pass.colorAttachments[0].loadAction = .clear; pass.colorAttachments[0].storeAction = .store
         pass.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 0)
@@ -107,6 +110,7 @@ nonisolated final class DioramaReflection {
         e.endEncoding()
         lastMatrix = matrix; lastReveal = uniforms.reveal; lastSignature = signature
         lastLifecycle = uniforms.lifecycleReveal; lastEdges = uniforms.tileEdges; lastTileState = uniforms.tileState
+        lastUnion = uniforms.unionState; lastFocusEdges = uniforms.focusEdges
         return color
     }
 }

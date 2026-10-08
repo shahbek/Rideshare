@@ -142,6 +142,12 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost, @unchecke
     private var completedLifecycleReveal: SIMD4<Float>?
     private var tileEdges: SIMD4<Float> = SIMD4(repeating: 1)
     private var tileState: SIMD4<Float> = SIMD4(1, 0, 0, 0)
+    private var focusEdges: SIMD4<Float> = .zero
+    private var unionShape: DioramaUnionShape?
+    private var unionState: SIMD4<Float> = .zero
+    private var completedUnion: SIMD4<Float>?
+    private var selectedUnion: SIMD4<Float>?
+    private var selectedFocusEdges: SIMD4<Float>?
 
     var hasWaterInView: Bool {
         lock.lock(); defer { lock.unlock() }
@@ -152,11 +158,21 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost, @unchecke
         lock.lock(); waterMotionEnabled = enabled; lock.unlock()
     }
 
-    func setTileCoverage(edges: SIMD4<Float>, role: Float, paired: Bool) {
+    func setTileCoverage(edges: SIMD4<Float>, role: Float, paired: Bool, focusEdges: SIMD4<Float>? = nil) {
         lock.lock()
         tileEdges = edges
+        self.focusEdges = focusEdges ?? edges
         tileState = SIMD4(1, role, 0, paired ? 1 : 0)
         lock.unlock()
+    }
+
+    func setUnionCoverage(_ shape: DioramaUnionShape?, state: SIMD4<Float>) {
+        lock.lock(); unionShape = shape; unionState = state; lock.unlock()
+    }
+
+    func hasCompletedUnion(_ value: SIMD4<Float>) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        return completedUnion == value
     }
 
     func setLifecycleReveal(_ value: SIMD4<Float>) {
@@ -174,10 +190,10 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost, @unchecke
         return completedReveal == value
     }
 
-    private func didComplete(_ value: SIMD4<Float>, lifecycle: SIMD4<Float>) {
+    private func didComplete(_ value: SIMD4<Float>, lifecycle: SIMD4<Float>, union: SIMD4<Float>) {
         lock.lock()
         let changed = completedLifecycleReveal != lifecycle
-        completedReveal = value; completedLifecycleReveal = lifecycle
+        completedReveal = value; completedLifecycleReveal = lifecycle; completedUnion = union
         lock.unlock()
         if changed { onLifecycleCompleted?() }
     }
@@ -430,7 +446,9 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost, @unchecke
                     }
                 }
             }
-            labelRenderer = DioramaLabelRenderer(device: metalDevice, labels: labels, scale: displayScale, color: colorFormat, depthFormat: depthFormat)
+            if !contextOnly, !labels.isEmpty {
+                labelRenderer = DioramaLabelRenderer(device: metalDevice, labels: labels, scale: displayScale, color: colorFormat, depthFormat: depthFormat)
+            }
             lock.lock(); labelsReady = labelRenderer != nil; lock.unlock()
             preparedFormats = formats
             setDiagnostic("ready vertices=\(vertices.count) triangles=\(indices.count / 3) instances=\(instances.count) lights=\(lightGrid.lights.count)")
@@ -458,6 +476,9 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost, @unchecke
         let lifecycleReveal = self.lifecycleReveal
         let tileEdges = self.tileEdges
         let tileState = self.tileState
+        let focusEdges = self.focusEdges
+        let unionState = self.unionState
+        let unionShape = self.unionShape
         let waterMotionEnabled = self.waterMotionEnabled
         lock.unlock()
         DioramaGPUPreparation.shared.captureSize(width: texture.width, height: texture.height)
@@ -475,7 +496,7 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost, @unchecke
             publishWaterVisibility(false)
             publishLabels([])
             mtlCommandBuffer.addCompletedHandler { [weak self] command in
-                if command.status == .completed { self?.didComplete(reveal, lifecycle: lifecycleReveal) }
+                if command.status == .completed { self?.didComplete(reveal, lifecycle: lifecycleReveal, union: unionState) }
             }
             return
         }
@@ -503,6 +524,15 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost, @unchecke
             SIMD4<Float>(transform.columns.0), SIMD4<Float>(transform.columns.1),
             SIMD4<Float>(transform.columns.2), SIMD4<Float>(transform.columns.3)
         ))
+        let envelope = Range(category: .ground, start: 0, count: 0,
+            minimum: revealBounds.minimum - SIMD3(0, 0, 2), maximum: revealBounds.maximum + SIMD3(0, 0, 2))
+        if !envelope.intersects(matrix) {
+            publishWaterVisibility(false); publishLabels([])
+            mtlCommandBuffer.addCompletedHandler { [weak self] command in
+                if command.status == .completed { self?.didComplete(reveal, lifecycle: lifecycleReveal, union: unionState) }
+            }
+            return
+        }
         let selectionChanged = selectionTransform != transform
         if selectionChanged {
             cameraRanges = drawn.filter { $0.intersects(matrix) }
@@ -513,6 +543,7 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost, @unchecke
         }
         let planChanged = selectionChanged || selectedReveal != reveal || selectedLifecycle != lifecycleReveal
             || selectedEdges != tileEdges || selectedTileState != tileState
+            || selectedUnion != unionState || selectedFocusEdges != focusEdges
         if planChanged {
             let selectionMask = tileState.y > 1.5 ? SIMD4<Float>.zero : reveal
             selectedRanges = cameraRanges.filter { $0.intersectsReveal(selectionMask) && $0.intersectsReveal(lifecycleReveal) }
@@ -524,6 +555,7 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost, @unchecke
             selectedLifecycle = lifecycleReveal
             selectedEdges = tileEdges
             selectedTileState = tileState
+            selectedUnion = unionState; selectedFocusEdges = focusEdges
             drawRevision &+= 1
         }
         let mainRanges = selectedRanges
@@ -532,7 +564,7 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost, @unchecke
             publishWaterVisibility(false)
             publishLabels([])
             mtlCommandBuffer.addCompletedHandler { [weak self] command in
-                if command.status == .completed { self?.didComplete(reveal, lifecycle: lifecycleReveal) }
+                if command.status == .completed { self?.didComplete(reveal, lifecycle: lifecycleReveal, union: unionState) }
             }
             return
         }
@@ -556,6 +588,8 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost, @unchecke
         uniforms.tileBounds = SIMD4(Float(groundRect.minX), Float(groundRect.minY), Float(groundRect.maxX), Float(groundRect.maxY))
         uniforms.tileEdges = tileEdges
         uniforms.tileState = tileState
+        uniforms.focusEdges = focusEdges; uniforms.unionState = unionState
+        unionShape?.write(to: &uniforms)
         uniforms.shoreline = shorelineSettings
         uniforms.shoreline.z = reducedEffects ? 1 : 0
         uniforms.shoreline.w = contextOnly ? 1 : 0
@@ -585,7 +619,7 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost, @unchecke
             viewLow = simd_min(viewLow, group.minimum); viewHigh = simd_max(viewHigh, group.maximum)
         }
         let castingGroups = eligibleCasters
-        if reveal.w < 0.5, lifecycleReveal.w < 0.5, let shadowMap, let shadowMatrix = shadowMap.update(command: mtlCommandBuffer, vertices: vertexBuffer, indices: indexBuffer, instances: instanceBuffer,
+        if reveal.w < 0.5, lifecycleReveal.w < 0.5, unionState.x < 0.5, let shadowMap, let shadowMatrix = shadowMap.update(command: mtlCommandBuffer, vertices: vertexBuffer, indices: indexBuffer, instances: instanceBuffer,
             ranges: drawn, groups: castingGroups, focus: viewLow.x.isFinite && viewHigh.x > viewLow.x ? (viewLow, viewHigh) : nil,
             sun: SIMD3(uniforms.sunDirection.x, uniforms.sunDirection.y, uniforms.sunDirection.z), preset: timeOfDay) {
             uniforms.shadowMatrix = shadowMatrix
@@ -733,7 +767,7 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost, @unchecke
         let callback = onFrameReport
         mtlCommandBuffer.addCompletedHandler { [weak self] command in
             guard command.status == .completed else { return }
-            self?.didComplete(reveal, lifecycle: lifecycleReveal)
+            self?.didComplete(reveal, lifecycle: lifecycleReveal, union: unionState)
             let gpuMS = command.gpuEndTime > command.gpuStartTime ? (command.gpuEndTime - command.gpuStartTime) * 1000 : nil
             if let report = metrics.record(triangles: triangles, cpuMS: cpuMS, gpuMS: gpuMS, drawCalls: drawCalls, unmergedDrawCalls: unmergedDrawCalls) { callback?(report) }
         }

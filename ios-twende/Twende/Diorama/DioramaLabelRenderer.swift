@@ -118,8 +118,9 @@ nonisolated final class DioramaLabelRenderer {
         for label in labels {
             guard label.isNamed || zoom >= 17.8, occupied.count < 18, let image = images[label.title] else { continue }
             let revealed = DioramaRevealStyle.sceneCoverage(label.anchor, reveal: uniforms.reveal,
-                bounds: uniforms.tileBounds, edges: uniforms.tileEdges, state: uniforms.tileState, frame: uniforms.materialFrame)
+                bounds: uniforms.tileBounds, edges: uniforms.focusEdges, state: uniforms.tileState, frame: uniforms.materialFrame)
                 * DioramaRevealStyle.coverage(label.anchor, reveal: uniforms.lifecycleReveal)
+                * DioramaUnionShape.coverage(label.anchor, uniforms: uniforms)
             var coverage: Float = min(1, max(0, (revealed - 0.55) / 0.45))
             coverage = coverage * coverage * (3 - 2 * coverage)
             guard coverage > 0.001 else { continue }

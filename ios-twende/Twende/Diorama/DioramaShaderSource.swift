@@ -38,6 +38,11 @@ nonisolated struct DioramaShaderUniforms {
     var tileEdges: SIMD4<Float>
     /// x opacity, y role (0 context, 1 full, 2 same-tile fallback), z reserved, w paired ownership.
     var tileState: SIMD4<Float>
+    var focusEdges: SIMD4<Float>
+    /// x active, y cell count, z inward offset (metres), w shape revision.
+    var unionState: SIMD4<Float>
+    var unionShapes: (simd_float4x4, simd_float4x4, simd_float4x4, simd_float4x4, simd_float4x4,
+                      simd_float4x4, simd_float4x4, simd_float4x4, simd_float4x4)
 }
 
 /// Constants for the screen-space passes. Layout mirrors `DioramaPostUniforms` in the Metal source.
@@ -95,7 +100,11 @@ nonisolated enum DioramaLighting {
             lifecycleReveal: .zero,
             tileBounds: .zero,
             tileEdges: .zero,
-            tileState: SIMD4(1, 0, 0, 0)
+            tileState: SIMD4(1, 0, 0, 0),
+            focusEdges: .zero,
+            unionState: .zero,
+            unionShapes: (simd_float4x4(), simd_float4x4(), simd_float4x4(), simd_float4x4(), simd_float4x4(),
+                          simd_float4x4(), simd_float4x4(), simd_float4x4(), simd_float4x4())
         )
     }
 }
@@ -140,6 +149,9 @@ nonisolated enum DioramaShaderSource {
         float4 tileBounds;
         float4 tileEdges;
         float4 tileState;
+        float4 focusEdges;
+        float4 unionState;
+        float4x4 unionShapes[9];
     };
 
     struct DioramaPostUniforms {
@@ -180,11 +192,34 @@ nonisolated enum DioramaShaderSource {
         float4 c = 1.0 - edges * (1.0 - smoothstep(float4(0.0), float4(\(DioramaRevealStyle.edgeWidth)), d));
         return c.x * c.y * c.z * c.w;
     }
+    float dioramaSegmentDistanceSquared(float2 p, float2 a, float2 b) {
+        float2 v = b - a;
+        float t = clamp(dot(p - a, v) / max(dot(v, v), 0.0001), 0.0, 1.0);
+        float2 d = p - (a + t * v);
+        return dot(d, d);
+    }
+    float dioramaUnionCoverage(float3 local, constant DioramaUniforms &u) {
+        if (u.unionState.x < 0.5) return 1.0;
+        float2 p = local.xy * u.materialFrame.z + u.materialFrame.xy;
+        bool inside = false;
+        float squared = 1.0e20;
+        for (uint i = 0; i < min(uint(u.unionState.y), 9u); ++i) {
+            float4 b = u.unionShapes[i][0], e = u.unionShapes[i][1];
+            inside = inside || (all(p >= b.xy) && all(p <= b.zw));
+            if (e.x > 0.5) squared = min(squared, dioramaSegmentDistanceSquared(p, b.xy, float2(b.x, b.w)));
+            if (e.y > 0.5) squared = min(squared, dioramaSegmentDistanceSquared(p, b.xy, float2(b.z, b.y)));
+            if (e.z > 0.5) squared = min(squared, dioramaSegmentDistanceSquared(p, float2(b.z, b.y), b.zw));
+            if (e.w > 0.5) squared = min(squared, dioramaSegmentDistanceSquared(p, float2(b.x, b.w), b.zw));
+        }
+        float distance = sqrt(squared) * (inside ? -1.0 : 1.0) + u.unionState.z;
+        return 1.0 - smoothstep(-\(DioramaRevealStyle.feather), \(DioramaRevealStyle.feather), distance);
+    }
     float dioramaFocusCoverage(float3 p, constant DioramaUniforms &u) {
-        return dioramaFieldCoverage(p, u.reveal) * dioramaEdgeCoverage(p, u.tileEdges, u);
+        return dioramaFieldCoverage(p, u.reveal) * dioramaEdgeCoverage(p, u.focusEdges, u) * dioramaUnionCoverage(p, u);
     }
     float dioramaRevealCoverage(float3 p, constant DioramaUniforms &u) {
-        float focus = u.tileState.y > 1.5 ? 1.0 - dioramaFocusCoverage(p, u) : dioramaFieldCoverage(p, u.reveal);
+        float focus = u.tileState.y > 1.5 ? 1.0 - dioramaFocusCoverage(p, u)
+            : (u.tileState.y > 0.5 ? dioramaFocusCoverage(p, u) : dioramaFieldCoverage(p, u.reveal));
         return focus * dioramaEdgeCoverage(p, u.tileEdges, u) * dioramaFieldCoverage(p, u.lifecycleReveal) * u.tileState.x;
     }
     float dioramaRevealAlpha(float3 p, float2 pixel, float coverage, constant DioramaUniforms &u) {
