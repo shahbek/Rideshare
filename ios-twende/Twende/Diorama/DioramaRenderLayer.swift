@@ -29,6 +29,9 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost, @unchecke
                   minimum.x.isFinite, minimum.y.isFinite, maximum.x.isFinite, maximum.y.isFinite,
                   reveal.x.isFinite, reveal.y.isFinite, reveal.z.isFinite else { return true }
             let margin: Float = DioramaRevealStyle.support + 0.02
+            // Multi-edge growth depends on tile bounds, not a directional dot product.
+            // Keep these batches conservatively; all passes share exact fragment coverage.
+            if reveal.w > 3.5 { return true }
             if reveal.w > 1.5 {
                 let x0 = reveal.x * minimum.x, x1 = reveal.x * maximum.x
                 let y0 = reveal.y * minimum.y, y1 = reveal.y * maximum.y
@@ -197,10 +200,12 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost, @unchecke
         lock.lock()
         let changed = completedLifecycleReveal != lifecycle
         let revealChanged = completedReveal != value
+        let unionChanged = completedUnion != union
         completedReveal = value; completedLifecycleReveal = lifecycle; completedUnion = union
         lock.unlock()
         if changed { onLifecycleCompleted?() }
         if revealChanged { onRevealCompleted?(value) }
+        if unionChanged { onUnionCompleted?() }
     }
 
     private func publishWaterVisibility(_ visible: Bool) {
@@ -216,6 +221,7 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost, @unchecke
     var onFrameReport: (@Sendable (String) -> Void)?
     var onWaterVisibilityChanged: (@Sendable () -> Void)?
     var onLifecycleCompleted: (@Sendable () -> Void)?
+    var onUnionCompleted: (@Sendable () -> Void)?
     var onRevealCompleted: (@Sendable (SIMD4<Float>) -> Void)?
     var onInitializationFailed: (@Sendable () -> Void)?
     var onInitialized: (@Sendable () -> Void)?

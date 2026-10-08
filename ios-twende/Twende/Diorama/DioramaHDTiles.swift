@@ -25,6 +25,7 @@ final class DioramaHDTiles {
         var inset: Float = -DioramaRevealStyle.support - 2
         var isRemoving: Bool = true
         var mustRetire: Bool = false
+        var isStalled: Bool = false
         var task: Task<Void, Never>?
         init(tiles: Set<DioramaTileID>, revision: Float) {
             self.tiles = tiles; shape = DioramaUnionShape(tiles: tiles); self.revision = revision
@@ -67,6 +68,9 @@ final class DioramaHDTiles {
         if !loadingPhase.isEmpty { return summary + "\n" + loadingPhase }
         guard let focus = wanted.first else { return summary + "\n" + requestState }
         if let failure = failures[focus] { return summary + "\n" + focus.key + ": " + failure }
+        if groups.values.contains(where: { $0.tiles.contains(focus) && $0.isStalled }) {
+            return summary + "\nJoined retraction waiting for paired GPU frame · coverage retained"
+        }
         if residents[focus]?.arrival != nil { return summary + "\nHD expanding reveal · " + focus.key }
         if residents[focus] != nil { return summary + "\nFull-detail focus ready · " + focus.key }
         if deferredTiles.contains(focus) { return summary + "\nHD exceeds available CPU/GPU allowance · coarse/native fallback retained" }
@@ -93,7 +97,7 @@ final class DioramaHDTiles {
         self.categories = categories; self.time = time; self.wireframe = wireframe
         self.reduced = reduced; self.motion = motion
         let next = Array(wanted.prefix(budget?.hdLimit ?? 1))
-        if self.wanted != next { deferredTiles.removeAll(); admissionRetry = .distantPast }
+        if self.wanted != next { retryAdmission() }
         self.wanted = next; self.visibleTiles = Set(visibleTiles)
         setPolicy(categories: categories, time: time, wireframe: wireframe, reduced: reduced, motion: motion)
         if let loadingTile, !self.wanted.contains(loadingTile) { pauseLoading() }
@@ -114,7 +118,10 @@ final class DioramaHDTiles {
         revision &+= 1; readTask?.cancel(); readTask = nil; loadingTile = nil; loadingPhase = ""
     }
 
-    func retryAdmission() { deferredTiles.removeAll(); admissionRetry = .distantPast }
+    func retryAdmission() {
+        for tile in deferredTiles { failures[tile] = nil }
+        deferredTiles.removeAll(); admissionRetry = .distantPast
+    }
 
     func demoteAll() {
         pauseLoading(); wanted.removeAll()
@@ -141,8 +148,21 @@ final class DioramaHDTiles {
     }
 
     private func nextLoadableTile() -> DioramaTileID? {
-        wanted.first { residents[$0] == nil && !deferredTiles.contains($0)
-            && (retries[$0] ?? .distantPast) <= Date() && base?.isReady($0) == true }
+        wanted.first { tile in
+            residents[tile] == nil && !deferredTiles.contains(tile)
+                && (retries[tile] ?? .distantPast) <= Date() && base?.isReady(tile) == true
+                && neighbours(tile).allSatisfy { adjacent in
+                    residents[adjacent]?.arrival == nil && residents[adjacent]?.isRevealStalled != true
+                        && !groups.values.contains(where: { $0.tiles.contains(adjacent) })
+                }
+        }
+    }
+
+    func updateRetirementVisibility(_ tiles: [DioramaTileID]) {
+        visibleTiles = Set(tiles)
+        for group in Array(groups.values) where group.isStalled && group.tiles.isDisjoint(with: visibleTiles) {
+            animate(group, removing: group.isRemoving)
+        }
     }
     private func startLoading() {
         guard readTask == nil, budget?.isLoading != true, Date() >= admissionRetry, let map, nextLoadableTile() != nil else { return }
@@ -160,7 +180,7 @@ final class DioramaHDTiles {
                 self.loadingTile = tile
                 do { try await Task.sleep(for: .milliseconds(180)) } catch { return }
                 guard self.wanted.contains(tile), let budget = self.budget else { continue }
-                guard var cost = await DioramaOfflineStore.shared.residencyCost(tile, context: false, size: self.outputSize) else {
+                guard var cost = await DioramaOfflineStore.shared.residencyCost(tile, context: false, size: self.outputSize, scale: Float(UIScreen.main.scale)) else {
                     self.retries[tile] = Date().addingTimeInterval(30)
                     self.failures[tile] = "Saved HD manifest unavailable · downloads retained"; continue
                 }
@@ -171,6 +191,9 @@ final class DioramaHDTiles {
                 guard let reservation = budget.reserve(cost, context: false) else {
                     if budget.isLoading { return }
                     self.deferredTiles.insert(tile)
+                    let reason = cost.peak > budget.limit ? "Tile alone exceeds scenery allowance" : "Waiting for scenery memory headroom"
+                    self.failures[tile] = "\(reason) · HD peak \((cost.peak + 1_048_575) / 1_048_576) MiB, available \(budget.availableBytes / 1_048_576)/\(budget.limit / 1_048_576) MiB · coarse/native retained"
+                    self.onChanged?()
                     print("[Diorama HD] preflight deferred \(tile.key) peak=\(cost.peak) · \(budget.report)")
                     continue
                 }
@@ -189,17 +212,11 @@ final class DioramaHDTiles {
                     print("[Diorama HD] saved read unavailable \(tile.key): \(reason); low-detail retained")
                     continue
                 }
-                let actual = DioramaResidencyBudget.cost(artifact, context: false, size: self.outputSize)
+                let actual = DioramaResidencyBudget.cost(artifact, context: false, size: self.outputSize, scale: Float(UIScreen.main.scale))
                 cost = .init(retained: max(cost.retained, actual.retained), peak: max(cost.peak, actual.peak))
                 guard budget.revise(reservation, cost: cost) else {
                     self.deferredTiles.insert(tile); self.failures[tile] = "Patched HD exceeds CPU/GPU allowance · base retained"
                     continue
-                }
-                if self.groups.values.contains(where: { group in
-                    self.neighbours(tile).contains(where: { group.tiles.contains($0) })
-                }) {
-                    self.admissionRetry = Date().addingTimeInterval(2)
-                    return
                 }
                 self.retries[tile] = nil; self.failures[tile] = nil
                 self.loadingPhase = "Preparing full-detail GPU resources · \(tile.key)"; self.onChanged?()
@@ -237,6 +254,16 @@ final class DioramaHDTiles {
         host.setVisible(categories, timeOfDay: time); host.setWireframe(wireframe)
         host.setReducedEffects(reduced); host.setWaterMotion(motion)
         let resident = Resident(host: host, bytes: artifacts.decodedBytes, reservation: reservation)
+        let settled = Set(residents.keys.filter { candidate in
+            residents[candidate]?.host.isRendererReady == true && residents[candidate]?.arrival == nil
+                && residents[candidate]?.reveal.w == 0
+                && !groups.values.contains(where: { $0.tiles.contains(candidate) })
+        })
+        let frontier = SIMD4<Float>(settled.contains(tile.offset(dx: -1, dy: 0)) ? 0 : 1,
+            settled.contains(tile.offset(dx: 0, dy: 1)) ? 0 : 1,
+            settled.contains(tile.offset(dx: 1, dy: 0)) ? 0 : 1,
+            settled.contains(tile.offset(dx: 0, dy: -1)) ? 0 : 1)
+        resident.reveal = DioramaRevealStyle.growthSeed(edges: frontier)
         host.setReveal(resident.reveal)
         host.onInitializationFailed = { [weak self, weak host] in
             Task { @MainActor [weak self, weak host] in
@@ -259,6 +286,9 @@ final class DioramaHDTiles {
                 print("[Diorama HD] first GPU-completed frame \(tile.key)")
                 self.onChanged?()
             }
+        }
+        host.onUnionCompleted = { [weak self] in
+            Task { @MainActor [weak self] in self?.resumeArrivalIfStalled(tile) }
         }
         host.onRevealCompleted = { [weak self] _ in
             Task { @MainActor [weak self] in self?.resumeArrivalIfStalled(tile) }
@@ -290,6 +320,14 @@ final class DioramaHDTiles {
 
     /// Resume only once both sides have acknowledged the retained coverage; never erase the base on a timer.
     func resumeArrivalIfStalled(_ tile: DioramaTileID) {
+        if let group = groups.values.first(where: { $0.tiles.contains(tile) && $0.isStalled }) {
+            let state = self.state(for: group)
+            let complete = group.tiles.intersection(visibleTiles).allSatisfy {
+                residents[$0]?.host.hasCompletedUnion(state) == true && base?.hasCompletedHDUnion(tile: $0, state: state) == true
+            }
+            if complete { animate(group, removing: group.isRemoving) }
+            return
+        }
         guard let resident = residents[tile], resident.isRevealStalled,
               resident.host.hasCompleted(reveal: resident.reveal),
               base?.hasCompletedHDReveal(tile: tile, state: resident.reveal) == true,
@@ -300,19 +338,23 @@ final class DioramaHDTiles {
     private func startArrival(_ tile: DioramaTileID, resident: Resident) {
         let host = resident.host
         let extent = max(abs(host.revealBounds.minimum.x), abs(host.revealBounds.maximum.x),
-            abs(host.revealBounds.minimum.y), abs(host.revealBounds.maximum.y)) + DioramaRevealStyle.support + 50
+            abs(host.revealBounds.minimum.y), abs(host.revealBounds.maximum.y)) * (resident.reveal.w > 3.5 ? 3 : 1) + DioramaRevealStyle.support + 50
         resident.arrival = Task { [weak self, weak resident] in
             guard let self, let resident else { return }
-            let finished = await DioramaTileTransition.run(host: host, from: resident.reveal.z, to: extent, lifecycle: false,
+            let finished = await DioramaTileTransition.run(host: host, from: resident.reveal.z, to: extent, lifecycle: false, field: resident.reveal,
                 pairedCompletion: { [weak self] field in self?.base?.hasCompletedHDReveal(tile: tile, state: field) == true }) {
                 [weak self, weak resident] field, _ in
                 guard let self, let resident else { return }
-                resident.reveal = field; self.applyMask(tile); self.map?.triggerRepaint()
+                let joinedFront = field.w > 3.5 && resident.reveal.z < DioramaRevealStyle.support
+                    && field.z >= DioramaRevealStyle.support
+                resident.reveal = field
+                if joinedFront { self.refreshMasks() } else { self.applyMask(tile) }
+                self.map?.triggerRepaint()
             }
             guard !Task.isCancelled, self.residents[tile] === resident else { return }
             resident.arrival = nil
             if finished {
-                resident.reveal = .zero; host.setReveal(.zero); self.applyMask(tile)
+                resident.reveal = .zero; host.setReveal(.zero); self.refreshMasks()
                 self.failures[tile] = nil
                 print("[Diorama HD] expanding reveal complete \(tile.key)")
             } else if host.isRendererReady {
@@ -354,9 +396,11 @@ final class DioramaHDTiles {
     }
     private func reconcileGroups() {
         let desired = Set(wanted)
-        for group in groups.values {
+        for group in Array(groups.values) {
             let shouldRemove = group.mustRetire || !group.tiles.isSubset(of: desired)
-            if group.isRemoving != shouldRemove { animate(group, removing: shouldRemove) }
+            if group.isRemoving != shouldRemove || (group.isStalled && group.tiles.isDisjoint(with: visibleTiles)) {
+                animate(group, removing: shouldRemove)
+            }
         }
         for component in components() where !component.isSubset(of: desired) { beginGroup(component) }
     }
@@ -371,7 +415,7 @@ final class DioramaHDTiles {
         print("[Diorama HD] joined contraction tiles=\(tiles.count) boundary_cells=\(group.shape.cells.count)")
     }
     private func animate(_ group: Group, removing: Bool) {
-        group.task?.cancel(); group.isRemoving = removing
+        group.task?.cancel(); group.isRemoving = removing; group.isStalled = false
         let from = group.inset, to = removing ? group.shape.emptyInset : -DioramaRevealStyle.support - 2
         group.task = Task { [weak self, weak group] in
             guard let self, let group else { return }
@@ -389,9 +433,14 @@ final class DioramaHDTiles {
                     self.residents[$0]?.host.hasCompletedUnion(state) == true
                         && self.base?.hasCompletedHDUnion(tile: $0, state: state) == true
                 }
-                if finish || visibleMembers.isEmpty || now - requested > 20 {
+                if finish || visibleMembers.isEmpty {
                     // Offscreen hosts may not receive SDK callbacks; never hold an island forever.
                     group.inset = to; self.refreshMasks(); break
+                }
+                if !complete, now - requested > 20 {
+                    group.isStalled = true; group.task = nil; self.onChanged?()
+                    print("[Diorama HD] joined contraction waiting for paired GPU; resources retained")
+                    return
                 }
                 if complete {
                     if endpoint { break }
@@ -413,8 +462,9 @@ final class DioramaHDTiles {
             }
             else {
                 for tile in group.tiles {
-                    self.residents[tile]?.reveal = .zero
-                    self.residents[tile]?.host.setReveal(.zero)
+                    if let resident = self.residents[tile], resident.reveal.w > 0.5 {
+                        self.startArrival(tile, resident: resident)
+                    }
                 }
             }
             self.refreshMasks(); self.onChanged?(); self.map?.triggerRepaint()
@@ -424,11 +474,17 @@ final class DioramaHDTiles {
         SIMD4(1, Float(group.shape.cells.count), group.inset, group.revision)
     }
     private func edges(for tile: DioramaTileID) -> SIMD4<Float> {
-        let attached = Set(residents.keys)
-        return SIMD4(attached.contains(tile.offset(dx: -1, dy: 0)) ? 0 : 1,
-            attached.contains(tile.offset(dx: 0, dy: 1)) ? 0 : 1,
-            attached.contains(tile.offset(dx: 1, dy: 0)) ? 0 : 1,
-            attached.contains(tile.offset(dx: 0, dy: -1)) ? 0 : 1)
+        func connected(_ neighbour: DioramaTileID) -> Bool {
+            guard let resident = residents[neighbour] else { return false }
+            if resident.reveal.w < 0.5 || groups.values.contains(where: { $0.tiles.contains(tile) && $0.tiles.contains(neighbour) }) { return true }
+            guard resident.reveal.w > 3.5, resident.reveal.z >= DioramaRevealStyle.support else { return false }
+            let side = tile.x < neighbour.x ? 0 : tile.x > neighbour.x ? 2 : tile.y > neighbour.y ? 1 : 3
+            return Int(resident.reveal.x) & (1 << side) != 0
+        }
+        return SIMD4(connected(tile.offset(dx: -1, dy: 0)) ? 0 : 1,
+            connected(tile.offset(dx: 0, dy: 1)) ? 0 : 1,
+            connected(tile.offset(dx: 1, dy: 0)) ? 0 : 1,
+            connected(tile.offset(dx: 0, dy: -1)) ? 0 : 1)
     }
     private func applyMask(_ tile: DioramaTileID) {
         guard let resident = residents[tile] else { return }

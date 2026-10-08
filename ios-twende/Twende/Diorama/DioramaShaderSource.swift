@@ -170,9 +170,23 @@ nonisolated enum DioramaShaderSource {
     float3 dioramaPointLights(float3 p, float3 n, constant DioramaUniforms &u,
         const device DioramaLight *lights, const device uint2 *table, const device uint *indices);
 
-    float dioramaFieldDistance(float3 p, float4 reveal) {
+    float dioramaFieldDistance(float3 p, float4 reveal, float4 bounds) {
         float ripple = \(DioramaRevealStyle.variation) * (0.6 * sin(p.x * 0.025 + p.y * 0.011)
             + 0.4 * sin(p.y * 0.037 - p.x * 0.009));
+        if (reveal.w > 3.5) {
+            uint mask = uint(reveal.x);
+            float2 a = bounds.xy, b = bounds.zw;
+            float2 starts[4] = { a, a, float2(b.x, a.y), float2(a.x, b.y) };
+            float2 ends[4] = { float2(a.x, b.y), float2(b.x, a.y), b, b };
+            float nearest = 1.0e20;
+            for (uint i = 0; i < 4; ++i) {
+                if ((mask & (1u << i)) == 0u) continue;
+                float2 delta = ends[i] - starts[i];
+                float t = clamp(dot(p.xy - starts[i], delta) / max(dot(delta, delta), 0.0001), 0.0, 1.0);
+                nearest = min(nearest, length(p.xy - starts[i] - t * delta));
+            }
+            return nearest - reveal.z + ripple;
+        }
         if (reveal.w > 1.5) {
             float d = dot(p.xy, reveal.xy) - reveal.z + ripple;
             return reveal.w > 2.5 ? -d : d;
@@ -181,9 +195,9 @@ nonisolated enum DioramaShaderSource {
         float2 q = abs(p.xy - reveal.xy) - (reveal.z - radius);
         return length(max(q, float2(0.0))) + min(max(q.x, q.y), 0.0) - radius + ripple;
     }
-    float dioramaFieldCoverage(float3 p, float4 field) {
+    float dioramaFieldCoverage(float3 p, float4 field, float4 bounds) {
         if (field.w < 0.5) return 1.0;
-        return 1.0 - smoothstep(-\(DioramaRevealStyle.feather), \(DioramaRevealStyle.feather), dioramaFieldDistance(p, field));
+        return 1.0 - smoothstep(-\(DioramaRevealStyle.feather), \(DioramaRevealStyle.feather), dioramaFieldDistance(p, field, bounds));
     }
     float dioramaEdgeCoverage(float3 p, float4 edges, constant DioramaUniforms &u) {
         if (all(edges <= float4(0.0))) return 1.0;
@@ -215,12 +229,12 @@ nonisolated enum DioramaShaderSource {
         return 1.0 - smoothstep(-\(DioramaRevealStyle.feather), \(DioramaRevealStyle.feather), distance);
     }
     float dioramaFocusCoverage(float3 p, constant DioramaUniforms &u) {
-        return dioramaFieldCoverage(p, u.reveal) * dioramaEdgeCoverage(p, u.focusEdges, u) * dioramaUnionCoverage(p, u);
+        return dioramaFieldCoverage(p, u.reveal, u.tileBounds) * dioramaEdgeCoverage(p, u.focusEdges, u) * dioramaUnionCoverage(p, u);
     }
     float dioramaRevealCoverage(float3 p, constant DioramaUniforms &u) {
         float focus = u.tileState.y > 1.5 ? 1.0 - dioramaFocusCoverage(p, u)
-            : (u.tileState.y > 0.5 ? dioramaFocusCoverage(p, u) : dioramaFieldCoverage(p, u.reveal));
-        return focus * dioramaEdgeCoverage(p, u.tileEdges, u) * dioramaFieldCoverage(p, u.lifecycleReveal) * u.tileState.x;
+            : (u.tileState.y > 0.5 ? dioramaFocusCoverage(p, u) : dioramaFieldCoverage(p, u.reveal, u.tileBounds) * dioramaUnionCoverage(p, u));
+        return focus * dioramaEdgeCoverage(p, u.tileEdges, u) * dioramaFieldCoverage(p, u.lifecycleReveal, u.tileBounds) * u.tileState.x;
     }
     float dioramaRevealAlpha(float3 p, float2 pixel, float coverage, constant DioramaUniforms &u) {
         if (u.tileState.w > 0.5 && u.params.w < 0.5) {
@@ -232,7 +246,7 @@ nonisolated enum DioramaShaderSource {
             } else if (u.tileState.y > 1.5 ? full >= 0.999 : full <= 0.001) {
                 discard_fragment();
             }
-            return u.tileState.y > 1.5 ? dioramaEdgeCoverage(p, u.tileEdges, u) * dioramaFieldCoverage(p, u.lifecycleReveal) * u.tileState.x : u.tileState.x;
+            return u.tileState.y > 1.5 ? dioramaEdgeCoverage(p, u.tileEdges, u) * dioramaFieldCoverage(p, u.lifecycleReveal, u.tileBounds) * u.tileState.x : u.tileState.x;
         }
         return coverage;
     }

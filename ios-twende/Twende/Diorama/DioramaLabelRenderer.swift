@@ -69,7 +69,15 @@ nonisolated final class DioramaLabelRenderer {
         }
     }
 
-    private static func raster(_ title: String, device: MTLDevice, scale: Float) -> Image? {
+    /// Uses the same unique-title raster dimensions as allocation, without creating any textures.
+    static func estimatedTextureBytes(titles: [String], scale: Float) -> Int {
+        Set(titles).reduce(0) { total, title in
+            let layout = textLayout(title, scale: max(1, scale))
+            return total + layout.width * layout.height * 4
+        }
+    }
+
+    private static func textLayout(_ title: String, scale: Float) -> (line: CTLine, width: Int, height: Int) {
         let font = CTFontCreateWithName("Figtree-SemiBold" as CFString, 13 * CGFloat(scale), nil)
         let ink = CGColor(gray: 0.133, alpha: 1)
         let text = NSAttributedString(string: String(title.prefix(64)), attributes: [
@@ -80,6 +88,11 @@ nonisolated final class DioramaLabelRenderer {
         let textWidth = CTLineGetTypographicBounds(line, nil, nil, nil)
         let width = max(32, Int(ceil(textWidth + Double(scale) * 16)))
         let height = Int(32 * scale)
+        return (line, width, height)
+    }
+
+    private static func raster(_ title: String, device: MTLDevice, scale: Float) -> Image? {
+        let (line, width, height) = textLayout(title, scale: scale)
         guard let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
             space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue),
               let bytes = context.data else { return nil }
@@ -119,7 +132,7 @@ nonisolated final class DioramaLabelRenderer {
             guard label.isNamed || zoom >= 17.8, occupied.count < 18, let image = images[label.title] else { continue }
             let revealed = DioramaRevealStyle.sceneCoverage(label.anchor, reveal: uniforms.reveal,
                 bounds: uniforms.tileBounds, edges: uniforms.focusEdges, state: uniforms.tileState, frame: uniforms.materialFrame)
-                * DioramaRevealStyle.coverage(label.anchor, reveal: uniforms.lifecycleReveal)
+                * DioramaRevealStyle.coverage(label.anchor, reveal: uniforms.lifecycleReveal, bounds: uniforms.tileBounds)
                 * DioramaUnionShape.coverage(label.anchor, uniforms: uniforms)
             var coverage: Float = min(1, max(0, (revealed - 0.55) / 0.45))
             coverage = coverage * coverage * (3 - 2 * coverage)

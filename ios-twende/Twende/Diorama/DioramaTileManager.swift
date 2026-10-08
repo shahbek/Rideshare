@@ -95,6 +95,7 @@ final class DioramaTileManager {
             self?.scheduleUpdate(delay: 0.2)
         }
         contextTiles.onReady = { [weak self] _ in self?.scheduleUpdate(delay: 0) }
+        contextTiles.onChanged = { [weak self] in self?.scheduleUpdate(delay: 0.1) }
         contextTiles.onUnavailable = { [weak self] _ in self?.scheduleUpdate(delay: 30) }
         contextTiles.onHDFrameCompleted = { [weak self] tile in self?.hdTiles.resumeArrivalIfStalled(tile) }
         hdTiles.onChanged = { [weak self] in self?.scheduleUpdate(delay: 0.1) }
@@ -257,12 +258,19 @@ final class DioramaTileManager {
     }
 
     private func beginExit() {
+        if let map, refreshViewportInterest(on: map) {
+            contextTiles.updateRetirementVisibility(visibleTilePriority)
+            hdTiles.updateRetirementVisibility(visibleTilePriority)
+        }
         if !exitRequested {
             exitRequested = true; contextTiles.pauseLoading(); hdTiles.demoteAll()
         }
         if !hdTiles.hasResidents {
-            contextTiles.clear(); suppressBasemapTerrain(false)
-            let completion = retractionCompletion; retractionCompletion = nil; completion?()
+            contextTiles.retireAll()
+            if !contextTiles.hasResidents {
+                suppressBasemapTerrain(false)
+                let completion = retractionCompletion; retractionCompletion = nil; completion?()
+            }
         }
     }
     func retract(completion: @escaping () -> Void) {

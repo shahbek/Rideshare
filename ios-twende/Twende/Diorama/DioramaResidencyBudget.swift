@@ -24,6 +24,7 @@ final class DioramaResidencyBudget {
         return isConstrained ? min(hardware, 192 * 1_048_576) : hardware
     }
     var bytes: Int { entries.values.reduce(0) { $0 + $1.bytes } }
+    var availableBytes: Int { max(0, limit - bytes) }
     var isLoading: Bool { entries.values.contains(where: \.loading) }
     var report: String {
         "Scenery allowance: \(bytes / 1_048_576)/\(limit / 1_048_576) MiB estimated CPU + GPU\(isConstrained ? " · conservative memory mode" : "") (not process memory)"
@@ -59,21 +60,31 @@ final class DioramaResidencyBudget {
         onAvailable?(!entry.loading)
     }
 
-    nonisolated static func cost(_ artifact: DioramaTileArtifacts, context: Bool, size: CGSize) -> Cost {
-        cost(payload: artifact.decodedBytes, ground: artifact.groundImage?.rgba.count ?? 0,
-            vertices: artifact.vertices.count * MemoryLayout<BuildingRenderVertex>.stride, instances: 0,
-            labels: artifact.buildingLabels.count, context: context, size: size)
+    nonisolated static func cost(_ artifact: DioramaTileArtifacts, context: Bool, size: CGSize, scale: Float) -> Cost {
+        let groupBytes = artifact.groups.reduce(0) { $0 + $1.instances.count * MemoryLayout<DioramaInstanceData>.stride }
+        return cost(payload: artifact.decodedBytes - groupBytes, groupBytes: groupBytes,
+            ground: artifact.groundImage?.rgba.count ?? 0,
+            vertices: artifact.vertices.count * MemoryLayout<BuildingRenderVertex>.stride,
+            indices: artifact.indices.count * MemoryLayout<UInt32>.stride,
+            labelTitles: artifact.buildingLabels.map(\.title), context: context, size: size, scale: scale)
     }
-    nonisolated static func cost(payload: Int, ground: Int, vertices: Int, instances: Int,
-                                 labels: Int, context: Bool, size: CGSize) -> Cost {
-        let pixels = Int(min(4096, max(1, size.width))) * Int(min(4096, max(1, size.height)))
-        // Retained CPU arrays + uploaded buffers/mip chain, static shadow, screen targets,
-        // reflection, labels and conservative spatial/light/shadow metadata slack.
-        let effects = context ? 0 : 16 * 1_048_576 + pixels * 10 + 8 * 1_048_576
-        let retained = payload * 2 + ground / 3 + instances + effects
-            + labels * 256 * 1024 + vertices / 4 + 4 * 1_048_576
-        // Local visual upgrades/material tagging may copy the vertex array; checked compressed
-        // blocks and r3 patch scratch remain reserved until preparation finishes.
-        return Cost(retained: retained, peak: retained + vertices + 32 * 1_048_576)
+    nonisolated static func cost(payload: Int, groupBytes: Int, ground: Int, vertices: Int, indices: Int,
+                                 labelTitles: [String], context: Bool, size: CGSize, scale: Float) -> Cost {
+        let w = Int(max(1, size.width)), h = Int(max(1, size.height))
+        let hw = max(1, w / 2), hh = max(1, h / 2)
+        // Match half-resolution G-buffer/depth/AO, two bloom levels and capped reflection targets.
+        let screen = hw * hh * 30 + max(1, hw / 2) * max(1, hh / 2) * 16
+            + max(1, hw / 4) * max(1, hh / 4) * 16
+        let reflection = max(1, min(768, w / 4)) * max(1, min(768, h / 4)) * 8
+        let labels = context ? 0 : DioramaLabelRenderer.estimatedTextureBytes(titles: labelTitles, scale: scale)
+        let effects = context ? 0 : 16 * 1_048_576 + screen + reflection + labels
+        // Group placement arrays are CPU-only copies of the uploaded contiguous instances.
+        // Ownership partition can retain an additional index array on CPU and GPU.
+        let cpu = payload + groupBytes
+        let retained = cpu + payload + ground / 3 + indices * 2 + effects + 4 * 1_048_576
+        // Patch/tag copies exist BEFORE GPU setup. Reserve the larger phase, not their sum.
+        let decodePeak = cpu + vertices + 32 * 1_048_576
+        let uploadPeak = retained + indices + 8 * 1_048_576
+        return Cost(retained: retained, peak: max(decodePeak, uploadPeak))
     }
 }

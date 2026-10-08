@@ -59,6 +59,12 @@ nonisolated struct DioramaTerrain: Sendable {
 
     static let resourceName = "slipway_terrain"
 
+    init(rect: DioramaRect, columns: Int, rows: Int, values: [Double], relief: Double = 1,
+         edgeEase: Double = 0, midTideDatum: Double = DioramaConfig.slipway.waterLevel) {
+        self.rect = rect; self.columns = columns; self.rows = rows; self.values = values
+        self.relief = relief; self.edgeEase = edgeEase; self.midTideDatum = midTideDatum
+    }
+
     static func flat(_ rect: DioramaRect) -> DioramaTerrain {
         DioramaTerrain(rect: rect, columns: 2, rows: 2, values: [0, 0, 0, 0])
     }

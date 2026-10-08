@@ -55,7 +55,7 @@ actor DioramaOfflineStore {
         guard free > 900 * 1_048_576 else { throw Failure.storage }
     }
     /// Inspect compatible local manifests before admitting any decode or GPU allocation.
-    func residencyCost(_ tile: DioramaTileID, context: Bool, size: CGSize) -> DioramaResidencyBudget.Cost? {
+    func residencyCost(_ tile: DioramaTileID, context: Bool, size: CGSize, scale: Float) -> DioramaResidencyBudget.Cost? {
         var costs: [DioramaResidencyBudget.Cost] = []
         for name in candidateNames(tile, context: context) {
             let url = root.appendingPathComponent(name).appendingPathComponent("manifest.json")
@@ -77,9 +77,21 @@ actor DioramaOfflineStore {
             }
             guard valid else { continue }
             let sizes = Dictionary(uniqueKeysWithValues: m.sections.map { ($0.name, $0.bytes) })
+            let instanceCount = (sizes["instances"] ?? 0) / MemoryLayout<DioramaInstanceData>.stride
+            var groupCount = 0
+            for group in m.groups {
+                guard group.first >= 0, group.count >= 0, group.first <= instanceCount,
+                      group.count <= instanceCount - group.first,
+                      group.count <= DioramaTileArchive.maxBytes / MemoryLayout<DioramaInstanceData>.stride - groupCount else {
+                    valid = false; break
+                }
+                groupCount += group.count
+            }
+            guard valid else { continue }
             costs.append(DioramaResidencyBudget.cost(payload: DioramaTileArchive.maxBytes - remaining,
-                ground: sizes["ground"] ?? 0, vertices: sizes["vertices"] ?? 0, instances: sizes["instances"] ?? 0,
-                labels: m.labels.count, context: context, size: size))
+                groupBytes: groupCount * MemoryLayout<DioramaInstanceData>.stride,
+                ground: sizes["ground"] ?? 0, vertices: sizes["vertices"] ?? 0, indices: sizes["indices"] ?? 0,
+                labelTitles: m.labels.map(\.title), context: context, size: size, scale: scale))
         }
         // A rejected newer candidate may fall back to an older, larger compatible archive.
         guard !costs.isEmpty else { return nil }
