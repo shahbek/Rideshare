@@ -21,6 +21,16 @@ nonisolated struct DioramaPackedVertex: Sendable {
 
 /// IEEE 754 binary16 conversion without relying on `Float16` (unavailable on x86_64 simulators).
 nonisolated enum DioramaHalf {
+    static func float(_ h: UInt16) -> Float {
+        let negative = h & 0x8000 != 0
+        let exponent = Int((h >> 10) & 0x1F)
+        let mantissa = UInt32(h & 0x3FF)
+        let value: Float
+        if exponent == 0 { value = Float(mantissa) * 0x1p-24 }
+        else if exponent == 31 { value = mantissa == 0 ? .infinity : .nan }
+        else { value = Float(bitPattern: (UInt32(exponent - 15 + 127) << 23) | (mantissa << 13)) }
+        return negative ? -value : value
+    }
     static func bits(_ f: Float) -> UInt16 {
         let x = f.bitPattern
         let sign = UInt16((x >> 16) & 0x8000)

@@ -16,6 +16,10 @@ final class DioramaDownloadService {
     var failureMessage: String?
     private(set) var isDownloadingBasemap: Bool = false
     private(set) var isPausing: Bool = false
+    private(set) var optimized: Int = 0
+    private(set) var isPublishing: Bool = false
+    private(set) var publishMessage: String = ""
+    var isFullyOptimized: Bool { optimized == total }
     @ObservationIgnored private var pauseReason: String?
     var total: Int { DioramaOfflineStore.tiles.count }
     var progress: Double { Double(completed) / Double(max(1, total)) }
@@ -37,6 +41,9 @@ final class DioramaDownloadService {
             guard !isRunning else { return }
             completed = inventory.complete; bytes = inventory.bytes
             isPrepared = completed == total
+            var count = 0
+            for tile in DioramaOfflineStore.tiles where await DioramaOfflineStore.shared.isOptimized(tile, context: false) { count += 1 }
+            optimized = count
             if !isPrepared && bytes > 0 && message == "Download and prepare Masaki before viewing." {
                 message = "Your saved scenery is kept across app updates. Resume only to finish missing tiles; completed tiles and saved sources are reused."
             }
@@ -119,6 +126,16 @@ final class DioramaDownloadService {
                     }
                 }
                 isDownloadingBasemap = false
+                // Pre-baked packages from the project backend replace slow on-device preparation.
+                do {
+                    stage = "Checking for pre-baked scenery…"
+                    let catalog = try await DioramaPrebakedScenery.catalog()
+                    let installed = try await DioramaPrebakedScenery.download(catalog) { [weak self] done, all in
+                        self?.stage = "Downloading pre-baked scenery · \(ByteCountFormatter.string(fromByteCount: done, countStyle: .file)) of \(ByteCountFormatter.string(fromByteCount: all, countStyle: .file))"
+                    }
+                    print("[MasakiDownload] Pre-baked catalogue r\(catalog.revision): \(installed) directories installed")
+                } catch is CancellationError { throw CancellationError() }
+                catch { print("[MasakiDownload] Pre-baked scenery unavailable; preparing on device") }
                 print("[MasakiDownload] Basemap ready; preparing geometry")
                 completed = 0
                 for tile in DioramaOfflineStore.tiles {
@@ -135,6 +152,7 @@ final class DioramaDownloadService {
                     }
                 }
                 try Task.checkCancellation()
+                try await optimizeAll()
                 isPrepared = true
                 maps.downloadedOnly = true
                 message = "Ready offline. No downloads or geometry generation while viewing."
@@ -148,6 +166,66 @@ final class DioramaDownloadService {
             }
         }
     }
+    /// One-time pixel-error LOD bake for every saved tile, serial and resumable.
+    private func optimizeAll() async throws {
+        optimized = 0
+        for (i, tile) in DioramaOfflineStore.tiles.enumerated() {
+            try Task.checkCancellation()
+            stage = "Optimizing tile \(i + 1) of \(total) · pixel-accurate detail levels"
+            for context in [false, true] {
+                let job = Task.detached(priority: .utility) { try await DioramaOfflineStore.shared.optimize(tile, context: context) }
+                let report = try await withTaskCancellationHandler { try await job.value } onCancel: { job.cancel() }
+                if !context, let report, report != "already optimized" { print("[MasakiDownload] \(tile.key) \(report)") }
+            }
+            optimized += 1
+            notify()
+        }
+    }
+
+    /// Runs only the optimize step on already-prepared scenery (no network).
+    func optimizeOnly() {
+        guard task == nil, isPrepared else { return }
+        if UIApplication.shared.applicationState != .active || ProcessInfo.processInfo.isLowPowerModeEnabled
+            || ProcessInfo.processInfo.thermalState.rawValue >= ProcessInfo.ThermalState.serious.rawValue {
+            reportFailure("Optimizing needs the app open, Low Power Mode off and a cool device. Saved scenery is unchanged."); return
+        }
+        isRunning = true; failureMessage = nil
+        message = "Optimizing saved scenery. Keep the app open; originals are untouched."
+        notify()
+        task = Task { [weak self] in
+            guard let self else { return }
+            defer { self.isRunning = false; self.task = nil; self.notify() }
+            do {
+                try await self.optimizeAll()
+                self.message = "Optimized: distant scenery now draws only detail you can see."
+                self.stage = "All \(self.total) tiles optimized"
+                DioramaState.shared.regenerateRequest += 1
+            } catch is CancellationError {
+                self.message = "Paused. Optimized tiles are kept; resume when ready."
+            } catch {
+                self.reportFailure("Optimization stopped: a saved tile could not be read. Originals are untouched.")
+            }
+        }
+    }
+
+    /// Publisher only: upload this device's prepared + optimized scenery as the pre-baked catalogue.
+    func publish() {
+        guard task == nil, isPrepared, !isPublishing else { return }
+        isPublishing = true; publishMessage = "Uploading…"
+        task = Task { [weak self] in
+            guard let self else { return }
+            defer { self.isPublishing = false; self.task = nil }
+            do {
+                let count = try await DioramaPrebakedScenery.publish { [weak self] done, all in
+                    self?.publishMessage = "Uploading \(done) of \(all) files…"
+                }
+                self.publishMessage = "Published \(count) files. New installs download this instead of preparing."
+            } catch {
+                self.publishMessage = (error as? LocalizedError)?.errorDescription ?? "Upload failed. Check the connection and key, then retry."
+            }
+        }
+    }
+
     nonisolated private static func prepare(_ tile: DioramaTileID, token: String) async throws {
         let store = DioramaOfflineStore.shared
         let fullExists = await store.isVerified(tile, context: false)

@@ -293,6 +293,9 @@ final class DioramaHDTiles {
         host.onFrameReport = { [weak self] report in
             Task { @MainActor [weak self] in self?.onFrameReport?(report) }
         }
+        host.onPassReport = { report in
+            Task { @MainActor in DioramaState.shared.passReport = "\(tile.key)\n" + report }
+        }
         do {
             residents[tile] = resident
             refreshMasks()

@@ -31,6 +31,10 @@ nonisolated struct DioramaInstanceGroup: Sendable {
     let minimum: SIMD3<Float>
     let maximum: SIMD3<Float>
     var landmarkPlaceholder: Bool = false
+    /// Index into the tile's prototype LOD table, or -1.
+    var lodSlot: Int32 = -1
+    /// Largest placement scale, converting prototype-unit error to metres.
+    var lodScale: Float = 1
 }
 
 /// Everything the renderer needs for one generated tile: one interleaved vertex buffer, one index

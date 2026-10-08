@@ -58,7 +58,8 @@ nonisolated final class DioramaReflection {
                 matrix: simd_float4x4, uniforms: DioramaShaderUniforms, signature: String,
                 vertices: MTLBuffer, indices: MTLBuffer, instances: MTLBuffer?,
                 fragmentBuffers: [MTLBuffer], textures: [MTLTexture?],
-                ranges: [DioramaRenderLayer.Range], groups: [DioramaInstanceGroup]) -> MTLTexture? {
+                ranges: [DioramaRenderLayer.Range], groups: [DioramaInstanceGroup],
+                lod: DioramaLODSelector? = nil, timing: DioramaPassTimer.Frame? = nil) -> MTLTexture? {
         let w = max(1, min(768, width / 4)), h = max(1, min(768, height / 4))
         prepareSize(width: width, height: height)
         guard let color, let depth else { return nil }
@@ -70,6 +71,7 @@ nonisolated final class DioramaReflection {
         pass.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 0)
         pass.depthAttachment.texture = depth; pass.depthAttachment.loadAction = .clear; pass.depthAttachment.storeAction = .dontCare
         pass.depthAttachment.clearDepth = 1
+        timing?.attach(pass, "Reflection")
         guard let e = command.makeRenderCommandEncoder(descriptor: pass) else { return nil }
         var m = matrix, u = uniforms
         u.params.w = 1; u.water.y = 0; u.post.x = 0
@@ -84,14 +86,16 @@ nonisolated final class DioramaReflection {
         for (i, buffer) in fragmentBuffers.enumerated() { e.setFragmentBuffer(buffer, offset: 0, index: i + 1) }
         for (i, texture) in textures.enumerated() { e.setFragmentTexture(texture, index: i) }
         e.setRenderPipelineState(pipeline)
-        let reflectedRanges = DioramaDrawPlan.ranges(ranges.filter {
+        let lodIndices = lod?.table.indexBuffer ?? indices
+        let reflectedRanges = DioramaDrawPlan.ranges(DioramaDrawPlan.levels(ranges.filter {
             $0.category != .water && $0.category != .propGlow && $0.category != .shorelineDebug
                 && $0.maximum.z >= uniforms.water.x - 0.05 && $0.intersectsReveal(uniforms.reveal)
                 && $0.intersects(matrix, mirrorHeight: uniforms.water.x)
-        })
+        }, selector: lod))
+        timing?.count("Reflection", triangles: reflectedRanges.reduce(0) { $0 + $1.count / 3 })
         for range in reflectedRanges {
             e.setCullMode(range.doubleSided ? .none : .back)
-            e.drawIndexedPrimitives(type: .triangle, indexCount: range.count, indexType: .uint32, indexBuffer: indices, indexBufferOffset: range.start * 4)
+            e.drawIndexedPrimitives(type: .triangle, indexCount: range.count, indexType: .uint32, indexBuffer: range.usesLODBuffer ? lodIndices : indices, indexBufferOffset: range.start * 4)
         }
         if let instances {
             e.setVertexBuffer(instances, offset: 0, index: 3); e.setRenderPipelineState(instancedPipeline)
@@ -101,9 +105,11 @@ nonisolated final class DioramaReflection {
                 return group.category != .propGlow && group.maximum.z >= uniforms.water.x - 0.05
                     && bounds.intersectsReveal(uniforms.reveal) && bounds.intersects(matrix, mirrorHeight: uniforms.water.x)
             }
-            for group in DioramaDrawPlan.instances(reflectedGroups) {
+            let reflectedDraws = DioramaDrawPlan.instances(reflectedGroups, selector: lod)
+            timing?.count("Reflection", triangles: reflectedDraws.reduce(0) { $0 + $1.count / 3 * $1.instanceCount })
+            for group in reflectedDraws {
                 e.setCullMode(group.doubleSided ? .none : .back)
-                e.drawIndexedPrimitives(type: .triangle, indexCount: group.count, indexType: .uint32, indexBuffer: indices,
+                e.drawIndexedPrimitives(type: .triangle, indexCount: group.count, indexType: .uint32, indexBuffer: group.usesLODBuffer ? lodIndices : indices,
                     indexBufferOffset: group.start * 4, instanceCount: group.instanceCount, baseVertex: 0, baseInstance: group.firstInstance)
             }
         }

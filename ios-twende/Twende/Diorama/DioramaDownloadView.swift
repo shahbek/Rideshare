@@ -5,6 +5,8 @@ struct DioramaDownloadView: View {
     @Environment(AppEnvironment.self) private var env
     @State private var confirmsRemoval: Bool = false
     @State private var confirmsMobileData: Bool = false
+    @State private var publishKey: String = ""
+    @State private var showsPublisher: Bool = false
     private var download: DioramaDownloadService { .shared }
 
     var body: some View {
@@ -33,6 +35,7 @@ struct DioramaDownloadView: View {
             } else {
                 if download.isPrepared && download.basemapReady {
                     Button("View Masaki offline") { download.viewOffline() }.buttonStyle(.twendePrimary)
+                    optimizeSection
                 } else {
                     Button(download.completed > 0 ? "Resume Masaki preparation" : "Download & prepare all Masaki") {
                         Haptics.tap()
@@ -62,6 +65,9 @@ struct DioramaDownloadView: View {
                         .frame(minHeight: 48)
                 }
             }
+            if download.isPrepared && !download.isRunning {
+                publisherSection
+            }
             Text("Offline viewing disables map downloads, not bookings or payments. Water is still; the scene redraws for camera changes and finite reveals, not on a looping timer.")
                 .font(TwendeFont.caption).foregroundStyle(TwendeColor.inkSecondary)
         }
@@ -88,5 +94,48 @@ struct DioramaDownloadView: View {
             Button("Remove download", role: .destructive) { download.remove() }
             Button("Cancel", role: .cancel) { }
         } message: { Text("You will need to prepare Masaki again before viewing. Shared basemap downloads stay saved.") }
+    }
+
+    @ViewBuilder private var optimizeSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Pixel-accurate detail · \(download.optimized) / \(download.total) tiles optimized")
+                .font(TwendeFont.label).monospacedDigit()
+            Text("Prepares lighter versions of each tile once, on this device. Distant scenery then draws only detail larger than a pixel; close-ups are unchanged. Original files stay untouched.")
+                .font(TwendeFont.caption).foregroundStyle(TwendeColor.inkSecondary)
+            if !download.isFullyOptimized {
+                Button(download.optimized > 0 ? "Resume optimizing scenery" : "Optimize scenery") {
+                    Haptics.tap()
+                    download.optimizeOnly()
+                }
+                .buttonStyle(.twendeSecondary)
+            }
+        }
+    }
+
+    @ViewBuilder private var publisherSection: some View {
+        DisclosureGroup(isExpanded: $showsPublisher) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Upload this device's prepared and optimized scenery so new installs download it instead of preparing it themselves. Requires the project's scenery publish key.")
+                    .font(TwendeFont.caption).foregroundStyle(TwendeColor.inkSecondary)
+                SecureField("Scenery publish key", text: $publishKey)
+                    .textContentType(.password)
+                    .font(TwendeFont.label)
+                    .padding(10)
+                    .background(TwendeColor.ink.opacity(0.06), in: .rect(cornerRadius: 10))
+                Button(download.isPublishing ? "Publishing…" : "Publish pre-baked scenery") {
+                    if !publishKey.isEmpty { DioramaPrebakedScenery.publishKey = publishKey }
+                    download.publish()
+                }
+                .buttonStyle(.twendeSecondary)
+                .disabled(download.isPublishing || (publishKey.isEmpty && DioramaPrebakedScenery.publishKey == nil))
+                if !download.publishMessage.isEmpty {
+                    Text(download.publishMessage).font(TwendeFont.caption)
+                }
+            }
+            .padding(.top, 6)
+        } label: {
+            Text("Publisher tools").font(TwendeFont.label)
+        }
+        .tint(TwendeColor.ink)
     }
 }

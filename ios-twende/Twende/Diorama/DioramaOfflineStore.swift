@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import Metal
 
 /// User-owned packages live outside purgeable caches. Local visual patches never fetch or rebuild a tile.
 actor DioramaOfflineStore {
@@ -69,8 +70,9 @@ actor DioramaOfflineStore {
                 return ranges.filter { r in r.category == .buildings && stride(from: r.start, to: r.start + r.count, by: 3).contains { removed.contains($0) } }
                     .reduce(0) { $0 + $1.count }
             } ?? 0
-            let plan = DioramaTileArchive.residentPlan(m, origin: tile.centre, patchVertices: patch?.additions.vertices.count ?? 0,
+            var plan = DioramaTileArchive.residentPlan(m, origin: tile.centre, patchVertices: patch?.additions.vertices.count ?? 0,
                 patchIndices: patch?.additions.indices.count ?? 0, affectedIndices: affected)
+            plan.lodBytes = DioramaLODStore.indexBytes(package: directory, patched: patch != nil)
             var cost = DioramaResidencyBudget.residentCost(plan, labelTitles: m.labels.map(\.title), context: context, size: size, scale: scale)
             // The sidecar's float vertices/indices are held while it is merged.
             if let patch { cost = .init(retained: cost.retained, peak: cost.peak + patch.additions.totalBytes) }
@@ -133,6 +135,80 @@ actor DioramaOfflineStore {
         print("[Diorama load] \(tile.key) context=\(context) resident-ready=\(String(format: "%.3f", Date().timeIntervalSince(started)))s gpu=\((result?.gpuBytes ?? 0) / 1_048_576)MiB")
         return result
     }
+
+    /// Whether the newest readable package for this tile already has a matching LOD sidecar.
+    func isOptimized(_ tile: DioramaTileID, context: Bool) -> Bool {
+        for name in candidateNames(tile, context: context) {
+            let location = root.appendingPathComponent(name)
+            guard FileManager.default.fileExists(atPath: location.appendingPathComponent("manifest.json").path) else { continue }
+            return [false, true].contains { patched in
+                DioramaLODStore.sidecar(for: location, patched: patched).flatMap(DioramaLODStore.readMetadata) != nil
+            }
+        }
+        return false
+    }
+
+    /// One-time local bake: decode the saved package exactly as viewing does, simplify, publish the
+    /// sidecar atomically. Original packages and r3 sidecars are untouched; no network.
+    func optimize(_ tile: DioramaTileID, context: Bool) async throws -> String? {
+        guard let device = DioramaGPUPreparation.shared.device ?? MTLCreateSystemDefaultDevice() else { return nil }
+        for name in candidateNames(tile, context: context) {
+            try Task.checkCancellation()
+            let location = root.appendingPathComponent(name)
+            guard let m = try? DioramaTileArchive.validatedManifest(at: location, key: name), m.z == tile.z, m.x == tile.x, m.y == tile.y else { continue }
+            let indexCount = (m.sections.first { $0.name == "indices" }?.bytes ?? 0) / 4
+            let patch = await DioramaVisualUpgrade.shared.cachedPatch(directory: location, tile: tile, indexCount: indexCount,
+                ranges: DioramaTileArchive.baseRanges(m), groups: DioramaTileArchive.baseGroupShells(m))
+            if let sidecar = DioramaLODStore.sidecar(for: location, patched: patch != nil), DioramaLODStore.readMetadata(sidecar) != nil {
+                return "already optimized"
+            }
+            let job = Task.detached(priority: .utility) { () throws -> String in
+                let resident = try autoreleasepool {
+                    try DioramaTileArchive.readResident(from: location, key: name, manifest: m, device: device, patch: patch, origin: tile.centre)
+                }
+                // Build from the original layout, never from a stale LOD-tagged copy.
+                guard resident.lod == nil else { return "already optimized" }
+                let result = try DioramaLODBuilder.build(resident)
+                try DioramaLODStore.write((result.signature, result.ranges, result.prototypes, result.report), indices: result.indices,
+                                          vertexCount: resident.vertexCount, package: location, patched: patch != nil)
+                return result.report
+            }
+            let report = try await withTaskCancellationHandler { try await job.value } onCancel: { job.cancel() }
+            invalidateReads()
+            return report
+        }
+        return nil
+    }
+
+    /// Every file of every current package and sidecar, for publishing pre-baked scenery.
+    func publishableFiles() -> [(directory: String, file: String, url: URL)] {
+        guard let entries = try? FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil) else { return [] }
+        var result: [(String, String, URL)] = []
+        for directory in entries where directory.hasDirectoryPath || (try? directory.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true {
+            let name = directory.lastPathComponent
+            guard name.hasPrefix("v") || name.hasPrefix("visual-r") || name.hasPrefix(DioramaLODStore.prefix) else { continue }
+            for file in (try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)) ?? [] {
+                result.append((name, file.lastPathComponent, file))
+            }
+        }
+        return result.sorted { ($0.0, $0.1) < ($1.0, $1.1) }
+    }
+
+    /// Installs one directory downloaded from the pre-baked catalogue after every file was verified.
+    func install(directory name: String, staged: URL) throws {
+        invalidateReads()
+        try prepareRoot()
+        guard name == URL(fileURLWithPath: name).lastPathComponent, !name.hasPrefix(".") else { throw Failure.package }
+        let destination = root.appendingPathComponent(name)
+        if FileManager.default.fileExists(atPath: destination.path) { try FileManager.default.removeItem(at: destination) }
+        try FileManager.default.moveItem(at: staged, to: destination)
+    }
+    func hasDirectory(_ name: String) -> Bool {
+        FileManager.default.fileExists(atPath: root.appendingPathComponent(name).appendingPathComponent("manifest.json").path)
+            || FileManager.default.fileExists(atPath: root.appendingPathComponent(name).appendingPathComponent("lod.json").path)
+            || FileManager.default.fileExists(atPath: root.appendingPathComponent(name).appendingPathComponent("patch.json").path)
+    }
+    var stagingRoot: URL { root.appendingPathComponent("prebaked-stage", isDirectory: true) }
 
     /// Deduplicated local reads; at most two decompressions run, with focus ahead of queued context.
     func read(_ tile: DioramaTileID, context: Bool = false) async -> DioramaTileArtifacts? {

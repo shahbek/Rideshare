@@ -35,6 +35,7 @@ final class DioramaState {
     var loadedTiles: [DioramaTileID: DioramaTileSummary] = [:]
     var status: String = ""
     var frameReport: String = "Frame measurements begin after the tile is visible."
+    var passReport: String = "Per-pass GPU timings appear once a full-detail tile draws."
     var regenerateRequest: Int = 0
     var cameraFlyRequest: Int = 0
 

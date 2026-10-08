@@ -124,14 +124,14 @@ struct DioramaDebugPanel: View {
     }
 
     private var optimizationSummary: String {
-        ([state.frameReport] + state.loadedTiles.sorted { $0.key.key < $1.key.key }.flatMap { _, artifacts in
+        ([state.frameReport, state.passReport] + state.loadedTiles.sorted { $0.key.key < $1.key.key }.flatMap { _, artifacts in
             ["Measured packed-buffer savings (not fewer drawn triangles):"] + artifacts.optimizationReport
                 + ["Generation stages:"] + artifacts.stageTimings
         }).joined(separator: "\n")
     }
 
     private var summary: String {
-        var lines = [state.status]
+        var lines = [state.status, state.passReport]
         for (tile, artifacts) in state.loadedTiles.sorted(by: { ($0.key.x, $0.key.y) < ($1.key.x, $1.key.y) }) {
             lines.append("v\(DioramaConfig.slipway.generatorVersion) · \(tile)")
             lines.append("\(artifacts.totalTriangles.formatted()) unique tris · \(artifacts.totalInstances.formatted()) instances")

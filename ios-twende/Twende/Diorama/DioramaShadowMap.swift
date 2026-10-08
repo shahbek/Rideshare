@@ -64,7 +64,8 @@ nonisolated final class DioramaShadowMap {
     func update(command: MTLCommandBuffer, vertices: MTLBuffer, indices: MTLBuffer, instances: MTLBuffer?,
                 ranges: [DioramaRenderLayer.Range], groups: [DioramaInstanceGroup],
                 focus: (SIMD3<Float>, SIMD3<Float>)?,
-                sun: SIMD3<Float>, preset: DioramaTimeOfDay, landmarkPresent: Bool = false) -> simd_float4x4? {
+                sun: SIMD3<Float>, preset: DioramaTimeOfDay, landmarkPresent: Bool = false,
+                lod: DioramaLODSelector? = nil, timing: DioramaPassTimer.Frame? = nil) -> simd_float4x4? {
         let casters = ranges.filter { !$0.category.isEmissive && $0.category != .water }
         let castingGroups = groups.filter { !$0.category.isEmissive }
         let snap: Float = 8
@@ -106,6 +107,7 @@ nonisolated final class DioramaShadowMap {
         pass.depthAttachment.loadAction = .clear
         pass.depthAttachment.storeAction = .store
         pass.depthAttachment.clearDepth = 1
+        timing?.attach(pass, "Shadow")
         guard let encoder = command.makeRenderCommandEncoder(descriptor: pass) else { return nil }
         encoder.label = "Diorama cached sun shadows"
         encoder.setViewport(MTLViewport(originX: 0, originY: 0, width: 2048, height: 2048, znear: 0, zfar: 1))
@@ -117,10 +119,15 @@ nonisolated final class DioramaShadowMap {
         encoder.setDepthBias(0.4, slopeScale: 1.0, clamp: 0.001)
         encoder.setVertexBuffer(vertices, offset: 0, index: 0)
         encoder.setVertexBytes(&candidate, length: MemoryLayout<simd_float4x4>.stride, index: 1)
-        for range in DioramaDrawPlan.ranges(casters.filter { $0.intersects(candidate) }) {
+        // Shadow texels are span/2048 m wide; detail below half a texel cannot change the map.
+        let texelSelector = lod?.orthographic(0.5 * min(span.x, span.y) / 2048)
+        let lodIndices = lod?.table.indexBuffer ?? indices
+        let shadowRanges = DioramaDrawPlan.ranges(DioramaDrawPlan.levels(casters.filter { $0.intersects(candidate) }, selector: texelSelector))
+        timing?.count("Shadow", triangles: shadowRanges.reduce(0) { $0 + $1.count / 3 })
+        for range in shadowRanges {
             encoder.setCullMode(range.doubleSided ? .none : .back)
             encoder.drawIndexedPrimitives(type: .triangle, indexCount: range.count, indexType: .uint32,
-                                          indexBuffer: indices, indexBufferOffset: range.start * MemoryLayout<UInt32>.stride)
+                                          indexBuffer: range.usesLODBuffer ? lodIndices : indices, indexBufferOffset: range.start * MemoryLayout<UInt32>.stride)
         }
         if let instances, !castingGroups.isEmpty {
             encoder.setRenderPipelineState(instancedPipeline)
@@ -130,10 +137,12 @@ nonisolated final class DioramaShadowMap {
                 $0.fullCount > 0 && DioramaRenderLayer.Range(category: $0.category, start: 0, count: 0,
                     minimum: $0.minimum, maximum: $0.maximum).intersects(candidate)
             }
-            for group in DioramaDrawPlan.instances(retained) {
+            let shadowGroups = DioramaDrawPlan.instances(retained, selector: texelSelector)
+            timing?.count("Shadow", triangles: shadowGroups.reduce(0) { $0 + $1.count / 3 * $1.instanceCount })
+            for group in shadowGroups {
                 encoder.setCullMode(group.doubleSided ? .none : .back)
                 encoder.drawIndexedPrimitives(type: .triangle, indexCount: group.count, indexType: .uint32,
-                    indexBuffer: indices, indexBufferOffset: group.start * MemoryLayout<UInt32>.stride,
+                    indexBuffer: group.usesLODBuffer ? lodIndices : indices, indexBufferOffset: group.start * MemoryLayout<UInt32>.stride,
                     instanceCount: group.instanceCount, baseVertex: 0, baseInstance: group.firstInstance)
             }
         }

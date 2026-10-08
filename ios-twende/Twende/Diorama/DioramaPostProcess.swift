@@ -167,12 +167,12 @@ nonisolated final class DioramaPostProcess {
 
     /// Encodes the prepass, occlusion and bloom. Returns the two bloom levels to composite.
     func encode(command: MTLCommandBuffer, targetWidth: Int, targetHeight: Int,
-                vertices: MTLBuffer, indices: MTLBuffer, instances: MTLBuffer?,
+                vertices: MTLBuffer, indices: MTLBuffer, lodIndices: MTLBuffer? = nil, instances: MTLBuffer?,
                 opaqueRanges: [DioramaRenderLayer.Range], emissiveRanges: [DioramaRenderLayer.Range],
                 opaqueGroups: [DioramaDrawPlan.Instance], emissiveGroups: [DioramaDrawPlan.Instance],
                 matrix: simd_float4x4, uniforms: DioramaShaderUniforms, eye: SIMD3<Float>,
                 aoRadius: Float, aoStrength: Float, bloomStrength: Float, lodDistance: Float,
-                revision: UInt64) -> [MTLTexture] {
+                revision: UInt64, timing: DioramaPassTimer.Frame? = nil) -> [MTLTexture] {
         resize(width: targetWidth, height: targetHeight)
         // Revision includes the exact camera, categories, reveal boundary and instance LOD.
         // G-buffer/emission do not depend on water time or directional-shadow contents.
@@ -197,6 +197,9 @@ nonisolated final class DioramaPostProcess {
         pass.depthAttachment.loadAction = .clear
         pass.depthAttachment.storeAction = .dontCare
         pass.depthAttachment.clearDepth = 1
+        timing?.attach(pass, "AO/glow prepass")
+        timing?.count("AO/glow prepass", triangles: opaqueRanges.reduce(0) { $0 + $1.count / 3 }
+            + opaqueGroups.reduce(0) { $0 + $1.count / 3 * $1.instanceCount })
         guard let g = command.makeRenderCommandEncoder(descriptor: pass) else { return [] }
         g.label = "Diorama G-buffer"
         g.setFrontFacing(.counterClockwise)
@@ -214,7 +217,7 @@ nonisolated final class DioramaPostProcess {
             let start = group.start
             let count = group.count
             cull(group.doubleSided)
-            g.drawIndexedPrimitives(type: .triangle, indexCount: count, indexType: .uint32, indexBuffer: indices,
+            g.drawIndexedPrimitives(type: .triangle, indexCount: count, indexType: .uint32, indexBuffer: group.usesLODBuffer ? (lodIndices ?? indices) : indices,
                                     indexBufferOffset: start * MemoryLayout<UInt32>.stride, instanceCount: group.instanceCount,
                                     baseVertex: 0, baseInstance: group.firstInstance)
         }
@@ -222,7 +225,7 @@ nonisolated final class DioramaPostProcess {
         g.setRenderPipelineState(gbufferPipeline)
         for range in opaqueRanges {
             cull(range.doubleSided)
-            g.drawIndexedPrimitives(type: .triangle, indexCount: range.count, indexType: .uint32, indexBuffer: indices, indexBufferOffset: range.start * MemoryLayout<UInt32>.stride)
+            g.drawIndexedPrimitives(type: .triangle, indexCount: range.count, indexType: .uint32, indexBuffer: range.usesLODBuffer ? (lodIndices ?? indices) : indices, indexBufferOffset: range.start * MemoryLayout<UInt32>.stride)
         }
         if let instances, !opaqueGroups.isEmpty {
             g.setVertexBuffer(instances, offset: 0, index: 3)
@@ -234,7 +237,7 @@ nonisolated final class DioramaPostProcess {
             cull(true)
             g.setRenderPipelineState(emissivePipeline)
             for range in emissiveRanges {
-                g.drawIndexedPrimitives(type: .triangle, indexCount: range.count, indexType: .uint32, indexBuffer: indices, indexBufferOffset: range.start * MemoryLayout<UInt32>.stride)
+                g.drawIndexedPrimitives(type: .triangle, indexCount: range.count, indexType: .uint32, indexBuffer: range.usesLODBuffer ? (lodIndices ?? indices) : indices, indexBufferOffset: range.start * MemoryLayout<UInt32>.stride)
             }
             if let instances, !emissiveGroups.isEmpty {
                 g.setVertexBuffer(instances, offset: 0, index: 3)
@@ -250,6 +253,7 @@ nonisolated final class DioramaPostProcess {
             d.colorAttachments[0].texture = target
             d.colorAttachments[0].loadAction = .dontCare
             d.colorAttachments[0].storeAction = .store
+            if label == "Diorama SSAO" { timing?.attach(d, "AO filter") }
             guard let e = command.makeRenderCommandEncoder(descriptor: d) else { allPassesEncoded = false; return }
             e.label = label
             e.setRenderPipelineState(pipeline)

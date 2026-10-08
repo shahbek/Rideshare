@@ -40,6 +40,8 @@ nonisolated final class DioramaResidentTile: @unchecked Sendable {
     let shadowBounds: (minimum: SIMD3<Float>, maximum: SIMD3<Float>)?
     let materialCounts: SIMD2<Int>
     let summary: DioramaTileSummary
+    /// Simplified pixel-error levels from a verified local sidecar; nil draws full detail everywhere.
+    let lod: DioramaLODTable?
     /// Metal allocations owned by this tile (shared storage; also the CPU view).
     let gpuBytes: Int
     /// CPU placement lists, labels and light grid.
@@ -49,7 +51,9 @@ nonisolated final class DioramaResidentTile: @unchecked Sendable {
          instanceBuffer: MTLBuffer, instanceCount: Int, ranges: [DioramaRenderLayer.Range], groups: [DioramaInstanceGroup],
          lightGrid: DioramaLightGrid, paintBuffer: MTLBuffer, paintTableBuffer: MTLBuffer, paintIndexBuffer: MTLBuffer,
          groundTexture: MTLTexture?, waterHeight: Double, labels: [DioramaBuildingLabel], poolBounds: DioramaRenderLayer.Range?,
-         shadowBounds: (minimum: SIMD3<Float>, maximum: SIMD3<Float>)?, materialCounts: SIMD2<Int>, summary: DioramaTileSummary) {
+         shadowBounds: (minimum: SIMD3<Float>, maximum: SIMD3<Float>)?, materialCounts: SIMD2<Int>, summary: DioramaTileSummary,
+         lod: DioramaLODTable? = nil) {
+        self.lod = lod
         self.tile = tile; self.device = device
         self.vertexBuffer = vertexBuffer; self.vertexCount = vertexCount
         self.indexBuffer = indexBuffer; self.indexCount = indexCount
@@ -61,7 +65,7 @@ nonisolated final class DioramaResidentTile: @unchecked Sendable {
         self.summary = summary
         let texture = groundTexture.map { $0.width * $0.height * 4 * 4 / 3 } ?? 0
         gpuBytes = vertexBuffer.length + indexBuffer.length + instanceBuffer.length + paintBuffer.length
-            + paintTableBuffer.length + paintIndexBuffer.length + texture
+            + paintTableBuffer.length + paintIndexBuffer.length + texture + (lod?.bytes ?? 0)
         cpuBytes = groups.reduce(0) { $0 + $1.instances.count * MemoryLayout<DioramaInstanceData>.stride }
             + lightGrid.lights.count * MemoryLayout<DioramaShaderLight>.stride * 2
             + labels.reduce(0) { $0 + $1.footprint.count * 16 + $1.title.utf8.count + 64 }
@@ -92,6 +96,7 @@ nonisolated extension DioramaTileArchive {
         let paintBytes: Int
         let lightBytes: Int
         let ownershipCopy: Bool
+        var lodBytes: Int = 0
     }
 
     static func validatedManifest(at directory: URL, key: String) throws -> Manifest {
@@ -361,6 +366,11 @@ nonisolated extension DioramaTileArchive {
         let shadow = shadowLow.x.isFinite && shadowHigh.x > shadowLow.x ? (shadowLow, shadowHigh) : nil
         var report = m.optimizationReport
         if let patch { report.append(patch.report) }
+        let lod = DioramaLODStore.load(package: directory, patched: patch != nil, device: device, vertexCount: vertexCount,
+                                       indexCount: indexCount, ranges: &ranges, groups: &groups)
+        if let lod, let metadata = DioramaLODStore.sidecar(for: directory, patched: patch != nil).flatMap(DioramaLODStore.readMetadata) {
+            report.append(metadata.report + " · \(lod.bytes / 1_048_576) MiB")
+        } else { report.append("Pixel-error LOD: not optimized yet · full detail at every distance") }
         let summary = DioramaTileSummary(shorelineReport: m.shorelineReport, optimizationReport: report, stageTimings: m.stageTimings,
             totalTriangles: indexCount / 3, totalInstances: instances.count,
             totalBytes: vertexCount * MemoryLayout<DioramaPackedVertex>.stride + indexCount * 4, generationSeconds: m.generationSeconds)
@@ -369,6 +379,6 @@ nonisolated extension DioramaTileArchive {
             ranges: ranges, groups: groups, lightGrid: grid, paintBuffer: paintBuffer, paintTableBuffer: paintTableBuffer,
             paintIndexBuffer: paintIndexBuffer, groundTexture: groundTexture, waterHeight: m.waterHeight,
             labels: m.labels.map { .init(id: $0.id, title: $0.title, anchor: $0.anchor, footprint: $0.footprint.map { DV2($0.x, $0.y) }, isNamed: $0.isNamed) },
-            poolBounds: pool, shadowBounds: shadow, materialCounts: SIMD2(foliage, architecture), summary: summary)
+            poolBounds: pool, shadowBounds: shadow, materialCounts: SIMD2(foliage, architecture), summary: summary, lod: lod)
     }
 }
