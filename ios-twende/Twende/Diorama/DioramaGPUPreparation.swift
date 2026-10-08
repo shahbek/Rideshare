@@ -16,6 +16,11 @@ nonisolated final class DioramaGPUPreparation: @unchecked Sendable {
     func capture(device: MTLDevice, color: UInt, depth: UInt) {
         lock.lock(); configuration = .init(device: device, color: color, depth: depth); lock.unlock()
     }
+    /// The SDK's device once captured; iOS has one GPU, so the system default matches before that.
+    var device: MTLDevice? {
+        lock.lock(); defer { lock.unlock() }
+        return configuration?.device ?? MTLCreateSystemDefaultDevice()
+    }
     func captureSize(width: Int, height: Int) {
         lock.lock(); size = (width, height); lock.unlock()
     }

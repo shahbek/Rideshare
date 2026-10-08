@@ -126,6 +126,21 @@ nonisolated enum DioramaShaderSource {
         float4 color;
         float4 appearance;
     };
+    // Resident tile vertices: 32 bytes. position.w = appearance.z, normal.w = appearance.w,
+    // color.w = appearance.y. appearance.x is unused by these shaders.
+    struct DioramaPackedInput {
+        float4 position;
+        half4 normal;
+        half4 color;
+    };
+    DioramaInput dioramaUnpack(DioramaPackedInput p) {
+        DioramaInput v;
+        v.position = float4(p.position.xyz, 1.0);
+        v.normal = float4(float3(p.normal.xyz), 0.0);
+        v.color = float4(float3(p.color.xyz), 1.0);
+        v.appearance = float4(0.85, float(p.color.w), p.position.w, float(p.normal.w));
+        return v;
+    }
 
     struct DioramaUniforms {
         float4 eye;
@@ -329,10 +344,10 @@ nonisolated enum DioramaShaderSource {
     }
 
     vertex DioramaVarying dioramaVertex(uint id [[vertex_id]],
-                                        const device DioramaInput *vertices [[buffer(0)]],
+                                        const device DioramaPackedInput *vertices [[buffer(0)]],
                                         constant float4x4 &matrix [[buffer(1)]],
                                         constant DioramaUniforms &u [[buffer(2)]]) {
-        DioramaInput v = vertices[id];
+        DioramaInput v = dioramaUnpack(vertices[id]);
         return dioramaShade(v, v.position.xyz, v.normal.xyz, matrix, u);
     }
 
@@ -363,11 +378,11 @@ nonisolated enum DioramaShaderSource {
 
     /// Prototype geometry placed by the instance table; the instance id includes the base instance.
     vertex DioramaVarying dioramaInstancedVertex(uint id [[vertex_id]], uint instanceID [[instance_id]],
-                                                 const device DioramaInput *vertices [[buffer(0)]],
+                                                 const device DioramaPackedInput *vertices [[buffer(0)]],
                                                  constant float4x4 &matrix [[buffer(1)]],
                                                  constant DioramaUniforms &u [[buffer(2)]],
                                                  const device DioramaInstance *instances [[buffer(3)]]) {
-        DioramaInput v = vertices[id];
+        DioramaInput v = dioramaUnpack(vertices[id]);
         DioramaInstance inst = instances[instanceID];
         v.color.rgb = min(v.color.rgb * inst.tint.rgb, float3(1.0));
         if (inst.grading.w > 0.5) {
@@ -379,13 +394,13 @@ nonisolated enum DioramaShaderSource {
     }
 
     vertex float4 dioramaShadowVertex(uint id [[vertex_id]],
-                                      const device DioramaInput *vertices [[buffer(0)]],
+                                      const device DioramaPackedInput *vertices [[buffer(0)]],
                                       constant float4x4 &matrix [[buffer(1)]]) {
-        return matrix * vertices[id].position;
+        return matrix * float4(vertices[id].position.xyz, 1.0);
     }
 
     vertex float4 dioramaInstancedShadowVertex(uint id [[vertex_id]], uint instanceID [[instance_id]],
-                                               const device DioramaInput *vertices [[buffer(0)]],
+                                               const device DioramaPackedInput *vertices [[buffer(0)]],
                                                constant float4x4 &matrix [[buffer(1)]],
                                                const device DioramaInstance *instances [[buffer(3)]]) {
         return matrix * float4(dioramaPlace(vertices[id].position.xyz, instances[instanceID]), 1.0);

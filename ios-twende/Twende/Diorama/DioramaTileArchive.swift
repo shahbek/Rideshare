@@ -222,6 +222,7 @@ nonisolated enum DioramaTileArchive {
             hasMapboxCoverage: m.coverage, optimizationReport: m.optimizationReport, stageTimings: m.stageTimings)
     }
 
+    static func digestHex(_ data: Data) -> String { digest(data) }
     private static func digest(_ data: Data) -> String {
         SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }

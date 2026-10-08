@@ -13,8 +13,8 @@ final class DioramaContextTiles {
         var isReady: Bool
         var arrival: Task<Void, Never>?
         var lifecycle: SIMD4<Float> = .zero
-        init(host: DioramaRenderLayer, artifacts: DioramaTileArtifacts, reservation: UUID) {
-            self.host = host; bytes = artifacts.decodedBytes; triangles = artifacts.totalTriangles
+        init(host: DioramaRenderLayer, artifacts: DioramaResidentTile, reservation: UUID) {
+            self.host = host; bytes = artifacts.gpuBytes + artifacts.cpuBytes; triangles = artifacts.totalTriangles
             self.reservation = reservation
             isReady = host.isRendererReady
         }
@@ -100,7 +100,7 @@ final class DioramaContextTiles {
     }
     var report: String {
         let missing = retryAfter.count
-        return "Visible base: \(residents.count)/\(budget?.contextLimit ?? 4) low-detail tiles · \(residents.values.reduce(0) { $0 + $1.bytes } / 1_048_576) MiB decoded payload"
+        return "Visible base: \(residents.count)/\(budget?.contextLimit ?? 4) low-detail tiles · \(residents.values.reduce(0) { $0 + $1.bytes } / 1_048_576) MiB resident GPU-shared"
             + (retirements.isEmpty ? "" : " · \(retirements.count) joined retractions\(retirements.values.contains(where: \.isStalled) ? " waiting for GPU" : "")")
             + (deferredTiles.isEmpty ? "" : " · lower-priority tiles use native map within memory allowance")
             + (missing > 0 ? " · \(missing) saved tiles awaiting retry/repair" : "")
@@ -155,7 +155,7 @@ final class DioramaContextTiles {
                 guard !Task.isCancelled, self.revision == expected, UIApplication.shared.applicationState == .active,
                       let budget = self.budget else { return }
                 self.loadingTile = tile
-                guard var cost = await DioramaOfflineStore.shared.residencyCost(tile, context: true, size: self.outputSize, scale: Float(UIScreen.main.scale)) else {
+                guard let cost = await DioramaOfflineStore.shared.residencyCost(tile, context: true, size: self.outputSize, scale: Float(UIScreen.main.scale)) else {
                     self.markUnavailable(tile); continue
                 }
                 guard !Task.isCancelled, self.revision == expected, self.wantedTiles.contains(tile) else { return }
@@ -164,16 +164,16 @@ final class DioramaContextTiles {
                     self.deferredTiles.insert(tile); continue
                 }
                 defer { if self.residents[tile]?.reservation != reservation { budget.release(reservation) } }
-                let job = Task.detached(priority: .utility) { await DioramaOfflineStore.shared.read(tile, context: true) }
+                let job = Task.detached(priority: .utility) { await DioramaOfflineStore.shared.readResident(tile, context: true) }
                 let artifacts = await withTaskCancellationHandler { await job.value } onCancel: { job.cancel() }
                 guard !Task.isCancelled, self.revision == expected, UIApplication.shared.applicationState == .active else { return }
                 guard let artifacts else { self.markUnavailable(tile); continue }
                 guard self.wantedTiles.contains(tile) else { continue }
-                let actual = DioramaResidencyBudget.cost(artifacts, context: true, size: self.outputSize, scale: Float(UIScreen.main.scale))
-                cost = .init(retained: max(cost.retained, actual.retained), peak: max(cost.peak, actual.peak))
-                guard budget.revise(reservation, cost: cost) else { self.deferredTiles.insert(tile); continue }
+                let retained = DioramaResidencyBudget.residentCost(artifacts, context: true, size: self.outputSize, scale: Float(UIScreen.main.scale))
+                let settled = DioramaResidencyBudget.Cost(retained: retained, peak: retained)
+                guard budget.revise(reservation, cost: settled) else { self.deferredTiles.insert(tile); continue }
                 await self.install(artifacts, config: config, revision: expected, reservation: reservation)
-                if self.residents[tile]?.reservation == reservation { budget.commit(reservation, cost: cost) }
+                if self.residents[tile]?.reservation == reservation { budget.commit(reservation, cost: settled) }
                 await Task.yield()
             }
         }
@@ -389,15 +389,11 @@ final class DioramaContextTiles {
     private func setSlot(_ id: String, on map: MapboxMap) throws {
         try map.setLayerProperty(for: id, property: "slot", value: "middle")
     }
-    private func install(_ artifacts: DioramaTileArtifacts, config: DioramaConfig, revision expected: UInt, reservation: UUID) async {
+    private func install(_ artifacts: DioramaResidentTile, config: DioramaConfig, revision expected: UInt, reservation: UUID) async {
         guard let map else { return }
         let tile = artifacts.tile
-        let host = DioramaRenderLayer(origin: tile.centre, vertices: artifacts.vertices, indices: artifacts.indices,
-            ranges: artifacts.ranges, groups: artifacts.groups, instances: artifacts.allInstances,
-            lightGrid: artifacts.lightGrid, waterHeight: artifacts.waterHeight, groundImage: artifacts.groundImage,
-            groundRect: DioramaProjection(origin: tile.centre).rect(of: tile), visible: visible, timeOfDay: time,
-            animates: true, config: config, contextOnly: true, materialsPrepared: artifacts.renderMaterialsPrepared,
-            materialCounts: artifacts.renderMaterialCounts, preparedPoolBounds: artifacts.renderPoolBounds)
+        let host = DioramaRenderLayer(resident: artifacts, groundRect: DioramaProjection(origin: tile.centre).rect(of: tile),
+            visible: visible, timeOfDay: time, config: config, labels: [], displayScale: Float(UIScreen.main.scale), contextOnly: true)
         let upload = Task.detached(priority: .utility) { await DioramaGPUUploadQueue.shared.prepare(host) }
         await withTaskCancellationHandler { await upload.value } onCancel: { upload.cancel() }
         guard !Task.isCancelled, revision == expected, self.map === map, wantedTiles.contains(tile),

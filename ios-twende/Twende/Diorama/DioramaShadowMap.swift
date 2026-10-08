@@ -20,7 +20,9 @@ nonisolated final class DioramaShadowMap {
     private var cachedKey: CacheKey?
     private var matrix: simd_float4x4 = matrix_identity_float4x4
 
-    init?(device: MTLDevice, library: MTLLibrary, vertices: [BuildingRenderVertex], instances: [DioramaInstanceData]) {
+    /// `bounds`: caster envelope (non-sprite vertices plus instance spheres).
+    init?(device: MTLDevice, library: MTLLibrary, bounds: (minimum: SIMD3<Float>, maximum: SIMD3<Float>)?) {
+        guard let bounds else { return nil }
         guard let function = library.makeFunction(name: "dioramaShadowVertex"),
               let instanced = library.makeFunction(name: "dioramaInstancedShadowVertex") else { return nil }
         func make(_ vertex: MTLFunction, label: String) -> MTLRenderPipelineState? {
@@ -44,16 +46,7 @@ nonisolated final class DioramaShadowMap {
         target.storageMode = .private
         guard let texture = device.makeTexture(descriptor: target) else { return nil }
         self.texture = texture
-        var low = SIMD3<Float>(repeating: .greatestFiniteMagnitude)
-        var high = SIMD3<Float>(repeating: -.greatestFiniteMagnitude)
-        for v in vertices where v.appearance.w < 3.5 {
-            let p = SIMD3<Float>(v.position.x, v.position.y, v.position.z)
-            low = simd_min(low, p); high = simd_max(high, p)
-        }
-        for i in instances {
-            low = simd_min(low, i.centre - SIMD3(repeating: i.radius))
-            high = simd_max(high, i.centre + SIMD3(repeating: i.radius))
-        }
+        let low = bounds.minimum, high = bounds.maximum
         guard low.x.isFinite, high.x > low.x else { return nil }
         var corners: [SIMD3<Float>] = []
         for x in [low.x - 2, high.x + 2] {

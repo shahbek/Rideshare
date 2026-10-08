@@ -32,7 +32,7 @@ final class DioramaState {
         NotificationCenter.default.post(name: Self.renderSettingsChanged, object: self)
     }
     var inspectionTarget: DioramaShoreline.Kind? = nil
-    var loadedTiles: [DioramaTileID: DioramaTileArtifacts] = [:]
+    var loadedTiles: [DioramaTileID: DioramaTileSummary] = [:]
     var status: String = ""
     var frameReport: String = "Frame measurements begin after the tile is visible."
     var regenerateRequest: Int = 0

@@ -46,10 +46,29 @@ nonisolated struct DioramaVisualPatch: Sendable {
             .init(category: $0.category, start: $0.start + indexOffset, count: $0.count,
                   minimum: $0.minimum, maximum: $0.maximum, doubleSided: $0.doubleSided)
         })
+        let (groups, instances) = patchedGroups(base.groups, indexOffset: indexOffset)
+        var result = DioramaTileArtifacts(tile: base.tile, vertices: vertices, indices: indices, ranges: ranges,
+            groups: groups, allInstances: instances, parts: DioramaCategory.allCases.map { category in
+                .init(category: category, triangles: ranges.filter { $0.category == category }.reduce(0) { $0 + $1.count / 3 },
+                      instances: groups.filter { $0.category == category }.reduce(0) { $0 + $1.instances.count })
+            }, lights: base.lights, lightGrid: base.lightGrid,
+            waterHeight: base.waterHeight, shorelineReport: base.shorelineReport, generationSeconds: base.generationSeconds,
+            groundImage: base.groundImage, buildingLabels: base.buildingLabels, hasMapboxCoverage: base.hasMapboxCoverage,
+            optimizationReport: base.optimizationReport, stageTimings: base.stageTimings)
+        result.optimizationReport.append(report)
+        return result
+    }
+
+    var report: String {
+        "Local visual r\(metadata.revision): \(metadata.trees.count) tree prototypes, \(metadata.roofCount) verified roofs; \(metadata.skippedRoofs) roof candidates retained. Original map/archive bytes unchanged."
+    }
+
+    /// Tree prototype replacement; `indexOffset` is where the additions' indices begin.
+    func patchedGroups(_ baseGroups: [DioramaInstanceGroup], indexOffset: Int) -> ([DioramaInstanceGroup], [DioramaInstanceData]) {
         let replacements = Dictionary(uniqueKeysWithValues: metadata.trees.map { ($0.originalStart, $0) })
         var instances: [DioramaInstanceData] = []
         var groups: [DioramaInstanceGroup] = []
-        for group in base.groups {
+        for group in baseGroups {
             var list = group.instances
             let replacement = group.category == .vegetation ? replacements[group.fullStart] : nil
             var minimum = group.minimum, maximum = group.maximum
@@ -72,15 +91,6 @@ nonisolated struct DioramaVisualPatch: Sendable {
                 firstInstance: instances.count, minimum: minimum, maximum: maximum))
             instances.append(contentsOf: list)
         }
-        var result = DioramaTileArtifacts(tile: base.tile, vertices: vertices, indices: indices, ranges: ranges,
-            groups: groups, allInstances: instances, parts: DioramaCategory.allCases.map { category in
-                .init(category: category, triangles: ranges.filter { $0.category == category }.reduce(0) { $0 + $1.count / 3 },
-                      instances: groups.filter { $0.category == category }.reduce(0) { $0 + $1.instances.count })
-            }, lights: base.lights, lightGrid: base.lightGrid,
-            waterHeight: base.waterHeight, shorelineReport: base.shorelineReport, generationSeconds: base.generationSeconds,
-            groundImage: base.groundImage, buildingLabels: base.buildingLabels, hasMapboxCoverage: base.hasMapboxCoverage,
-            optimizationReport: base.optimizationReport, stageTimings: base.stageTimings)
-        result.optimizationReport.append("Local visual r\(metadata.revision): \(metadata.trees.count) tree prototypes, \(metadata.roofCount) verified roofs; \(metadata.skippedRoofs) roof candidates retained. Original map/archive bytes unchanged.")
-        return result
+        return (groups, instances)
     }
 }

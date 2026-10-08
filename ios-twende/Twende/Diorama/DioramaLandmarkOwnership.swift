@@ -15,9 +15,32 @@ nonisolated enum DioramaLandmarkOwnership {
     static func partition(vertices: [BuildingRenderVertex], indices: [UInt32], ranges: [DioramaRenderLayer.Range],
                           groups: [DioramaInstanceGroup], origin: CLLocationCoordinate2D)
         -> (indices: [UInt32], ranges: [DioramaRenderLayer.Range], groups: [DioramaInstanceGroup]) {
+        guard let split = partition(indexCount: indices.count, index: { indices[$0] }, position: { vertices[$0].position },
+                                    ranges: ranges, groups: groups, origin: origin) else { return (indices, ranges, groups) }
+        return (indices + split.appended, split.ranges, split.groups)
+    }
+
+    /// Whether `partition` could add a copied index list (for memory preflight).
+    static func affects(ranges: [DioramaRenderLayer.Range], groups: [DioramaInstanceGroup], origin: CLLocationCoordinate2D) -> Bool {
         let projection = DioramaProjection(origin: origin)
         let ring = geographicRing.map { projection.local(longitude: $0[0], latitude: $0[1]) }
-        guard ring.count >= 3 else { return (indices, ranges, groups) }
+        guard ring.count >= 3 else { return false }
+        let lo = DV2(ring.map(\.x).min() ?? 0, ring.map(\.y).min() ?? 0) - DV2(3, 3)
+        let hi = DV2(ring.map(\.x).max() ?? 0, ring.map(\.y).max() ?? 0) + DV2(3, 3)
+        func touches(_ a: SIMD3<Float>, _ b: SIMD3<Float>) -> Bool {
+            Double(a.x) <= hi.x && Double(b.x) >= lo.x && Double(a.y) <= hi.y && Double(b.y) >= lo.y
+        }
+        return ranges.contains { $0.category == .buildings && touches($0.minimum, $0.maximum) }
+            || groups.contains { $0.category == .buildings && touches($0.minimum, $0.maximum) }
+    }
+
+    /// Buffer-agnostic form: returns indices to append after the existing `indexCount`, or nil when untouched.
+    static func partition(indexCount: Int, index: (Int) -> UInt32, position: (Int) -> SIMD4<Float>,
+                          ranges: [DioramaRenderLayer.Range], groups: [DioramaInstanceGroup], origin: CLLocationCoordinate2D)
+        -> (appended: [UInt32], ranges: [DioramaRenderLayer.Range], groups: [DioramaInstanceGroup])? {
+        let projection = DioramaProjection(origin: origin)
+        let ring = geographicRing.map { projection.local(longitude: $0[0], latitude: $0[1]) }
+        guard ring.count >= 3 else { return nil }
         let outline = DioramaPolygon.counterClockwise(ring)
         let mask = DioramaPolygon.offset(outline, by: 2.0) ?? outline
         let lo = DV2(mask.map(\.x).min() ?? 0, mask.map(\.y).min() ?? 0)
@@ -36,19 +59,19 @@ nonisolated enum DioramaLandmarkOwnership {
             } }
         }
         guard ranges.contains(where: { $0.category == .buildings && touches($0.minimum, $0.maximum) })
-            || groups.contains(where: { $0.category == .buildings && touches($0.minimum, $0.maximum) }) else { return (indices, ranges, groups) }
-        var output = indices, result: [DioramaRenderLayer.Range] = []
+            || groups.contains(where: { $0.category == .buildings && touches($0.minimum, $0.maximum) }) else { return nil }
+        var output: [UInt32] = [], result: [DioramaRenderLayer.Range] = []
         for range in ranges {
             guard (range.category == .buildings || range.category == .windowGlow), touches(range.minimum, range.maximum) else { result.append(range); continue }
             var owned: [UInt32] = [], ordinary: [UInt32] = []
             for start in stride(from: range.start, to: range.start + range.count - 2, by: 3) {
-                let ids = [indices[start], indices[start + 1], indices[start + 2]]
-                let pts = ids.map { id -> DV2 in let p = vertices[Int(id)].position; return DV2(Double(p.x), Double(p.y)) }
+                let ids = [index(start), index(start + 1), index(start + 2)]
+                let pts = ids.map { id -> DV2 in let p = position(Int(id)); return DV2(Double(p.x), Double(p.y)) }
                 if intersectsMask(pts) { owned.append(contentsOf: ids) }
                 else { ordinary.append(contentsOf: ids) }
             }
             for (batch, placeholder) in [(ordinary, false), (owned, true)] where !batch.isEmpty {
-                let copy = DioramaRenderLayer.Range(category: range.category, start: output.count, count: batch.count,
+                let copy = DioramaRenderLayer.Range(category: range.category, start: indexCount + output.count, count: batch.count,
                     minimum: range.minimum, maximum: range.maximum, doubleSided: range.doubleSided, landmarkPlaceholder: placeholder)
                 result.append(copy); output.append(contentsOf: batch)
             }
@@ -58,7 +81,7 @@ nonisolated enum DioramaLandmarkOwnership {
             guard (group.category == .buildings || group.category == .windowGlow), touches(group.minimum, group.maximum) else { split.append(group); continue }
             var prototypeLow = SIMD2<Float>(repeating: .greatestFiniteMagnitude), prototypeHigh = -prototypeLow
             for i in group.fullStart..<(group.fullStart + group.fullCount) {
-                let p = vertices[Int(indices[i])].position
+                let p = position(Int(index(i)))
                 prototypeLow = simd_min(prototypeLow, SIMD2(p.x,p.y)); prototypeHigh = simd_max(prototypeHigh, SIMD2(p.x,p.y))
             }
             let ownedFlags = group.instances.map { instance -> Bool in

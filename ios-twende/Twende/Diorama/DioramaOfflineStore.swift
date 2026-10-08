@@ -54,48 +54,84 @@ actor DioramaOfflineStore {
         let free = try root.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]).volumeAvailableCapacityForImportantUsage ?? 0
         guard free > 900 * 1_048_576 else { throw Failure.storage }
     }
-    /// Inspect compatible local manifests before admitting any decode or GPU allocation.
-    func residencyCost(_ tile: DioramaTileID, context: Bool, size: CGSize, scale: Float) -> DioramaResidencyBudget.Cost? {
+    /// Inspect compatible local manifests (and any verified r3 sidecar) before any decode or GPU allocation.
+    func residencyCost(_ tile: DioramaTileID, context: Bool, size: CGSize, scale: Float) async -> DioramaResidencyBudget.Cost? {
         var costs: [DioramaResidencyBudget.Cost] = []
         for name in candidateNames(tile, context: context) {
-            let url = root.appendingPathComponent(name).appendingPathComponent("manifest.json")
-            guard let length = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize,
-                  length <= 8 * 1_048_576,
-                  let data = try? Data(contentsOf: url),
-                  let m = try? JSONDecoder().decode(DioramaTileArchive.Manifest.self, from: data),
-                  m.key == name, m.format == DioramaTileArchive.format,
-                  m.z == tile.z, m.x == tile.x, m.y == tile.y,
-                  m.vertexStride == MemoryLayout<BuildingRenderVertex>.stride,
-                  m.instanceStride == MemoryLayout<DioramaInstanceData>.stride,
-                  m.imageSize >= 0, m.imageSize <= 4096,
-                  m.sections.count == 10, Set(m.sections.map(\.name)) == Set(["vertices", "indices", "instances", "ground", "paint", "paintTable", "paintIndices", "lights", "lightTable", "lightIndices"]) else { continue }
-            var remaining = DioramaTileArchive.maxBytes
-            var valid = true
-            for section in m.sections {
-                guard section.bytes >= 0, section.bytes <= remaining else { valid = false; break }
-                remaining -= section.bytes
-            }
-            guard valid else { continue }
-            let sizes = Dictionary(uniqueKeysWithValues: m.sections.map { ($0.name, $0.bytes) })
-            let instanceCount = (sizes["instances"] ?? 0) / MemoryLayout<DioramaInstanceData>.stride
-            var groupCount = 0
-            for group in m.groups {
-                guard group.first >= 0, group.count >= 0, group.first <= instanceCount,
-                      group.count <= instanceCount - group.first,
-                      group.count <= DioramaTileArchive.maxBytes / MemoryLayout<DioramaInstanceData>.stride - groupCount else {
-                    valid = false; break
-                }
-                groupCount += group.count
-            }
-            guard valid else { continue }
-            costs.append(DioramaResidencyBudget.cost(payload: DioramaTileArchive.maxBytes - remaining,
-                groupBytes: groupCount * MemoryLayout<DioramaInstanceData>.stride,
-                ground: sizes["ground"] ?? 0, vertices: sizes["vertices"] ?? 0, indices: sizes["indices"] ?? 0,
-                labelTitles: m.labels.map(\.title), context: context, size: size, scale: scale))
+            let directory = root.appendingPathComponent(name)
+            guard let m = try? DioramaTileArchive.validatedManifest(at: directory, key: name),
+                  m.z == tile.z, m.x == tile.x, m.y == tile.y else { continue }
+            let ranges = DioramaTileArchive.baseRanges(m), shells = DioramaTileArchive.baseGroupShells(m)
+            let indexCount = (m.sections.first { $0.name == "indices" }?.bytes ?? 0) / 4
+            let patch = await DioramaVisualUpgrade.shared.cachedPatch(directory: directory, tile: tile, indexCount: indexCount, ranges: ranges, groups: shells)
+            let affected = patch.map { p in
+                let removed = Set(p.metadata.removedTriangles)
+                return ranges.filter { r in r.category == .buildings && stride(from: r.start, to: r.start + r.count, by: 3).contains { removed.contains($0) } }
+                    .reduce(0) { $0 + $1.count }
+            } ?? 0
+            let plan = DioramaTileArchive.residentPlan(m, origin: tile.centre, patchVertices: patch?.additions.vertices.count ?? 0,
+                patchIndices: patch?.additions.indices.count ?? 0, affectedIndices: affected)
+            var cost = DioramaResidencyBudget.residentCost(plan, labelTitles: m.labels.map(\.title), context: context, size: size, scale: scale)
+            // The sidecar's float vertices/indices are held while it is merged.
+            if let patch { cost = .init(retained: cost.retained, peak: cost.peak + patch.additions.totalBytes) }
+            costs.append(cost)
         }
         // A rejected newer candidate may fall back to an older, larger compatible archive.
         guard !costs.isEmpty else { return nil }
         return .init(retained: costs.map(\.retained).max() ?? 0, peak: costs.map(\.peak).max() ?? 0)
+    }
+
+    /// Decodes a saved package straight into shared Metal storage; no CPU duplicate, no network.
+    /// Tries older compatible packages when a newer one is rejected; user bytes are never deleted.
+    func readResident(_ tile: DioramaTileID, context: Bool) async -> DioramaResidentTile? {
+        let request = ReadKey(tile: tile, context: context)
+        readFailures[request] = nil
+        guard let device = DioramaGPUPreparation.shared.device else {
+            readFailures[request] = "Metal device unavailable"; return nil
+        }
+        let names = candidateNames(tile, context: context)
+        let directory = root
+        let revision = dataRevision
+        let started = Date()
+        await acquireReadSlot(focus: !context)
+        defer { releaseReadSlot() }
+        guard !Task.isCancelled else { return nil }
+        let job = Task.detached(priority: context ? .utility : .userInitiated) { () -> (DioramaResidentTile?, String) in
+            var failure = "Saved \(context ? "low-detail" : "full-detail") package is missing"
+            for name in names {
+                if Task.isCancelled { return (nil, failure) }
+                let location = directory.appendingPathComponent(name)
+                guard FileManager.default.fileExists(atPath: location.appendingPathComponent("manifest.json").path) else { continue }
+                do {
+                    let m = try DioramaTileArchive.validatedManifest(at: location, key: name)
+                    guard m.z == tile.z, m.x == tile.x, m.y == tile.y else { continue }
+                    let indexCount = (m.sections.first { $0.name == "indices" }?.bytes ?? 0) / 4
+                    let patch = await DioramaVisualUpgrade.shared.cachedPatch(directory: location, tile: tile, indexCount: indexCount,
+                        ranges: DioramaTileArchive.baseRanges(m), groups: DioramaTileArchive.baseGroupShells(m))
+                    let result = try autoreleasepool {
+                        try DioramaTileArchive.readResident(from: location, key: name, manifest: m, device: device, patch: patch, origin: tile.centre)
+                    }
+                    if patch == nil { print("[Diorama load] \(tile.key) context=\(context): no verified r3 sidecar; original v36 roofs/trees shown") }
+                    return (result, failure)
+                } catch {
+                    if Task.isCancelled || error is CancellationError { return (nil, failure) }
+                    switch error {
+                    case DioramaTileArchive.ArchiveError.incompatible: failure = "Saved package layout is incompatible"
+                    case DioramaTileArchive.ArchiveError.invalid: failure = "Saved package failed geometry/checksum validation or GPU allocation"
+                    case DioramaTileArchive.ArchiveError.compression: failure = "Saved package could not be decompressed"
+                    default: failure = "Saved package could not be read/decoded"
+                    }
+                    print("[Diorama load] \(tile.key) context=\(context) candidate=\(name) rejected: \(failure)")
+                    continue
+                }
+            }
+            return (nil, failure)
+        }
+        let (result, failure) = await withTaskCancellationHandler { await job.value } onCancel: { job.cancel() }
+        guard revision == dataRevision, !Task.isCancelled else { return nil }
+        if result == nil { readFailures[request] = failure }
+        print("[Diorama load] \(tile.key) context=\(context) resident-ready=\(String(format: "%.3f", Date().timeIntervalSince(started)))s gpu=\((result?.gpuBytes ?? 0) / 1_048_576)MiB")
+        return result
     }
 
     /// Deduplicated local reads; at most two decompressions run, with focus ahead of queued context.

@@ -58,13 +58,13 @@ final class DioramaHDTiles {
     private var failures: [DioramaTileID: String] = [:]
     var onChanged: (() -> Void)?
     var onFrameReport: ((String) -> Void)?
-    var onArtifact: ((DioramaTileID, DioramaTileArtifacts?) -> Void)?
+    var onArtifact: ((DioramaTileID, DioramaTileSummary?) -> Void)?
 
     var hasResidents: Bool { !residents.isEmpty }
     var hasTransitions: Bool { !groups.isEmpty || residents.values.contains { $0.arrival != nil } }
     var tiles: [DioramaTileID] { residents.keys.sorted { $0.key < $1.key } }
     var report: String {
-        let summary = "HD: \(residents.count) tiles · \(groups.count) joined transitions · \(residents.values.reduce(0) { $0 + $1.bytes } / 1_048_576) MiB decoded payload (not total memory)"
+        let summary = "HD: \(residents.count) tiles · \(groups.count) joined transitions · \(residents.values.reduce(0) { $0 + $1.bytes } / 1_048_576) MiB resident GPU-shared scenery (not total memory)"
         if !loadingPhase.isEmpty { return summary + "\n" + loadingPhase }
         guard let focus = wanted.first else { return summary + "\n" + requestState }
         if let failure = failures[focus] { return summary + "\n" + focus.key + ": " + failure }
@@ -180,7 +180,7 @@ final class DioramaHDTiles {
                 self.loadingTile = tile
                 do { try await Task.sleep(for: .milliseconds(180)) } catch { return }
                 guard self.wanted.contains(tile), let budget = self.budget else { continue }
-                guard var cost = await DioramaOfflineStore.shared.residencyCost(tile, context: false, size: self.outputSize, scale: Float(UIScreen.main.scale)) else {
+                guard let cost = await DioramaOfflineStore.shared.residencyCost(tile, context: false, size: self.outputSize, scale: Float(UIScreen.main.scale)) else {
                     self.retries[tile] = Date().addingTimeInterval(30)
                     self.failures[tile] = "Saved HD manifest unavailable · downloads retained"; continue
                 }
@@ -200,7 +200,7 @@ final class DioramaHDTiles {
                 defer { if self.residents[tile]?.reservation != reservation { budget.release(reservation) } }
                 self.loadingPhase = "Reading saved HD · \(tile.key)"; self.onChanged?()
                 print("[Diorama HD] reading \(tile.key)")
-                let job = Task.detached(priority: .userInitiated) { await DioramaOfflineStore.shared.read(tile) }
+                let job = Task.detached(priority: .userInitiated) { await DioramaOfflineStore.shared.readResident(tile, context: false) }
                 let artifact = await withTaskCancellationHandler { await job.value } onCancel: { job.cancel() }
                 guard !Task.isCancelled, self.revision == expected, self.wanted.contains(tile),
                       UIApplication.shared.applicationState == .active else { return }
@@ -212,16 +212,17 @@ final class DioramaHDTiles {
                     print("[Diorama HD] saved read unavailable \(tile.key): \(reason); low-detail retained")
                     continue
                 }
-                let actual = DioramaResidencyBudget.cost(artifact, context: false, size: self.outputSize, scale: Float(UIScreen.main.scale))
-                cost = .init(retained: max(cost.retained, actual.retained), peak: max(cost.peak, actual.peak))
-                guard budget.revise(reservation, cost: cost) else {
-                    self.deferredTiles.insert(tile); self.failures[tile] = "Patched HD exceeds CPU/GPU allowance · base retained"
+                // Decoding is complete: the remaining reservation is the actual retained allocation.
+                let retained = DioramaResidencyBudget.residentCost(artifact, context: false, size: self.outputSize, scale: Float(UIScreen.main.scale))
+                let settled = DioramaResidencyBudget.Cost(retained: retained, peak: retained)
+                guard budget.revise(reservation, cost: settled) else {
+                    self.deferredTiles.insert(tile); self.failures[tile] = "Decoded HD exceeds CPU/GPU allowance · base retained"
                     continue
                 }
                 self.retries[tile] = nil; self.failures[tile] = nil
                 self.loadingPhase = "Preparing full-detail GPU resources · \(tile.key)"; self.onChanged?()
                 await self.install(artifact, map: map, revision: expected, reservation: reservation)
-                if self.residents[tile]?.reservation == reservation { budget.commit(reservation, cost: cost) }
+                if self.residents[tile]?.reservation == reservation { budget.commit(reservation, cost: settled) }
                 await Task.yield()
             }
         }
@@ -231,15 +232,11 @@ final class DioramaHDTiles {
         component.compactMap { wanted.firstIndex(of: $0) }.min() ?? Int.max
     }
 
-    private func install(_ artifacts: DioramaTileArtifacts, map: MapboxMap, revision expected: UInt, reservation: UUID) async {
+    private func install(_ artifacts: DioramaResidentTile, map: MapboxMap, revision expected: UInt, reservation: UUID) async {
         let tile = artifacts.tile
-        let host = DioramaRenderLayer(origin: tile.centre, vertices: artifacts.vertices, indices: artifacts.indices,
-            ranges: artifacts.ranges, groups: artifacts.groups, instances: artifacts.allInstances,
-            lightGrid: artifacts.lightGrid, waterHeight: artifacts.waterHeight, groundImage: artifacts.groundImage,
-            groundRect: DioramaProjection(origin: tile.centre).rect(of: tile), visible: categories, timeOfDay: time,
-            animates: true, config: config, labels: artifacts.buildingLabels, displayScale: Float(UIScreen.main.scale),
-            materialsPrepared: artifacts.renderMaterialsPrepared, materialCounts: artifacts.renderMaterialCounts,
-            preparedPoolBounds: artifacts.renderPoolBounds)
+        let host = DioramaRenderLayer(resident: artifacts, groundRect: DioramaProjection(origin: tile.centre).rect(of: tile),
+            visible: categories, timeOfDay: time, config: config, labels: artifacts.labels,
+            displayScale: Float(UIScreen.main.scale), contextOnly: false)
         let upload = Task.detached(priority: .userInitiated) { await DioramaGPUUploadQueue.shared.prepare(host) }
         await withTaskCancellationHandler { await upload.value } onCancel: { upload.cancel() }
         guard !Task.isCancelled, revision == expected, self.map === map, wanted.contains(tile),
@@ -253,7 +250,7 @@ final class DioramaHDTiles {
         host.viewport = viewport
         host.setVisible(categories, timeOfDay: time); host.setWireframe(wireframe)
         host.setReducedEffects(reduced); host.setWaterMotion(motion)
-        let resident = Resident(host: host, bytes: artifacts.decodedBytes, reservation: reservation)
+        let resident = Resident(host: host, bytes: artifacts.gpuBytes + artifacts.cpuBytes, reservation: reservation)
         let settled = Set(residents.keys.filter { candidate in
             residents[candidate]?.host.isRendererReady == true && residents[candidate]?.arrival == nil
                 && residents[candidate]?.reveal.w == 0
@@ -307,7 +304,7 @@ final class DioramaHDTiles {
             var clip = ClipLayer(id: id(tile) + "-labels", source: source.id)
             clip.slot = .top; clip.clipLayerScope = .constant(["basemap"]); clip.clipLayerTypes = .constant([.symbol])
             try map.addLayer(clip)
-            onArtifact?(tile, artifacts)
+            onArtifact?(tile, artifacts.summary)
             startArrival(tile, resident: resident)
             print("[Diorama HD] installed \(tile.key); residents=\(residents.count) decoded=\(resident.bytes)")
             map.triggerRepaint()

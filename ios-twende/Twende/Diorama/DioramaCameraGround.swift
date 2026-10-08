@@ -24,6 +24,24 @@ nonisolated struct DioramaCameraGround {
         lastTriangle = nil
         return nil
     }
+    /// Resident shared-buffer form (packed vertices; painted heightfield code 9).
+    mutating func height(_ p: DV2, ranges: [DioramaRenderLayer.Range], index: (Int) -> UInt32,
+                         position: (Int) -> SIMD4<Float>, isGround: (Int) -> Bool) -> Double? {
+        let point = SIMD2<Float>(Float(p.x), Float(p.y))
+        if let t = lastTriangle, let h = Self.height(point, t.0, t.1, t.2) { return h }
+        for range in ranges where range.category == .ground && point.x >= range.minimum.x && point.x <= range.maximum.x
+            && point.y >= range.minimum.y && point.y <= range.maximum.y {
+            for i in stride(from: range.start, to: range.start + range.count - 2, by: 3) {
+                let ia = Int(index(i)), ib = Int(index(i + 1)), ic = Int(index(i + 2))
+                guard isGround(ia), isGround(ib), isGround(ic) else { continue }
+                let a = position(ia), b = position(ib), c = position(ic)
+                let x = SIMD3(a.x, a.y, a.z), y = SIMD3(b.x, b.y, b.z), z = SIMD3(c.x, c.y, c.z)
+                if let h = Self.height(point, x, y, z) { lastTriangle = (x, y, z); return h }
+            }
+        }
+        lastTriangle = nil
+        return nil
+    }
     private static func height(_ p: SIMD2<Float>, _ a: SIMD3<Float>, _ b: SIMD3<Float>, _ c: SIMD3<Float>) -> Double? {
         let v0 = SIMD2(b.x - a.x, b.y - a.y), v1 = SIMD2(c.x - a.x, c.y - a.y)
         let v2 = p - SIMD2(a.x, a.y)

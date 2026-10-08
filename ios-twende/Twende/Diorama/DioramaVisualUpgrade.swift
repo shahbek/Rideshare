@@ -17,7 +17,7 @@ actor DioramaVisualUpgrade {
         let key = "visual-r\(revision)-\(directory.lastPathComponent)-\(digest.prefix(16))"
         let destination = directory.deletingLastPathComponent().appendingPathComponent(key, isDirectory: true)
         let patch: DioramaVisualPatch
-        if let cached = readPatch(destination, key: key, digest: digest, base: base) {
+        if let cached = readPatch(destination, key: key, digest: digest, tile: base.tile, indexCount: base.indices.count, ranges: base.ranges, groups: base.groups) {
             patch = cached
         } else {
             guard let built = await build(base, digest: digest, context: context), !Task.isCancelled else { return base }
@@ -30,7 +30,7 @@ actor DioramaVisualUpgrade {
                     let bytes = try JSONEncoder().encode(patch.metadata)
                     try bytes.write(to: staging.appendingPathComponent("patch.json"), options: .atomic)
                     try Data(SHA256.hash(data: bytes)).write(to: staging.appendingPathComponent("patch.sha"), options: .atomic)
-                    guard readPatch(staging, key: key, digest: digest, base: base) != nil else { return base }
+                    guard readPatch(staging, key: key, digest: digest, tile: base.tile, indexCount: base.indices.count, ranges: base.ranges, groups: base.groups) != nil else { return base }
                     try Task.checkCancellation()
                     if FileManager.default.fileExists(atPath: destination.path) { try FileManager.default.removeItem(at: destination) }
                     try FileManager.default.moveItem(at: staging, to: destination)
@@ -47,7 +47,19 @@ actor DioramaVisualUpgrade {
         return result
     }
 
-    private func readPatch(_ directory: URL, key: String, digest: String, base: DioramaTileArtifacts) -> DioramaVisualPatch? {
+    /// Previously verified local sidecar for a package, validated against manifest metadata only.
+    /// Never builds: building needs the whole float archive in memory.
+    func cachedPatch(directory: URL, tile: DioramaTileID, indexCount: Int, ranges: [DioramaRenderLayer.Range],
+                     groups: [DioramaInstanceGroup]) -> DioramaVisualPatch? {
+        guard let manifest = try? Data(contentsOf: directory.appendingPathComponent("manifest.json")) else { return nil }
+        let digest = SHA256.hash(data: manifest).map { String(format: "%02x", $0) }.joined()
+        let key = "visual-r\(revision)-\(directory.lastPathComponent)-\(digest.prefix(16))"
+        let destination = directory.deletingLastPathComponent().appendingPathComponent(key, isDirectory: true)
+        return readPatch(destination, key: key, digest: digest, tile: tile, indexCount: indexCount, ranges: ranges, groups: groups)
+    }
+
+    private func readPatch(_ directory: URL, key: String, digest: String, tile: DioramaTileID, indexCount: Int,
+                           ranges baseRanges: [DioramaRenderLayer.Range], groups baseGroups: [DioramaInstanceGroup]) -> DioramaVisualPatch? {
         guard let bytes = try? Data(contentsOf: directory.appendingPathComponent("patch.json")), bytes.count < 4_194_304,
               let checksum = try? Data(contentsOf: directory.appendingPathComponent("patch.sha")),
               checksum == Data(SHA256.hash(data: bytes)),
@@ -55,17 +67,17 @@ actor DioramaVisualUpgrade {
               metadata.revision == revision, metadata.baseDigest == digest,
               Set(metadata.trees.map(\.originalStart)).count == metadata.trees.count,
               let additions = try? DioramaTileArchive.read(from: directory, key: key), additions.totalBytes <= 16 * 1_048_576,
-              additions.tile == base.tile, additions.groups.isEmpty, additions.allInstances.isEmpty,
+              additions.tile == tile, additions.groups.isEmpty, additions.allInstances.isEmpty,
               additions.ranges.allSatisfy({ $0.category == .buildings }),
               metadata.trees.allSatisfy({ tree in
-                  base.groups.contains { $0.category == .vegetation && $0.fullStart == tree.originalStart }
+                  baseGroups.contains { $0.category == .vegetation && $0.fullStart == tree.originalStart }
                       && tree.fullStart >= 0 && tree.fullStart <= additions.indices.count && tree.fullStart % 3 == 0
                       && tree.fullCount > 0 && tree.fullCount % 3 == 0 && tree.fullCount <= additions.indices.count - tree.fullStart
                       && tree.lightStart >= 0 && tree.lightStart <= additions.indices.count && tree.lightStart % 3 == 0
                       && tree.lightCount > 0 && tree.lightCount % 3 == 0 && tree.lightCount <= additions.indices.count - tree.lightStart
                       && tree.radius.isFinite && tree.radius > 0 && tree.radius < 30
               }), metadata.removedTriangles.allSatisfy({ index in
-                  index >= 0 && index <= base.indices.count && 3 <= base.indices.count - index && base.ranges.contains {
+                  index >= 0 && index <= indexCount && 3 <= indexCount - index && baseRanges.contains {
                       $0.category == .buildings && index >= $0.start && index <= $0.start + $0.count
                           && 3 <= $0.start + $0.count - index && (index - $0.start) % 3 == 0
                   }
