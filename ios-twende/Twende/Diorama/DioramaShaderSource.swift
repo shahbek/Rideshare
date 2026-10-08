@@ -48,10 +48,10 @@ nonisolated enum DioramaLighting {
         let sun: SIMD3<Float>, sunColor: SIMD3<Float>, sky: SIMD3<Float>, ground: SIMD3<Float>, glow: Float
         switch time {
         case .day:
-            sun = simd_normalize(SIMD3<Float>(-0.64, -0.48, 0.60))
-            sunColor = SIMD3<Float>(1.0, 0.985, 0.86) * 0.80
-            sky = SIMD3<Float>(0.86, 0.87, 0.72)
-            ground = SIMD3<Float>(0.55, 0.56, 0.34)
+            sun = simd_normalize(SIMD3<Float>(-0.55, -0.40, 0.73))
+            sunColor = SIMD3<Float>(1.0, 0.99, 0.96) * 0.66
+            sky = SIMD3<Float>(0.91, 0.93, 0.90)
+            ground = SIMD3<Float>(0.65, 0.69, 0.53)
             glow = 0
         case .dusk:
             sun = simd_normalize(SIMD3<Float>(-0.75, -0.45, 0.34))
@@ -328,6 +328,42 @@ nonisolated enum DioramaShaderSource {
 
     struct DioramaPaintTriangle { float4 edge0; float4 edge1; float4 edge2; float4 color; };
 
+    // Decode before filtering: averaging IDs 0 and 3 must never manufacture grass ID 1.
+    float4 dioramaFinishCoverage(float material) {
+        return float4(material == 1.0 ? 1.0 : 0.0, material == 6.0 ? 1.0 : 0.0,
+                      material == 3.0 ? 1.0 : 0.0, material == 2.0 ? 1.0 : 0.0);
+    }
+    struct DioramaFinishLookup { float owner; float4 coverage; };
+    DioramaFinishLookup dioramaGroundFinish(texture2d<float> image, float2 uv) {
+        int2 size = int2(image.get_width(), image.get_height());
+        float2 pixel = uv * float2(size) - 0.5;
+        int2 origin = int2(floor(pixel));
+        float2 f = fract(pixel);
+        float4 alpha = float4(
+            image.read(uint2(clamp(origin, int2(0), size - 1)), 0).a,
+            image.read(uint2(clamp(origin + int2(1, 0), int2(0), size - 1)), 0).a,
+            image.read(uint2(clamp(origin + int2(0, 1), int2(0), size - 1)), 0).a,
+            image.read(uint2(clamp(origin + int2(1, 1), int2(0), size - 1)), 0).a);
+        float4 ids = floor(alpha * 255.0 / 32.0 + 0.5);
+        DioramaFinishLookup result;
+        result.owner = f.y < 0.5 ? (f.x < 0.5 ? ids.x : ids.y) : (f.x < 0.5 ? ids.z : ids.w);
+        result.coverage = mix(mix(dioramaFinishCoverage(ids.x), dioramaFinishCoverage(ids.y), f.x),
+                              mix(dioramaFinishCoverage(ids.z), dioramaFinishCoverage(ids.w), f.x), f.y);
+        return result;
+    }
+    float dioramaEarthFraction(float3 color) {
+        // The original painter feathered RGB, but wrote a solid categorical dirt outline.
+        // Project onto both unchanged source swatches so saved lawns retain their feather too.
+        float3 earth = float3(179.0, 152.0, 122.0) / 255.0;
+        float3 grass = float3(131.0, 173.0, 50.0) / 255.0;
+        float3 lawn = float3(148.0, 188.0, 59.0) / 255.0;
+        float3 dg = earth - grass, dl = earth - lawn;
+        float tg = saturate(dot(color - grass, dg) / dot(dg, dg));
+        float tl = saturate(dot(color - lawn, dl) / dot(dl, dl));
+        float3 eg = color - mix(grass, earth, tg), el = color - mix(lawn, earth, tl);
+        return dot(eg, eg) < dot(el, el) ? tg : tl;
+    }
+
     fragment float4 dioramaFragment(DioramaVarying in [[stage_in]],
                                     bool isFront [[front_facing]],
                                     constant DioramaUniforms &u [[buffer(0)]],
@@ -395,67 +431,57 @@ nonisolated enum DioramaShaderSource {
         // Procedural ground textures (appearance.y), kept very quiet so the toy-town surfaces read as
         // smooth painted material with only a faint mottle: grass, sand, asphalt, paving.
         float tex = in.appearance.y;
+        bool paintedGround = tex > 8.5 && tex < 9.5;
+        float4 finish = dioramaFinishCoverage(tex);
+        // Material 6 is glass outside the painted terrain; only its alpha codes mean dirt.
+        if (!paintedGround) finish.y = 0.0;
+        float grassDetailWeight = finish.x;
         float2 wp = surfacePosition.xy;
         if (tex > 8.5 && tex < 9.5) {
             // Painted ground: albedo from the tile image, grain code from its alpha (×32).
             constexpr sampler groundSampler(coord::normalized, address::clamp_to_edge, filter::linear, mip_filter::linear, max_anisotropy(8));
-            constexpr sampler materialSampler(coord::normalized, address::clamp_to_edge, filter::nearest);
             float2 guv = (wp - u.groundImage.xy) * u.groundImage.zw;
             guv.y = 1.0 - guv.y;
             float4 painted = groundImage.sample(groundSampler, guv);
             albedo = painted.rgb;
-            // Codes are categorical: interpolating white paint (0) into asphalt (3) invents
-            // grass (1), incorrectly applying coastal pigment inside road markings.
-            tex = floor(groundImage.sample(materialSampler, guv, level(0.0)).a * 255.0 / 32.0 + 0.5);
-            // Resolution-independent lane paint, spatially indexed into 64×64 cells.
-            // Only asphalt receives it: later water/natural paint still owns the coastline.
-            if (tex > 2.5 && tex < 3.5) {
-                int2 cell = clamp(int2((wp - u.groundImage.xy) * u.groundImage.zw * 64.0), int2(0), int2(63));
-                uint2 entry = paintTable[cell.y * 64 + cell.x];
-                float aa = max(0.003, min(0.5, length(fwidth(wp)) * 0.65));
-                float white = 0.0, yellow = 0.0;
-                float3 whiteColor = float3(0.98, 0.96, 0.92), yellowColor = float3(0.96, 0.77, 0.19);
-                for (uint k = 0; k < entry.y; k++) {
-                    DioramaPaintTriangle t = paint[paintIndices[entry.x + k]];
-                    float3 p = float3(wp, 1.0);
-                    float distance = min(dot(t.edge0.xyz, p), min(dot(t.edge1.xyz, p), dot(t.edge2.xyz, p)));
-                    float coverage = smoothstep(-aa, aa, distance);
-                    if (t.color.b < 0.5) { yellow += coverage; yellowColor = t.color.rgb; }
-                    else { white += coverage; whiteColor = t.color.rgb; }
-                }
-                albedo = mix(albedo, whiteColor, saturate(white));
-                albedo = mix(albedo, yellowColor, saturate(yellow));
-            }
-            if (tex > 0.5 && tex < 1.5) {
-                // Natural coast pigment is interpolated on the same mesh as the land and seabed.
-                // Hard finishes retain their painted color and never become a second surface.
-                albedo = mix(albedo, in.color.rgb, saturate(in.appearance.z));
+            DioramaFinishLookup material = dioramaGroundFinish(groundImage, guv);
+            tex = material.owner;
+            finish = material.coverage;
+            if (finish.x > 0.0001) {
+                // Coast pigment stays on the same surface; hard finishes keep their ownership.
+                albedo = mix(albedo, in.color.rgb, saturate(in.appearance.z) * finish.x);
             }
         }
-        if (tex > 0.5 && tex < 1.5) {
-            // Regrade existing painted downloads without replacing their material boundaries.
+        float naturalArea = finish.x + finish.y;
+        float naturalCoverage = paintedGround ? saturate(in.appearance.z) : 0.0;
+        float soilFraction = 0.0;
+        grassDetailWeight = 0.0;
+        if (naturalArea > 0.0001) {
             float luminance = dot(albedo, float3(0.2126, 0.7152, 0.0722));
-            float naturalCoverage = in.appearance.y > 8.5 ? saturate(in.appearance.z) : 0.0;
-            float greenMask = smoothstep(0.015, 0.10, albedo.g - max(albedo.r, albedo.b));
-            float3 grass = mix(float3(171.0, 197.0, 45.0), float3(181.0, 206.0, 54.0),
+            if (paintedGround && finish.y > 0.0001) {
+                soilFraction = smoothstep(0.08, 0.94, dioramaEarthFraction(albedo));
+            }
+            float3 grass = mix(float3(145.0, 170.0, 52.0), float3(156.0, 182.0, 64.0),
                                smoothstep(0.42, 0.72, luminance)) / 255.0;
-            albedo = mix(albedo, grass, greenMask * (1.0 - naturalCoverage));
+            float3 earth = float3(179.0, 152.0, 122.0) / 255.0;
+            float vegetation = naturalArea * (1.0 - naturalCoverage);
+            albedo = mix(albedo, mix(grass, earth, soilFraction), vegetation);
+            grassDetailWeight = vegetation * (1.0 - soilFraction);
             float mottle = dioramaNoise(wp * 0.09) * 0.7 + dioramaNoise(wp * 0.35) * 0.3;
-            albedo *= 0.99 + 0.04 * (mottle - 0.5);
-        } else if (tex > 1.5 && tex < 2.5) {
+            float clods = dioramaNoise(wp * 1.7) * 0.65 + dioramaNoise(wp * 0.18) * 0.35;
+            albedo *= 1.0 + (mottle - 0.5) * 0.035 * grassDetailWeight
+                         + (clods - 0.5) * 0.10 * vegetation * soilFraction;
+        }
+        if (tex > 1.5 && tex < 2.5) {
             albedo *= 0.98 + 0.04 * (dioramaNoise(wp * 0.5) - 0.5);
-        } else if (tex > 2.5 && tex < 3.5) {
-            // Quiet warm-grey asphalt, not the old dark violet. Preserve white/yellow paint and earth.
+        } else if (finish.z > 0.0001) {
+            // Quiet rosy warm-grey; mask out white/yellow paint and red-earth road finishes.
             float coolAsphalt = smoothstep(-0.015, 0.045, albedo.b - albedo.g)
                 * (1.0 - smoothstep(0.60, 0.80, min(albedo.r, min(albedo.g, albedo.b))));
-            albedo = mix(albedo, float3(173.0, 163.0, 160.0) / 255.0, coolAsphalt);
-            albedo *= 0.99 + 0.025 * (dioramaNoise(wp * 0.4) - 0.5);
+            albedo = mix(albedo, float3(169.0, 156.0, 151.0) / 255.0, coolAsphalt * finish.z);
+            albedo *= 1.0 + (dioramaNoise(wp * 0.4) - 0.5) * 0.025 * finish.z;
         } else if (tex > 3.5 && tex < 4.5) {
             albedo *= 0.98 + 0.04 * (dioramaNoise(wp * 0.6) - 0.5);
-        } else if (tex > 5.5 && tex < 6.5 && in.appearance.y > 8.5) {
-            // Inland compacted earth: quiet ochre/brown clods, distinct from fine coastal sand.
-            float clods = dioramaNoise(wp * 1.7) * 0.65 + dioramaNoise(wp * 0.18) * 0.35;
-            albedo *= 0.96 + 0.10 * (clods - 0.5);
         }
 
         if (tex > 9.5 && tex < 10.5) {
@@ -463,22 +489,23 @@ nonisolated enum DioramaShaderSource {
             // never enter this material. Keep source palette bytes stable for exact roof replay.
             float luminance = dot(albedo, float3(0.2126, 0.7152, 0.0722));
             float tone = smoothstep(0.22, 0.74, luminance);
-            float3 shade = float3(145.0, 170.0, 39.0) / 255.0;
-            float3 middle = float3(174.0, 198.0, 49.0) / 255.0;
-            float3 crown = float3(202.0, 220.0, 77.0) / 255.0;
+            float3 shade = float3(156.0, 177.0, 61.0) / 255.0;
+            float3 middle = float3(180.0, 202.0, 80.0) / 255.0;
+            float3 crown = float3(208.0, 223.0, 121.0) / 255.0;
             albedo = tone < 0.60 ? mix(shade, middle, tone / 0.60)
                                  : mix(middle, crown, (tone - 0.60) / 0.40);
         }
 
         // Legacy saved wall vertices already carry height grading; texture them without a rebuild.
         if (tex < 0.5 && in.appearance.z > 100.0 && abs(n.z) < 0.25) tex = 12.0;
-        // One mipmapped sample: CC0 luminance in RG, original miniature leaf relief/pigment in BA.
+        // One mipmapped sample: CC0 grain in RG, crown leaves in B, larger curved grass blades in A.
         // Surface-gradient shading adds relief without displacement or additional geometry/passes.
         bool foliage = tex > 9.5 && tex < 10.5;
-        bool grassSurface = tex > 0.5 && tex < 1.5;
-        bool textured = (tex > 0.5 && tex < 4.5) || (tex > 9.5 && tex < 13.5);
+        bool grassSurface = naturalArea > 0.0001;
+        bool textured = grassSurface ? grassDetailWeight > 0.0001
+            : ((tex > 0.5 && tex < 4.5) || (tex > 9.5 && tex < 13.5));
         if (textured && u.shoreline.z < 0.5 && u.groundColor.w > 0.5) {
-            float repeatSize = grassSurface ? 3.2 : (foliage ? 1.6 : 1.4);
+            float repeatSize = grassSurface ? 4.0 : (foliage ? 2.4 : 1.4);
             float2 detailUV = wp / repeatSize;
             if (foliage) {
                 float3 axis = abs(surfaceNormal);
@@ -493,12 +520,12 @@ nonisolated enum DioramaShaderSource {
             constexpr sampler detailSampler(coord::normalized, address::repeat, filter::linear, mip_filter::linear);
             float4 grain = microdetail.sample(detailSampler, detailUV);
             float value = (grassSurface || foliage) ? grain.r : grain.g;
-            float strength = grassSurface ? 0.10 : (foliage ? 0.055 : 0.075);
+            float strength = grassSurface ? 0.025 * grassDetailWeight : (foliage ? 0.018 : 0.075);
             albedo *= 1.0 + (value - 0.502) * strength * resolved;
             if (grassSurface || foliage) {
-                float naturalCoverage = grassSurface && in.appearance.y > 8.5 ? saturate(in.appearance.z) : 0.0;
-                float reliefWeight = resolved * (1.0 - naturalCoverage);
-                float height = grain.b * (foliage ? 0.009 : 0.016);
+                float reliefWeight = resolved * (foliage ? 1.0 : grassDetailWeight);
+                float relief = foliage ? grain.b : grain.a;
+                float height = relief * (foliage ? 0.012 : 0.028);
                 float3 dx = dfdx(surfacePosition), dy = dfdy(surfacePosition);
                 float3 rx = cross(dy, surfaceNormal), ry = cross(surfaceNormal, dx);
                 float determinant = dot(dx, rx);
@@ -510,7 +537,7 @@ nonisolated enum DioramaShaderSource {
                     float3 reliefNormal = normalize(surfaceNormal - slope * 0.65);
                     detailNormal = normalize(mix(surfaceNormal, reliefNormal, reliefWeight));
                 }
-                albedo *= 1.0 + (grain.a - 0.502) * 0.24 * reliefWeight;
+                albedo *= 1.0 + relief * (foliage ? 0.018 : 0.012) * reliefWeight;
             }
         }
 
@@ -553,6 +580,26 @@ nonisolated enum DioramaShaderSource {
             albedo = mix(albedo, paint, mask * detail);
         }
 
+        // Apply analytic lane paint after natural recolouring/detail so boundary coverages cannot
+        // tint its white/yellow pigment. Nearest asphalt ownership still excludes coast and paving.
+        if (paintedGround && tex > 2.5 && tex < 3.5) {
+            int2 cell = clamp(int2((wp - u.groundImage.xy) * u.groundImage.zw * 64.0), int2(0), int2(63));
+            uint2 entry = paintTable[cell.y * 64 + cell.x];
+            float aa = max(0.003, min(0.5, length(fwidth(wp)) * 0.65));
+            float white = 0.0, yellow = 0.0;
+            float3 whiteColor = float3(0.98, 0.96, 0.92), yellowColor = float3(0.96, 0.77, 0.19);
+            for (uint k = 0; k < entry.y; k++) {
+                DioramaPaintTriangle t = paint[paintIndices[entry.x + k]];
+                float3 p = float3(wp, 1.0);
+                float distance = min(dot(t.edge0.xyz, p), min(dot(t.edge1.xyz, p), dot(t.edge2.xyz, p)));
+                float coverage = smoothstep(-aa, aa, distance);
+                if (t.color.b < 0.5) { yellow += coverage; yellowColor = t.color.rgb; }
+                else { white += coverage; whiteColor = t.color.rgb; }
+            }
+            albedo = mix(albedo, whiteColor, saturate(white));
+            albedo = mix(albedo, yellowColor, saturate(yellow));
+        }
+
         // Shadows and lighting always use the original scene, including in the reflection pass.
         float3 litPos = surfacePosition;
         float3 litN = surfaceNormal;
@@ -566,9 +613,10 @@ nonisolated enum DioramaShaderSource {
             ao = 1.0 - u.post.x * (1.0 - occlusion.sample(aoSampler, suv).r);
         }
         float ndl = dot(detailNormal, u.sunDirection.xyz);
-        float sun = max(ndl, 0.0);
+        float wrap = foliage && u.params.z < 0.5 ? 0.18 : 0.0;
+        float sun = saturate((ndl + wrap) / (1.0 + wrap));
         float visibility = dioramaShadow(litPos, litN, u, shadowMap);
-        float ambientStrength = u.params.z < 0.5 ? 0.50 : 0.78;
+        float ambientStrength = u.params.z < 0.5 ? 0.62 : 0.78;
         float3 light = ambient * ambientStrength * ao + u.sunColor.rgb * sun * visibility * (0.75 + 0.25 * ao);
         float3 pointLight = glow > 0.01 ? dioramaPointLights(litPos, litN, u, lights, lightTable, lightIndices) : float3(0.0);
         light += pointLight * glow * (0.6 + 0.4 * ao);

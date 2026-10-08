@@ -282,7 +282,7 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
             let materialUpload = DioramaLegacyFoliageMaterial.tagged(vertices, indices: indices, ranges: ranges, groups: groups)
             vertexBuffer = upload(materialUpload.vertices, fallback: vertices[0])
             #if DEBUG
-            print("[Diorama material] legacy_foliage_vertices=\(materialUpload.count) preset=\(timeOfDay.rawValue) color_format=\(colorPixelFormat)")
+            print("[Diorama material] legacy_foliage_vertices=\(materialUpload.count) preset=\(timeOfDay.rawValue) color_format=\(colorPixelFormat) natural_finish=coverage-v2")
             #endif
             indexBuffer = upload(indices, fallback: 0)
             instanceBuffer = upload(instances, fallback: .identity)

@@ -1,7 +1,7 @@
 import Foundation
 import Metal
 
-/// Shared CC0 luminance plus original leaf relief per Metal device, independent of map downloads.
+/// Shared CC0 luminance plus separate original leaf/grass relief, independent of map downloads.
 nonisolated enum DioramaSurfaceTexture {
     private static let lock = NSLock()
     nonisolated(unsafe) private static var textures: [ObjectIdentifier: MTLTexture] = [:]
@@ -20,7 +20,7 @@ nonisolated enum DioramaSurfaceTexture {
         descriptor.usage = .shaderRead
         descriptor.storageMode = .shared
         guard let texture = device.makeTexture(descriptor: descriptor) else { return nil }
-        var pixels = valid ? (bytes ?? Data()) : Data([128, 128, 0, 128])
+        var pixels = valid ? (bytes ?? Data()) : Data([128, 128, 0, 0])
         if valid { DioramaLeafRelief.pack(into: &pixels, size: size) }
         pixels.withUnsafeBytes { buffer in
             if let base = buffer.baseAddress {
@@ -38,7 +38,7 @@ nonisolated enum DioramaSurfaceTexture {
             guard command.status == .completed else { return nil }
         }
         #if DEBUG
-        print("[Diorama material] detail_ready=\(valid) size=\(descriptor.width) leaf_relief=\(valid)")
+        print("[Diorama material] detail_ready=\(valid) size=\(descriptor.width) leaf_relief=\(valid) grass_relief=\(valid) style=paired-closeup-v2")
         #endif
         textures[key] = texture
         return texture
