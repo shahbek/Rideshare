@@ -37,7 +37,7 @@ nonisolated struct DioramaPropLibrary: Sendable {
     /// Smooth shoreline rocks in three tones; placements vary rotation and scale.
     let rocks: [DioramaPrototype]
 
-    init(config: DioramaConfig) {
+    init(config: DioramaConfig, structuredTrees: Bool = true) {
         var registry: [DioramaPrototype] = []
         func make(_ full: DioramaMesh, light: DioramaMesh? = nil) -> DioramaPrototype {
             let prototype = DioramaPrototype(id: registry.count, full: full, light: light)
@@ -46,7 +46,7 @@ nonisolated struct DioramaPropLibrary: Sendable {
         }
         palms = [(UInt64(1), 0.9), (2, 0.4), (3, 1.3)].map { make(Self.makePalm(seed: $0.0, lean: $0.1), light: Self.makePalm(seed: $0.0, lean: $0.1, light: true)) }
         palm = palms[0]
-        trees = [
+        let legacyTrees: [DioramaPrototype] = structuredTrees ? [] : [
             make(Self.makeLumpyTree(seed: 1, scale: 1.0), light: Self.makeLumpyTree(seed: 1, scale: 1.0, light: true)),
             make(Self.makeLumpyTree(seed: 2, scale: 1.2), light: Self.makeLumpyTree(seed: 2, scale: 1.2, light: true)),
             make(Self.makeLumpyTree(seed: 3, scale: 0.85), light: Self.makeLumpyTree(seed: 3, scale: 0.85, light: true)),
@@ -57,7 +57,12 @@ nonisolated struct DioramaPropLibrary: Sendable {
             make(Self.makeTallTree(seed: 7), light: Self.makeTallTree(seed: 7, light: true)),
             make(Self.makeOrnamentalTree(seed: 8), light: Self.makeOrnamentalTree(seed: 8, light: true)),
         ]
-        cypress = make(Self.makeCypress(), light: Self.makeCypress(light: true))
+        trees = structuredTrees ? (0..<9).map { variant in
+            make(DioramaTreeModels.make(variant: variant), light: DioramaTreeModels.make(variant: variant, light: true))
+        } : legacyTrees
+        cypress = structuredTrees
+            ? make(DioramaTreeModels.make(variant: 9), light: DioramaTreeModels.make(variant: 9, light: true))
+            : make(Self.makeCypress(), light: Self.makeCypress(light: true))
         flamboyant = make(Self.makeFlamboyant(), light: Self.makeFlamboyant(light: true))
         bushes = [(UInt64(11), DioramaSwatch.hedge), (12, .leafOlive), (13, .leafBright), (14, .leafDark)].map { make(Self.makeBush(seed: $0.0, $0.1), light: Self.makeBush(seed: $0.0, $0.1, light: true)) }
         flowerBushes = [(UInt64(21), DioramaSwatch.flowerPink), (22, .flowerYellow), (23, .flowerRed), (24, .flowerWhite)].map { make(Self.makeFlowerBush(seed: $0.0, $0.1), light: Self.makeFlowerBush(seed: $0.0, $0.1, light: true)) }

@@ -122,7 +122,7 @@ final class DioramaContextTiles {
         guard let map else { return }
         let tile = artifacts.tile
         let host = DioramaRenderLayer(origin: tile.centre, vertices: artifacts.vertices, indices: artifacts.indices,
-            ranges: artifacts.ranges, lightGrid: artifacts.lightGrid, waterHeight: artifacts.waterHeight,
+            ranges: artifacts.ranges, groups: artifacts.groups, instances: artifacts.allInstances, lightGrid: artifacts.lightGrid, waterHeight: artifacts.waterHeight,
             groundImage: artifacts.groundImage, groundRect: DioramaProjection(origin: tile.centre).rect(of: tile),
             visible: visible, timeOfDay: time, animates: false, config: config, contextOnly: true)
         host.setReducedEffects(true); host.setWireframe(wireframe)

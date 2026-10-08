@@ -89,6 +89,7 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
     private let groundImage: DioramaGroundImage?
     private let groundRect: DioramaRect
     private var groundTexture: MTLTexture?
+    private var surfaceTexture: MTLTexture?
     private var paintBuffer: MTLBuffer?
     private var paintTableBuffer: MTLBuffer?
     private var paintIndexBuffer: MTLBuffer?
@@ -274,6 +275,7 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
                     return metalDevice.makeBuffer(bytes: address, length: data.count * MemoryLayout<T>.stride, options: .storageModeShared)
                 }
             }
+            surfaceTexture = DioramaSurfaceTexture.texture(device: metalDevice)
             lightBuffer = upload(lightGrid.lights, fallback: DioramaShaderLight(position: .zero, color: .zero))
             lightTableBuffer = upload(lightGrid.table, fallback: SIMD2<UInt32>(0, 0))
             lightIndexBuffer = upload(lightGrid.indices, fallback: UInt32(0))
@@ -404,6 +406,7 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
         guard eye.x.isFinite, eye.y.isFinite, eye.z.isFinite else { return }
 
         var uniforms = DioramaLighting.uniforms(for: timeOfDay, eye: eye)
+        uniforms.groundColor.w = surfaceTexture == nil ? 0 : 1
         uniforms.reveal = reveal
         uniforms.shoreline = shorelineSettings
         uniforms.shoreline.z = reducedEffects ? 1 : 0
@@ -442,7 +445,7 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
                 signature: timeOfDay.rawValue + visible.map(\.rawValue).sorted().joined(),
                 vertices: vertexBuffer, indices: indexBuffer, instances: instanceBuffer,
                 fragmentBuffers: [lightBuffer, lightTableBuffer, lightIndexBuffer, paintBuffer, paintTableBuffer, paintIndexBuffer],
-                textures: [blankReflection, shadowMap?.texture, groundTexture ?? blankReflection, blankReflection], ranges: drawn, groups: reflectionGroups)
+                textures: [blankReflection, shadowMap?.texture, groundTexture ?? blankReflection, blankReflection, surfaceTexture ?? blankReflection], ranges: drawn, groups: reflectionGroups)
         }
         uniforms.water.y = reflected == nil ? 0 : 1
 
@@ -502,6 +505,7 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
         encoder.setFragmentTexture(shadowMap?.texture, index: 1)
         encoder.setFragmentTexture(groundTexture ?? blankReflection, index: 2)
         encoder.setFragmentTexture(postProcess?.occlusion ?? blankReflection, index: 3)
+        encoder.setFragmentTexture(surfaceTexture ?? blankReflection, index: 4)
         // Opaque seabed, coral and hulls first; translucent sea then tints submerged geometry.
         // Closed shapes cull their backs; ranges flagged double-sided (fronds, sails) do not.
         var cullMode: MTLCullMode = .back
@@ -585,6 +589,7 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
         lightIndexBuffer = nil
         blankReflection = nil
         groundTexture = nil
+        surfaceTexture = nil
         paintBuffer = nil; paintTableBuffer = nil; paintIndexBuffer = nil
         reflectionPass = nil
         shadowMap = nil

@@ -1,7 +1,7 @@
 import CryptoKit
 import Foundation
 
-/// User-owned packages live outside the purgeable HTTP/LRU caches. Viewing never fetches or builds.
+/// User-owned packages live outside purgeable caches. Local visual patches never fetch or rebuild a tile.
 actor DioramaOfflineStore {
     static let shared = DioramaOfflineStore()
     nonisolated static let tiles: [DioramaTileID] = {
@@ -28,14 +28,14 @@ actor DioramaOfflineStore {
         let free = try root.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]).volumeAvailableCapacityForImportantUsage ?? 0
         guard free > 900 * 1_048_576 else { throw Failure.storage }
     }
-    func read(_ tile: DioramaTileID, context: Bool = false) -> DioramaTileArtifacts? {
+    func read(_ tile: DioramaTileID, context: Bool = false) async -> DioramaTileArtifacts? {
         for name in candidateNames(tile, context: context) {
             if Task.isCancelled { return nil }
             let directory = root.appendingPathComponent(name)
             do {
                 let artifact = try DioramaTileArchive.read(from: directory, key: name)
                 guard artifact.tile == tile else { continue }
-                return artifact
+                return await DioramaVisualUpgrade.shared.apply(artifact, directory: directory, context: context)
             } catch {
                 // Keep user-owned bytes on transient I/O/decode failure; try an older compatible copy.
                 continue

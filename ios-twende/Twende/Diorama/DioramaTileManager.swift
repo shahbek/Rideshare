@@ -16,7 +16,13 @@ final class DioramaState {
         }
     }
     static let renderSettingsChanged = Notification.Name("zuri.diorama.renderSettingsChanged")
-    var timeOfDay: DioramaTimeOfDay = .dusk { didSet { notifyRenderer() } }
+    var timeOfDay: DioramaTimeOfDay = DioramaTimeOfDay(rawValue: UserDefaults.standard.string(forKey: "zuri.diorama.timeOfDay") ?? "") ?? .day {
+        didSet {
+            guard timeOfDay != oldValue else { return }
+            UserDefaults.standard.set(timeOfDay.rawValue, forKey: "zuri.diorama.timeOfDay")
+            notifyRenderer()
+        }
+    }
     var visibleCategories: Set<DioramaCategory> = Set(DioramaCategory.allCases.filter { $0 != .shorelineDebug }) { didSet { notifyRenderer() } }
     var showsDebugOverlay: Bool = false { didSet { notifyRenderer() } }
     var showsWireframe: Bool = false { didSet { notifyRenderer() } }

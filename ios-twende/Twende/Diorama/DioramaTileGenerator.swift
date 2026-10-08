@@ -245,47 +245,7 @@ nonisolated enum DioramaTileGenerator {
         /// Appends a mesh's vertices with the shader codes of `category`; returns the first vertex index.
         func bake(_ mesh: DioramaMesh, category: DioramaCategory) -> Int {
             let base = vertices.count
-            // Shader paths (appearance.w): 0 lit surface, 1 water, 4 emissive, 5 halo sprite.
-            let baseCode: Float = category == .shorelineDebug ? 6 : (category.isEmissive ? 4 : (category == .water ? 1 : 0))
-            for i in 0..<mesh.positions.count {
-                let p = mesh.positions[i]
-                let n = mesh.normals[i]
-                let cell = DioramaAtlas.lookup(mesh.uvs[i])
-                let isHalo = category == .propGlow && cell?.swatch == .lampGlow && p.z > 0 && abs(n.z) > 1.5
-                // appearance.y picks a procedural surface texture: 1 grass, 2 sand, 3 asphalt, 4 paving,
-                // 5 pool water, 9 painted ground image. appearance.z carries the mesh's free attribute
-                // (shore distance on water).
-                let texture: Float
-                switch cell?.swatch {
-                case .painted: texture = 9
-                case .grass, .lawn, .pitchGreen: texture = 1
-                case .earth, .wetSand, .seabed: texture = 2
-                case .asphalt: texture = 3
-                case .paving, .pavement, .concrete: texture = 4
-                case .poolBlue: texture = 5
-                case .glass, .glassPale: texture = 6
-                case .tileClay: texture = 7
-                case .muralBlue: texture = 8
-                default: texture = 0
-                }
-                let attribute = i < mesh.attributes.count ? mesh.attributes[i] : 0
-                let appearance = SIMD4<Float>(0.85, texture, attribute.isFinite ? attribute : 0, isHalo ? 5 : baseCode)
-                guard p.x.isFinite, p.y.isFinite, p.z.isFinite else {
-                    vertices.append(BuildingRenderVertex(position: SIMD4(0, 0, 0, 1), normal: SIMD4(0, 0, 1, 0), color: SIMD4(1, 0, 1, 1), appearance: appearance))
-                    continue
-                }
-                var color = cell.map { DioramaAtlas.color($0.swatch, dark: $0.dark, config: config) } ?? SIMD4<Float>(1, 0, 1, 1)
-                if i < mesh.tints.count {
-                    let t = mesh.tints[i]
-                    color = SIMD4(min(color.x * t.x, 1), min(color.y * t.y, 1), min(color.z * t.z, 1), color.w)
-                }
-                var normal = SIMD4<Float>(Float(n.x), Float(n.y), Float(n.z), 0)
-                if !(normal.x.isFinite && normal.y.isFinite && normal.z.isFinite) { normal = SIMD4(0, 0, 1, 0) }
-                vertices.append(BuildingRenderVertex(
-                    position: SIMD4<Float>(Float(p.x), Float(p.y), Float(p.z), 1),
-                    normal: normal, color: color, appearance: appearance
-                ))
-            }
+            vertices.append(contentsOf: DioramaMeshPacking.vertices(mesh, category: category, config: config))
             return base
         }
 

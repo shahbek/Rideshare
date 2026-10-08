@@ -1,0 +1,13 @@
+{
+  "license": "CC0-1.0",
+  "licenseURL": "https://docs.ambientcg.com/license/",
+  "asset": "diorama_microdetail_v1.rgba",
+  "size": [256, 256],
+  "processing": "Downsampled, mean-normalized grayscale color maps packed into RGBA. No normal, roughness, displacement or height maps.",
+  "channels": {
+    "red": { "name": "Grass004", "author": "ambientCG", "url": "https://ambientcg.com/view?id=Grass004" },
+    "green": { "name": "Asphalt004", "author": "ambientCG", "url": "https://ambientcg.com/view?id=Asphalt004" },
+    "blue": "Asphalt004 shared fine-grain channel",
+    "alpha": "opaque"
+  }
+}

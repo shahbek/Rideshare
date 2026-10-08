@@ -112,8 +112,7 @@ nonisolated struct DioramaBuildingGenerator {
             }
         }
 
-        // Hip roofs are traced on the real footprint, so L- and U-shapes get valleys instead of a
-        // flat lid. Footprints cut by the tile edge keep a flat roof so nothing hangs over the cut.
+        // Join footprint-derived hip wings; tile cuts/ownership fragments keep their safe flat decks.
         var flatRoof = kind != .villa
         if kind == .villa, rng.chance(1 - config.hipRoofShare) { flatRoof = true }
         if !flatRoof, flags.contains(true) { flatRoof = true }
@@ -123,7 +122,7 @@ nonisolated struct DioramaBuildingGenerator {
         if !flatRoof {
             let roofed = DioramaRoofBuilder.hip(ring, flags: flags, z: height, pitch: config.roofPitchDegrees * Double.pi / 180,
                                                 overhang: config.roofOverhang, maxRise: config.hipRoofMaxRise,
-                                                color: pitchedColor, fascia: .trimWhite, into: &mesh)
+                                                color: pitchedColor, fascia: .trimWhite, into: &mesh, footprint: f.ring)
             if !roofed { flatRoof = true }
         }
         if flatRoof {

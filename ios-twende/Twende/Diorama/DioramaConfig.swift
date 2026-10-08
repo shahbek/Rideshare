@@ -47,19 +47,19 @@ nonisolated enum DioramaSwatch: Int, CaseIterable, Sendable {
         .frame: 0xE9E4DA, .shutterGreen: 0x3E7A5A, .shutterBlue: 0x3C6E9E, .doorWood: 0x6B4126,
         .carvedWood: 0x4E2E1A, .metalCharcoal: 0x2E2F33, .gateGreen: 0x2F5E46, .gateBlue: 0x2D5785,
         .tankBlack: 0x232427, .tankBlue: 0x2B5FA8, .dishWhite: 0xECECEC, .solarNavy: 0x1F2E4E,
-        .grass: 0x74A848, .courtyard: 0xE7D9C6, .deck: 0xB98E62, .earth: 0xE3D3B2, .seabed: 0xB7A77F, .sea: 0x2E8FA3, .painted: 0xFFFFFF,
+        .grass: 0x83AD32, .courtyard: 0xE7D9C6, .deck: 0xB98E62, .earth: 0xE3D3B2, .seabed: 0xB7A77F, .sea: 0x2E8FA3, .painted: 0xFFFFFF,
         .naturalEarth: 0xB3987A, .seaCliffRoof: 0x665A55,
         .wetSand: 0xB7A77F, .dampStone: 0x817866, .algaeStone: 0x667B62,
         .rockWarm: 0xB6A485, .rockGrey: 0x8E9188, .rockPale: 0xC9C2B6, .seaweed: 0x6B7352,
         .asphalt: 0x5C4A58, .roadEarth: 0xC19466, .pavement: 0xEBDCD2, .kerb: 0xF6EFE8, .marking: 0xFAF4E8, .crossing: 0xFFFBF2, .parkEdge: 0xD9CBB4,
         .stopRed: 0xC8352E, .signPost: 0x8A8F96,
-        .hedge: 0x4F8A3C, .leafOlive: 0x6B8A3E, .leafBright: 0x8FC25A, .cypress: 0x35623A,
+        .hedge: 0x608D2D, .leafOlive: 0x728C32, .leafBright: 0xA0C143, .cypress: 0x3B7042,
         .flowerPink: 0xE86FA8, .flowerYellow: 0xF4CC45, .flowerRed: 0xE0453A, .flowerWhite: 0xFBF6EC, .soil: 0x7A5A42,
-        .lawn: 0x86B85A, .pitchGreen: 0x5FA24A, .paving: 0xD9CFC0, .concrete: 0xC9C2B6, .courtBlue: 0x2F6FB5, .courtLine: 0xF7F7F2,
+        .lawn: 0x94BC3B, .pitchGreen: 0x5FA24A, .paving: 0xD9CFC0, .concrete: 0xC9C2B6, .courtBlue: 0x2F6FB5, .courtLine: 0xF7F7F2,
         .poolBlue: 0x4FC3D9, .poolCoping: 0xF2EEE6, .pierWood: 0xA67B4F, .glassPale: 0xBFD9E6,
         .goalWhite: 0xFAFAFA, .mastGrey: 0x9DA3AA, .rubberRed: 0xC8584A, .bronze: 0x7A5A33, .domeGreen: 0x2F8F5B,
-        .leafDark: 0x2E5A2C, .leafMid: 0x4A8838, .leafLight: 0x6FA645, .flamboyant: 0xE2502A,
-        .trunk: 0x6D4C35, .palmTrunk: 0x8C7458, .bougainvilleaMagenta: 0xC8337E,
+        .leafDark: 0x426522, .leafMid: 0x79A42E, .leafLight: 0xA8CA49, .flamboyant: 0xE2502A,
+        .trunk: 0x805033, .palmTrunk: 0x8C7458, .bougainvilleaMagenta: 0xC8337E,
         .bougainvilleaOrange: 0xF07C3A, .coconut: 0x7A5A2C,
         .bajajiBlue: 0x2E6FBF, .bajajiRed: 0xC83A32, .bajajiYellow: 0xF2C230, .tyre: 0x1E1E20,
         .dalaWhite: 0xF4F2EC, .signRed: 0xD8392B, .signYellow: 0xF4C430, .signGreen: 0x2E9B57,
@@ -181,9 +181,9 @@ nonisolated struct DioramaConfig: Sendable {
     var ambientOcclusionRadius: Float = 1.6
     var bloomStrength: Float = 0.55
     /// Fraction of the final colour pulled towards the warm-violet grade.
-    var gradeStrength: Float = 0.10
+    var gradeStrength: Float = 0.035
     /// Haze per metre of distance from the eye (exponential).
-    var hazeDensity: Float = 0.00045
+    var hazeDensity: Float = 0.00012
     var roofOverhang: Double = 0.9
     var roofPitchDegrees: Double = 24
     var hipRoofShare: Double = 0.85

@@ -50,9 +50,9 @@ nonisolated enum DioramaLighting {
         switch time {
         case .day:
             sun = simd_normalize(SIMD3<Float>(-0.45, -0.35, 0.82))
-            sunColor = SIMD3<Float>(1.0, 0.97, 0.90) * 0.85
-            sky = SIMD3<Float>(0.60, 0.66, 0.76)
-            ground = SIMD3<Float>(0.44, 0.40, 0.36)
+            sunColor = SIMD3<Float>(1.0, 0.97, 0.91) * 0.72
+            sky = SIMD3<Float>(0.66, 0.70, 0.75)
+            ground = SIMD3<Float>(0.38, 0.37, 0.34)
             glow = 0
         case .dusk:
             sun = simd_normalize(SIMD3<Float>(-0.75, -0.45, 0.34))
@@ -333,7 +333,8 @@ nonisolated enum DioramaShaderSource {
                                     texture2d<float> reflection [[texture(0)]],
                                     depth2d<float> shadowMap [[texture(1)]],
                                     texture2d<float> groundImage [[texture(2)]],
-                                    texture2d<float> occlusion [[texture(3)]]) {
+                                    texture2d<float> occlusion [[texture(3)]],
+                                    texture2d<float> microdetail [[texture(4)]]) {
         dioramaRevealClip(in.worldPosition, u);
         float code = in.appearance.w;
         float glow = u.params.x;
@@ -418,6 +419,9 @@ nonisolated enum DioramaShaderSource {
             }
         }
         if (tex > 0.5 && tex < 1.5) {
+            // Regrade existing painted downloads without replacing their material boundaries.
+            float luminance = dot(albedo, float3(0.2126, 0.7152, 0.0722));
+            albedo = mix(albedo, float3(0.514, 0.678, 0.196) * (0.60 + luminance * 0.85), 0.72);
             float mottle = dioramaNoise(wp * 0.09) * 0.7 + dioramaNoise(wp * 0.35) * 0.3;
             albedo *= 0.96 + 0.08 * (mottle - 0.5);
         } else if (tex > 1.5 && tex < 2.5) {
@@ -430,6 +434,25 @@ nonisolated enum DioramaShaderSource {
             // Inland compacted earth: quiet ochre/brown clods, distinct from fine coastal sand.
             float clods = dioramaNoise(wp * 1.7) * 0.65 + dioramaNoise(wp * 0.18) * 0.35;
             albedo *= 0.96 + 0.10 * (clods - 0.5);
+        }
+
+        // Legacy saved wall vertices already carry height grading; texture them without a rebuild.
+        if (tex < 0.5 && in.appearance.z > 100.0 && abs(n.z) < 0.25) tex = 12.0;
+        // One packed, mipmapped CC0 sample; no extra render pass, UV mesh or normal map.
+        // Detail fades when its repeat covers fewer than four pixels and in reduced-effects mode.
+        bool textured = (tex > 0.5 && tex < 4.5) || (tex > 9.5 && tex < 13.5);
+        if (textured && u.shoreline.z < 0.5 && u.groundColor.w > 0.5) {
+            float2 detailUV = wp / 1.4;
+            if (tex > 11.5) {
+                float2 tangent = normalize(float2(-n.y, n.x) + float2(0.0001, 0.0));
+                detailUV = float2(dot(wp, tangent), in.worldPosition.z) / 1.4;
+            }
+            float resolved = 1.0 - smoothstep(0.08, 0.28, max(length(dfdx(detailUV)), length(dfdy(detailUV))));
+            constexpr sampler detailSampler(coord::normalized, address::repeat, filter::linear, mip_filter::linear);
+            float4 grain = microdetail.sample(detailSampler, detailUV);
+            float value = (tex < 1.5 || (tex > 9.5 && tex < 10.5)) ? grain.r : grain.g;
+            float strength = tex < 1.5 ? 0.20 : (tex > 9.5 && tex < 10.5 ? 0.16 : 0.075);
+            albedo *= 1.0 + (value - 0.502) * strength * resolved;
         }
 
         if (tex > 6.5 && tex < 7.5 && abs(n.z) > 0.7) {
@@ -487,7 +510,8 @@ nonisolated enum DioramaShaderSource {
         float ndl = dot(litN, u.sunDirection.xyz);
         float sun = max(ndl, 0.0);
         float visibility = dioramaShadow(litPos, litN, u, shadowMap);
-        float3 light = ambient * 0.78 * ao + u.sunColor.rgb * sun * visibility * (0.75 + 0.25 * ao);
+        float ambientStrength = u.params.z < 0.5 ? 0.58 : 0.78;
+        float3 light = ambient * ambientStrength * ao + u.sunColor.rgb * sun * visibility * (0.75 + 0.25 * ao);
         float3 pointLight = glow > 0.01 ? dioramaPointLights(litPos, litN, u, lights, lightTable, lightIndices) : float3(0.0);
         light += pointLight * glow * (0.6 + 0.4 * ao);
 
@@ -568,11 +592,13 @@ nonisolated enum DioramaShaderSource {
     /// Shared colour grade: a unifying warm-violet tint plus light distance haze towards the sky colour.
     static let gradeSource: String = """
     float3 dioramaGrade(float3 color, float3 worldPosition, constant DioramaUniforms &u) {
-        float3 graded = color * float3(1.04, 0.975, 1.06) + float3(0.018, 0.004, 0.035);
+        float luminance = dot(color, float3(0.2126, 0.7152, 0.0722));
+        color = max(float3(0.0), mix(float3(luminance), color, 1.10));
+        float3 graded = color * float3(1.025, 1.0, 0.985);
         color = mix(color, graded, u.post.z);
         float d = length(u.eye.xyz - worldPosition);
         float haze = 1.0 - exp(-d * u.post.w);
-        float3 hazeColor = mix(u.skyColor.rgb, float3(0.74, 0.62, 0.78), 0.45);
+        float3 hazeColor = mix(u.skyColor.rgb, float3(0.76, 0.80, 0.84), 0.18);
         return mix(color, hazeColor, haze * 0.65);
     }
     """
