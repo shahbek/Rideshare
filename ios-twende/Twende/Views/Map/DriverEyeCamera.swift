@@ -21,7 +21,7 @@ final class DriverEyeCamera {
             let state = view.mapboxMap.cameraState
             savedCamera = CameraOptions(center: state.center, padding: state.padding, zoom: state.zoom, bearing: state.bearing, pitch: state.pitch)
             savedBounds = CameraBoundsOptions(cameraBounds: view.mapboxMap.cameraBounds)
-            do { try view.mapboxMap.setCameraBounds(with: CameraBoundsOptions(maxZoom: 25.5, maxPitch: 85)) }
+            do { try view.mapboxMap.setCameraBounds(with: CameraBoundsOptions(bounds: DarServiceMask.bounds, maxZoom: 25.5, minZoom: 9, maxPitch: 75)) }
             catch { return }
             view.camera.cancelAnimations()
             isActive = true

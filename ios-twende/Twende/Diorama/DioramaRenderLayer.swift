@@ -12,7 +12,7 @@ import simd
 /// permanent exposed tile edges blend at rest; paired full/coarse coverage owns disjoint pixels.
 /// Water samples a cached,
 /// reduced-resolution reflected scene.
-nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
+nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost, @unchecked Sendable {
     nonisolated struct Range: Sendable {
         let category: DioramaCategory
         let start: Int
@@ -77,6 +77,7 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
         return cameraGround.height(local, vertices: vertices, indices: indices, ranges: ranges)
     }
 
+    var viewport: DioramaViewport?
     private let labels: [DioramaBuildingLabel]
     private let displayScale: Float
     private var labelRenderer: DioramaLabelRenderer?
@@ -107,6 +108,8 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
     private let contextOnly: Bool
     private let animates: Bool
     private var waterMotionEnabled: Bool = true
+    private var waterPhase: Float = 1.7
+    private var previousCameraFrame: CFTimeInterval?
     private var waterInView: Bool = false
     private var loggedCameraFallback: Bool = false
     private var vertexBuffer: MTLBuffer?
@@ -115,6 +118,7 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
     private var lightTableBuffer: MTLBuffer?
     private var lightIndexBuffer: MTLBuffer?
     private var pipeline: MTLRenderPipelineState?
+    private var preparedFormats: SIMD2<UInt>?
     private var glowPipeline: MTLRenderPipelineState?
     private var waterPipeline: MTLRenderPipelineState?
     private var wireframe: Bool = false
@@ -211,6 +215,12 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
     private var selectedGroups: [DioramaInstanceGroup] = []
     private var selectedRangeDraws: [Range] = []
     private var selectedInstanceDraws: [DioramaDrawPlan.Instance] = []
+    private var selectedOpaqueRanges: [Range] = []
+    private var postOpaqueRanges: [Range] = []
+    private var postEmissionRanges: [Range] = []
+    private var postOpaqueGroups: [DioramaDrawPlan.Instance] = []
+    private var postEmissionGroups: [DioramaDrawPlan.Instance] = []
+    private var reflectionSignature: String = ""
 
     private func publishLabels(_ ids: Set<UInt64>) {
         lock.lock()
@@ -307,7 +317,16 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
         lock.unlock()
     }
 
+    /// Called only before registration, while the SDK cannot concurrently render this host.
+    func prepareOutputSize(width: Int, height: Int) {
+        postProcess?.prepareSize(width: width, height: height)
+        reflectionPass?.prepareSize(width: width, height: height)
+    }
+
     func renderingWillStart(_ metalDevice: MTLDevice, colorPixelFormat: UInt, depthStencilPixelFormat: UInt) {
+        DioramaGPUPreparation.shared.capture(device: metalDevice, color: colorPixelFormat, depth: depthStencilPixelFormat)
+        let formats = SIMD2(colorPixelFormat, depthStencilPixelFormat)
+        if preparedFormats == formats, pipeline != nil, vertexBuffer != nil, indexBuffer != nil { return }
         let uploadStarted = CACurrentMediaTime()
         guard !vertices.isEmpty, !indices.isEmpty,
               let library = DioramaShaderSource.library(for: metalDevice),
@@ -393,6 +412,8 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
                         blit.generateMipmaps(for: texture)
                         blit.endEncoding()
                         command.commit()
+                        // Registration follows preparation; the SDK uses a different queue.
+                        command.waitUntilCompleted()
                     }
                     groundTexture = texture
                 }
@@ -411,6 +432,7 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
             }
             labelRenderer = DioramaLabelRenderer(device: metalDevice, labels: labels, scale: displayScale, color: colorFormat, depthFormat: depthFormat)
             lock.lock(); labelsReady = labelRenderer != nil; lock.unlock()
+            preparedFormats = formats
             setDiagnostic("ready vertices=\(vertices.count) triangles=\(indices.count / 3) instances=\(instances.count) lights=\(lightGrid.lights.count)")
             print("[Diorama load] context=\(contextOnly) GPU-setup=\(String(format: "%.3f", CACurrentMediaTime() - uploadStarted))s (not GPU execution)")
         } catch {
@@ -438,12 +460,14 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
         let tileState = self.tileState
         let waterMotionEnabled = self.waterMotionEnabled
         lock.unlock()
+        DioramaGPUPreparation.shared.captureSize(width: texture.width, height: texture.height)
         let encodeStarted = CACurrentMediaTime()
         let glowOn = timeOfDay.showsLights
         if selectionVisible != visible || selectionGlow != glowOn {
             eligibleRanges = ranges.filter { $0.count > 0 && visible.contains($0.category) && (!$0.category.isEmissive || glowOn) }
             eligibleGroups = groups.filter { !$0.instances.isEmpty && visible.contains($0.category) && (!$0.category.isEmissive || glowOn) }
             eligibleCasters = eligibleGroups.filter { !$0.category.isEmissive }
+            reflectionSignature = visible.map(\.rawValue).sorted().joined()
             selectionVisible = visible; selectionGlow = glowOn; selectionTransform = nil
         }
         let drawn = eligibleRanges
@@ -471,6 +495,9 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
         // Adding the origin elevation again would lift the sea and double-count the terrain.
         model[3, 2] = 0
         let transform = projection * model
+        viewport?.publish(DioramaViewport.Snapshot(transform: transform, origin: origin,
+            latitude: parameters.latitude, longitude: parameters.longitude, zoom: parameters.zoom,
+            bearing: parameters.bearing, pitch: parameters.pitch))
         var matrix = simd_float4x4(columns: (
             SIMD4<Float>(transform.columns.0), SIMD4<Float>(transform.columns.1),
             SIMD4<Float>(transform.columns.2), SIMD4<Float>(transform.columns.3)
@@ -536,8 +563,15 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
         uniforms.groundImage = SIMD4<Float>(Float(groundRect.minX), Float(groundRect.minY), Float(1 / max(groundRect.width, 1)), Float(1 / max(groundRect.height, 1)))
         uniforms.materialFrame = materialFrame
         uniforms.lightGrid = SIMD4<Float>(lightGrid.minX, lightGrid.minY, lightGrid.cellSize, Float(lightGrid.cells))
-        // Wrapped so the float stays precise however long the map is open; 1.7 s into the cycle when frozen.
-        uniforms.params.y = animates && waterMotionEnabled && !reducedEffects ? Float(CACurrentMediaTime().truncatingRemainder(dividingBy: 3600)) : 1.7
+        // Idle SDK/vehicle frames keep exactly the last water phase. Bound the step when the
+        // camera resumes so a long pause never jumps the shoreline or animates at rest.
+        let now = CACurrentMediaTime()
+        if selectionChanged, animates, waterMotionEnabled, !reducedEffects {
+            let dt = previousCameraFrame.map { min(1.0 / 12.0, max(0, now - $0)) } ?? 0
+            waterPhase = (waterPhase + Float(dt)).truncatingRemainder(dividingBy: 3600)
+        }
+        if selectionChanged { previousCameraFrame = now }
+        uniforms.params.y = waterPhase
 
         // Shadows are fitted to what the camera can see: the union of the visible batches, so the
         // 2048 texels cover a street when zoomed in and the whole tile only when zoomed out.
@@ -563,7 +597,7 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
             let reflectionGroups = eligibleGroups
             reflected = reflectionPass.encode(command: mtlCommandBuffer, width: texture.width, height: texture.height,
                 depthRange: (Double(parameters.depthRange.min), Double(parameters.depthRange.max)), matrix: matrix, uniforms: uniforms,
-                signature: timeOfDay.rawValue + visible.map(\.rawValue).sorted().joined(),
+                signature: timeOfDay.rawValue + reflectionSignature,
                 vertices: vertexBuffer, indices: indexBuffer, instances: instanceBuffer,
                 fragmentBuffers: [lightBuffer, lightTableBuffer, lightIndexBuffer, paintBuffer, paintTableBuffer, paintIndexBuffer],
                 textures: [blankReflection, shadowMap?.texture, groundTexture ?? blankReflection, blankReflection, surfaceTexture ?? blankReflection], ranges: drawn, groups: reflectionGroups)
@@ -583,6 +617,11 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
         if planChanged {
             selectedRangeDraws = DioramaDrawPlan.ranges(mainRanges)
             selectedInstanceDraws = DioramaDrawPlan.instances(drawnGroups, eye: eye, lodDistance: lodDistance)
+            selectedOpaqueRanges = selectedRangeDraws.filter { $0.category != .water && $0.category != .propGlow }
+            postOpaqueRanges = selectedOpaqueRanges.filter { !$0.category.isEmissive }
+            postEmissionRanges = selectedRangeDraws.filter { $0.category.isEmissive }
+            postOpaqueGroups = selectedInstanceDraws.filter { !$0.category.isEmissive }
+            postEmissionGroups = selectedInstanceDraws.filter { $0.category.isEmissive }
             selectionTransform = transform
         }
         let submittedRanges = selectedRangeDraws
@@ -592,15 +631,19 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
             bloomLevels = postProcess.encode(
                 command: mtlCommandBuffer, targetWidth: texture.width, targetHeight: texture.height,
                 vertices: vertexBuffer, indices: indexBuffer, instances: instanceBuffer,
-                opaqueRanges: submittedRanges.filter { $0.category != .water && $0.category != .propGlow && !$0.category.isEmissive },
-                emissiveRanges: submittedRanges.filter { $0.category.isEmissive },
-                opaqueGroups: submittedGroups.filter { !$0.category.isEmissive },
-                emissiveGroups: submittedGroups.filter { $0.category.isEmissive },
+                opaqueRanges: postOpaqueRanges,
+                emissiveRanges: postEmissionRanges,
+                opaqueGroups: postOpaqueGroups,
+                emissiveGroups: postEmissionGroups,
                 matrix: matrix, uniforms: uniforms, eye: eye,
                 aoRadius: postSettings.aoRadius, aoStrength: aoStrength, bloomStrength: bloomStrength, lodDistance: lodDistance,
                 revision: drawRevision)
         }
         if aoStrength > 0, postProcess?.occlusion == nil { uniforms.post.x = 0 }
+        DioramaFleetLighting.shared.publish(host: self, snapshot: .init(origin: origin, uniforms: uniforms,
+            buffers: [lightBuffer, lightTableBuffer, lightIndexBuffer, paintBuffer, paintTableBuffer, paintIndexBuffer],
+            textures: [reflected ?? blankReflection, shadowMap?.texture, groundTexture ?? blankReflection,
+                       postProcess?.occlusion ?? blankReflection, surfaceTexture ?? blankReflection], fullDetail: !contextOnly))
 
         guard let encoder = mtlCommandBuffer.makeRenderCommandEncoder(descriptor: mtlRenderPassDescriptor) else { return }
         encoder.label = "Zuri diorama"
@@ -634,7 +677,7 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
             let wanted: MTLCullMode = doubleSided ? .none : .back
             if wanted != cullMode { encoder.setCullMode(wanted); cullMode = wanted }
         }
-        let opaqueRanges = submittedRanges.filter { $0.category != .water && $0.category != .propGlow }
+        let opaqueRanges = selectedOpaqueRanges
         encoder.setDepthStencilState(depthState)
         for range in opaqueRanges {
             cull(range.doubleSided)
@@ -695,7 +738,9 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost {
     }
 
     func renderingWillEnd() {
+        DioramaFleetLighting.shared.remove(host: self)
         publishWaterVisibility(false)
+        preparedFormats = nil
         pipeline = nil
         glowPipeline = nil
         waterPipeline = nil

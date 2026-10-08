@@ -285,6 +285,31 @@ nonisolated enum DioramaShaderSource {
         return dioramaShade(v, v.position.xyz, v.normal.xyz, matrix, u);
     }
 
+    struct DioramaFleetContact { float4 position [[position]]; float2 local; };
+    vertex DioramaFleetContact dioramaFleetContactVertex(uint id [[vertex_id]],
+        constant float4x4 &matrix [[buffer(1)]], constant DioramaUniforms &u [[buffer(2)]],
+        constant float4x4 &model [[buffer(3)]], constant float4 &dimensions [[buffer(4)]]) {
+        constexpr float2 corners[6] = {float2(-1,-1),float2(1,-1),float2(1,1),
+            float2(-1,-1),float2(1,1),float2(-1,1)};
+        float2 local = corners[id];
+        float3 world = (model * float4(local * dimensions.xy, 0.035, 1)).xyz;
+        world.xy -= u.sunDirection.xy * 0.15;
+        return {matrix * float4(world, 1), local};
+    }
+    fragment float4 dioramaFleetContactFragment(DioramaFleetContact in [[stage_in]]) {
+        float alpha = (1.0 - smoothstep(0.20, 1.0, length(in.local))) * 0.20;
+        return float4(0, 0, 0, alpha);
+    }
+
+    vertex DioramaVarying dioramaFleetVertex(uint id [[vertex_id]],
+        const device DioramaInput *vertices [[buffer(0)]], constant float4x4 &matrix [[buffer(1)]],
+        constant DioramaUniforms &u [[buffer(2)]], constant float4x4 &model [[buffer(3)]]) {
+        DioramaInput v = vertices[id];
+        float3 world = (model * v.position).xyz;
+        float3 normal = normalize((model * float4(v.normal.xyz, 0.0)).xyz);
+        return dioramaShade(v, world, normal, matrix, u);
+    }
+
     /// Prototype geometry placed by the instance table; the instance id includes the base instance.
     vertex DioramaVarying dioramaInstancedVertex(uint id [[vertex_id]], uint instanceID [[instance_id]],
                                                  const device DioramaInput *vertices [[buffer(0)]],
@@ -860,6 +885,12 @@ nonisolated enum DioramaShaderSource {
             float3 halfway = normalize(view + u.sunDirection.xyz);
             float specular = pow(saturate(dot(detailNormal, halfway)), roofSurface ? 28.0 : 12.0);
             color += u.sunColor.rgb * specular * visibility * (roofSurface ? 0.065 : 0.022);
+        }
+        if (tex > 13.5 && tex < 14.5) {
+            float3 halfway = normalize(view + u.sunDirection.xyz);
+            float rough = clamp(in.appearance.z, 0.08, 0.9);
+            float gloss = pow(saturate(dot(n, halfway)), mix(96.0, 12.0, rough));
+            color += u.sunColor.rgb * gloss * visibility * (1.0 - rough) * 0.25;
         }
         float rim = pow(1.0 - saturate(dot(n, view)), 4.0) * 0.035;
         color += u.skyColor.rgb * rim;

@@ -145,6 +145,9 @@ nonisolated final class DioramaPostProcess {
         return t
     }
 
+    /// Preallocate off the render thread before registering the owning custom layer.
+    func prepareSize(width: Int, height: Int) { resize(width: width, height: height) }
+
     private func resize(width w: Int, height h: Int) {
         guard w != width || h != height else { return }
         width = w; height = h

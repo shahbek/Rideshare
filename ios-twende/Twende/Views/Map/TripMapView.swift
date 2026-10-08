@@ -70,7 +70,7 @@ struct TripMapView: UIViewRepresentable {
         )
         let mapView = MapView(frame: .zero, mapInitOptions: options)
         mapView.mapboxMap.prefetchZoomDelta = 0
-        mapView.preferredFrameRateRange = CAFrameRateRange(minimum: 15, maximum: 30, preferred: 30)
+        mapView.preferredFrameRateRange = CAFrameRateRange(minimum: 30, maximum: 60, preferred: 60)
         mapView.backgroundColor = UIColor(TwendeColor.mapCanvas)
         mapView.presentationTransactionMode = .sync
         mapView.ornaments.options.scaleBar.visibility = .hidden
@@ -240,7 +240,8 @@ extension TripMapView {
             "colorBuildingHighlight": "#D3B07E",
         ]
 
-        private var vehicleMarkers: [String: ProceduralTukTukMarker] = [:]
+        private let fleet = DioramaFleetRenderLayer()
+        private static let fleetLayerID = "zuri-live-fleet"
         private var nearbyVehicles: [String: Vehicle] = [:]
 
         /// Driver interpolation: the simulator reports a new fix every 0.25s; the model glides between fixes.
@@ -266,6 +267,11 @@ extension TripMapView {
         }
 
         func observe(_ mapView: MapView) {
+            for name in [ProcessInfo.thermalStateDidChangeNotification, Notification.Name.NSProcessInfoPowerStateDidChange] {
+                NotificationCenter.default.publisher(for: name).sink { [weak self] _ in self?.applyFrameRatePolicy() }
+                    .store(in: &settingsCancelables)
+            }
+            applyFrameRatePolicy()
             NotificationCenter.default.publisher(for: DioramaState.renderSettingsChanged)
                 .sink { [weak self] _ in self?.updateDiorama() }
                 .store(in: &settingsCancelables)
@@ -312,9 +318,6 @@ extension TripMapView {
             }.store(in: &cancelables)
             mapView.mapboxMap.onCameraChanged.observe { [weak self] _ in
                 guard let self, let map = self.mapView?.mapboxMap else { return }
-                for marker in self.vehicleMarkers.values {
-                    marker.updateCamera(bearing: map.cameraState.bearing, pitch: map.cameraState.pitch, zoom: map.cameraState.zoom)
-                }
                 if let mapView = self.mapView {
                     for banner in self.banners.values { banner.layout(on: mapView) }
                 }
@@ -345,6 +348,14 @@ extension TripMapView {
             }.store(in: &cancelables)
         }
 
+        private func applyFrameRatePolicy() {
+            let reduced = ProcessInfo.processInfo.isLowPowerModeEnabled
+                || ProcessInfo.processInfo.thermalState.rawValue >= ProcessInfo.ThermalState.serious.rawValue
+            mapView?.preferredFrameRateRange = reduced
+                ? CAFrameRateRange(minimum: 15, maximum: 30, preferred: 30)
+                : CAFrameRateRange(minimum: 30, maximum: 60, preferred: 60)
+        }
+
         private func configureStandardStyle() {
             guard let map = mapView?.mapboxMap else { return }
             let style = AppSettings.shared.mapStyle
@@ -357,6 +368,12 @@ extension TripMapView {
                 }
             }
             applyTerrain()
+            if !map.layerExists(withId: Self.fleetLayerID) {
+                do { try map.addCustomLayer(withId: Self.fleetLayerID, layerHost: fleet, layerPosition: nil) }
+                catch { print("[Fleet map] layer installation unavailable") }
+            }
+            DarServiceMask.install(on: map)
+            syncVehicles()
         }
 
         private static let demSourceID = "zuri-terrain-dem"
@@ -397,8 +414,8 @@ extension TripMapView {
             configureStandardStyle()
             // The diorama owns lightPreset/show3dObjects while enabled; re-assert after a style change.
             if let map = mapView?.mapboxMap, let diorama {
-                diorama.styleDidReload()
-                diorama.install(on: map)
+                diorama.scheduleUpdate(delay: 0)
+                map.triggerRepaint()
             }
             guard let mapView else { return }
             mapView.backgroundColor = UIColor(TwendeColor.mapCanvas)
@@ -508,6 +525,7 @@ extension TripMapView {
         func updateDiorama() {
             let state = DioramaState.shared
             guard let mapView else { return }
+            syncVehicles()
             if state.isEnabled, diorama == nil {
                 let manager = DioramaTileManager()
                 manager.viewportBounds = { [weak mapView] in mapView?.bounds ?? .zero }
@@ -920,35 +938,23 @@ extension TripMapView {
 
         // MARK: 3D vehicles
 
-        /// Retains each native annotation across updates; all four tier models are built locally.
+        /// One map-native Metal fleet, with physical metre scale and resident terrain/light support.
         private func syncVehicles() {
             guard let mapView else { return }
             var poses = nearbyVehicles.mapValues(\.pose)
             if let driverShown { poses[Self.driverModelID] = driverShown }
-            let staleIDs = vehicleMarkers.keys.filter { poses[$0] == nil }
-            for id in staleIDs {
-                vehicleMarkers.removeValue(forKey: id)?.remove()
+            let items = poses.keys.sorted().compactMap { id -> DioramaFleetRenderLayer.Pose? in
+                guard let pose = poses[id], DarEsSalaam.isInServiceZone(pose.point) else { return nil }
+                return .init(id: id, tier: id == Self.driverModelID ? driverTier : (nearbyVehicles[id]?.tier ?? .economy),
+                             point: pose.point, heading: pose.heading)
             }
-            let state = mapView.mapboxMap.cameraState
-            for (id, pose) in poses {
-                let tier = id == Self.driverModelID ? driverTier : (nearbyVehicles[id]?.tier ?? .economy)
-                if let marker = vehicleMarkers[id] {
-                    marker.setTier(tier)
-                    marker.move(to: pose.point, heading: pose.heading, bearing: state.bearing, pitch: state.pitch, zoom: state.zoom)
-                } else {
-                    vehicleMarkers[id] = ProceduralTukTukMarker(
-                        mapView: mapView, point: pose.point, heading: pose.heading,
-                        isAssigned: id == Self.driverModelID,
-                        tier: tier
-                    )
-                }
-            }
+            if fleet.update(items, time: DioramaState.shared.timeOfDay) { mapView.mapboxMap.triggerRepaint() }
         }
 
         func removeVehicles() {
             if let mapView { driverEyeCamera.stop(on: mapView, restore: false) }
-            for marker in vehicleMarkers.values { marker.remove() }
-            vehicleMarkers.removeAll()
+            if let map = mapView?.mapboxMap, map.layerExists(withId: Self.fleetLayerID) { try? map.removeLayer(withId: Self.fleetLayerID) }
+            _ = fleet.update([], time: DioramaState.shared.timeOfDay)
             for banner in banners.values { banner.remove() }
             banners.removeAll()
             for pin in pins.values { pin.remove() }

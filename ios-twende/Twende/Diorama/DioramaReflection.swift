@@ -40,20 +40,25 @@ nonisolated final class DioramaReflection {
         } catch { print("[Diorama] reflection pipeline unavailable"); return nil }
     }
 
+    /// Preallocate before the host enters Mapbox's render loop.
+    func prepareSize(width: Int, height: Int) {
+        let w = max(1, min(768, width / 4)), h = max(1, min(768, height / 4))
+        guard color?.width != w || color?.height != h else { return }
+        let d = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm, width: w, height: h, mipmapped: false)
+        d.usage = [.renderTarget, .shaderRead]; d.storageMode = .private
+        color = device.makeTexture(descriptor: d)
+        d.pixelFormat = .depth32Float; d.usage = .renderTarget
+        depth = device.makeTexture(descriptor: d)
+        lastMatrix = nil
+    }
+
     func encode(command: MTLCommandBuffer, width: Int, height: Int, depthRange: (Double, Double),
                 matrix: simd_float4x4, uniforms: DioramaShaderUniforms, signature: String,
                 vertices: MTLBuffer, indices: MTLBuffer, instances: MTLBuffer?,
                 fragmentBuffers: [MTLBuffer], textures: [MTLTexture?],
                 ranges: [DioramaRenderLayer.Range], groups: [DioramaInstanceGroup]) -> MTLTexture? {
         let w = max(1, min(768, width / 4)), h = max(1, min(768, height / 4))
-        if color?.width != w || color?.height != h {
-            let d = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm, width: w, height: h, mipmapped: false)
-            d.usage = [.renderTarget, .shaderRead]; d.storageMode = .private
-            color = device.makeTexture(descriptor: d)
-            d.pixelFormat = .depth32Float; d.usage = .renderTarget
-            depth = device.makeTexture(descriptor: d)
-            lastMatrix = nil
-        }
+        prepareSize(width: width, height: height)
         guard let color, let depth else { return nil }
         if lastMatrix == matrix, lastReveal == uniforms.reveal, lastLifecycle == uniforms.lifecycleReveal,
            lastEdges == uniforms.tileEdges, lastTileState == uniforms.tileState, lastSignature == signature { return color }

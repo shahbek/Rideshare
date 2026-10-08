@@ -25,11 +25,13 @@ final class DioramaContextTiles {
                 + DioramaRevealStyle.support + 50
         }
     }
+    var viewport: DioramaViewport?
     private var residents: [DioramaTileID: Resident] = [:]
     private var focus: DioramaTileID?
     private var fullMasks: [DioramaTileID: SIMD4<Float>] = [:]
     private var retirements: [DioramaTileID: Task<Void, Never>] = [:]
     private var task: Task<Void, Never>?
+    private var loadingTile: DioramaTileID?
     private var revision: UInt = 0
     private var retryAfter: [DioramaTileID: Date] = [:]
     private var availability: String = ""
@@ -50,6 +52,10 @@ final class DioramaContextTiles {
     }
 
     func isReady(_ tile: DioramaTileID) -> Bool { residents[tile]?.connection == 1 && residents[tile]?.isRemoving != true }
+    func isPreparing(_ tile: DioramaTileID) -> Bool {
+        wantedTiles.contains(tile) && !isReady(tile) && (retryAfter[tile] ?? .distantPast) <= Date()
+            && (task != nil || residents[tile] != nil)
+    }
     var retryDelay: TimeInterval? {
         let now = Date()
         return wantedTiles.filter { residents[$0] == nil }.compactMap { retryAfter[$0] }
@@ -78,28 +84,18 @@ final class DioramaContextTiles {
             resident.host.setWireframe(wireframe)
         }
         let sameFocus = focus == next
-        let ring = (-1...1).flatMap { y in (-1...1).compactMap { x -> DioramaTileID? in
-            let tile = DioramaTileID(z: next.z, x: next.x + x, y: next.y + y)
-            return DioramaOfflineStore.tiles.contains(tile) ? tile : nil
-        }}.sorted {
-            // Actual neighbours have priority over the optional same-tile fallback.
-            let a = $0 == next ? 10 : abs($0.x - next.x) + abs($0.y - next.y)
-            let b = $1 == next ? 10 : abs($1.x - next.x) + abs($1.y - next.y)
-            return a == b ? $0.key < $1.key : a < b
-        }
         var seen: Set<DioramaTileID> = []
-        let ordered = (priorityTiles.filter { $0 != next || fullMasks[next] == nil } + ring.filter { $0 != next }
-            + fullMasks.keys.filter { $0 != next }.sorted { $0.key < $1.key } + [next])
+        let ordered = (priorityTiles.filter { fullMasks[$0] == nil }
+            + fullMasks.keys.filter { priorityTiles.contains($0) }.sorted { $0.key < $1.key })
             .filter { DioramaOfflineStore.tiles.contains($0) && seen.insert($0).inserted }
         let tiles = Array(ordered.prefix(9))
         let wanted = Set(tiles).union(fullMasks.keys)
-        if sameFocus && Set(wantedTiles) == Set(tiles) && task != nil { return }
+        if sameFocus && wantedTiles == tiles && task != nil { return }
         if sameFocus && wantedTiles == tiles && tiles.allSatisfy({
             (residents[$0] != nil && residents[$0]?.isRemoving != true) || (retryAfter[$0] ?? .distantPast) > Date()
         }) { return }
-        cancelPendingInstallations()
+        if let loadingTile, !tiles.contains(loadingTile) { cancelPendingInstallations() }
         wantedTiles = tiles; focus = next
-        let expected = revision
         for (tile, resident) in residents {
             // Streaming eviction has no animated offscreen wait; explicit whole-scene exits still retract.
             if !wanted.contains(tile) { removeNow(tile) }
@@ -108,18 +104,19 @@ final class DioramaContextTiles {
                 animateArrival(tile, resident: resident)
             }
         }
+        guard task == nil else { return }
+        let expected = revision
         task = Task { [weak self] in
             guard let self else { return }
-            defer { if self.revision == expected { self.task = nil } }
-            // Each installation yields to UI work; saved reads run off-main in the bounded store.
-            for tile in tiles {
+            defer {
+                if self.revision == expected { self.task = nil; self.loadingTile = nil }
+            }
+            // Re-rank between reads without canceling useful work on every camera event.
+            while let tile = self.wantedTiles.first(where: {
+                self.residents[$0] == nil && (self.retryAfter[$0] ?? .distantPast) <= Date()
+            }) {
                 guard !Task.isCancelled, self.revision == expected else { return }
-                if let resident = self.residents[tile] {
-                    self.applyCoverage(tile, resident: resident)
-                    if resident.connection >= 1 { self.onReady?(tile) }
-                    continue
-                }
-                guard (self.retryAfter[tile] ?? .distantPast) <= Date() else { continue }
+                self.loadingTile = tile
                 let job = Task.detached(priority: .utility) { () -> DioramaTileArtifacts? in
                     guard !Task.isCancelled else { return nil }
                     return await DioramaOfflineStore.shared.read(tile, context: true)
@@ -127,22 +124,25 @@ final class DioramaContextTiles {
                 let artifacts = await withTaskCancellationHandler { await job.value } onCancel: { job.cancel() }
                 guard !Task.isCancelled, self.revision == expected,
                       UIApplication.shared.applicationState == .active else { return }
+                guard self.wantedTiles.contains(tile) else { continue }
                 guard let artifacts else {
                     self.retryAfter[tile] = Date().addingTimeInterval(30)
                     self.availability = " · saved context read unavailable"
                     print("[Diorama context] \(tile.key): saved read unavailable; retained scenery, retry on camera update")
                     self.onUnavailable?(tile); continue
                 }
+                let next = self.focus ?? next
                 if tile != next, self.fullMasks[next] != nil, self.residents[next] != nil,
                    self.residents.values.reduce(0, { $0 + $1.bytes }) + artifacts.totalBytes > 64 * 1_048_576 {
                     self.removeNow(next)
                     guard !Task.isCancelled, self.revision == expected else { return }
                 }
-                if priorityTiles.contains(tile) {
+                if self.wantedTiles.contains(tile) {
                     // Visible scenery outranks speculative ring residents, not merely read order.
+                    let rank = self.wantedTiles.firstIndex(of: tile) ?? Int.max
                     let victims = self.residents.keys.filter {
-                        $0 != tile && self.fullMasks[$0] == nil && !priorityTiles.contains($0)
-                    }.sorted { (tiles.firstIndex(of: $0) ?? Int.max) > (tiles.firstIndex(of: $1) ?? Int.max) }
+                        $0 != tile && (self.wantedTiles.firstIndex(of: $0) ?? Int.max) > rank
+                    }.sorted { (self.wantedTiles.firstIndex(of: $0) ?? Int.max) > (self.wantedTiles.firstIndex(of: $1) ?? Int.max) }
                     for victim in victims {
                         if self.residents.count < 9,
                            self.residents.values.reduce(0, { $0 + $1.bytes }) + artifacts.totalBytes <= 64 * 1_048_576 { break }
@@ -157,7 +157,7 @@ final class DioramaContextTiles {
                     self.onUnavailable?(tile); continue
                 }
                 self.retryAfter[tile] = nil
-                self.install(artifacts, config: config)
+                await self.install(artifacts, config: config, revision: expected)
                 await Task.yield()
             }
         }
@@ -173,10 +173,15 @@ final class DioramaContextTiles {
         refreshConnections()
     }
 
+    func removeFocusMask(_ tile: DioramaTileID) {
+        fullMasks[tile] = nil
+        refreshConnections()
+    }
+
     func pauseLoading() { cancelPendingInstallations(); focus = nil }
     func prepareForFocus() { pauseLoading() }
 
-    private func cancelPendingInstallations() { task?.cancel(); task = nil; revision &+= 1 }
+    private func cancelPendingInstallations() { task?.cancel(); task = nil; loadingTile = nil; revision &+= 1 }
 
     /// Whole-scene exits retract; offscreen streaming eviction and style destruction remove directly.
     func clear() {
@@ -328,7 +333,11 @@ final class DioramaContextTiles {
         map.updateGeoJSONSource(withId: id(tile) + "-source", geoJSON: .geometry(.polygon(Polygon([coordinates]))))
     }
 
-    private func install(_ artifacts: DioramaTileArtifacts, config: DioramaConfig) {
+    private func setCustomLayerSlot(_ id: String, on map: MapboxMap) {
+        try? map.setLayerProperty(for: id, property: "slot", value: "middle")
+    }
+
+    private func install(_ artifacts: DioramaTileArtifacts, config: DioramaConfig, revision expected: UInt) async {
         guard let map else { return }
         let tile = artifacts.tile
         let installedAt = CACurrentMediaTime()
@@ -338,6 +347,11 @@ final class DioramaContextTiles {
             visible: visible, timeOfDay: time, animates: true, config: config, contextOnly: true,
             materialsPrepared: artifacts.renderMaterialsPrepared, materialCounts: artifacts.renderMaterialCounts,
             preparedPoolBounds: artifacts.renderPoolBounds)
+        let upload = Task.detached(priority: .utility) { await DioramaGPUUploadQueue.shared.prepare(host) }
+        await withTaskCancellationHandler { await upload.value } onCancel: { upload.cancel() }
+        guard !Task.isCancelled, revision == expected, wantedTiles.contains(tile),
+              UIApplication.shared.applicationState == .active else { return }
+        host.viewport = viewport
         host.onWaterVisibilityChanged = { [weak self] in
             Task { @MainActor [weak self] in self?.onWaterVisibilityChanged?() }
         }
@@ -368,7 +382,7 @@ final class DioramaContextTiles {
         applyCoverage(tile, resident: resident)
         do {
             try map.addCustomLayer(withId: id(tile), layerHost: host, layerPosition: nil)
-            try map.setLayerProperty(for: id(tile), property: "slot", value: "middle")
+            setCustomLayerSlot(id(tile), on: map)
             var source = GeoJSONSource(id: id(tile) + "-source")
             source.data = .featureCollection(FeatureCollection(features: []))
             try map.addSource(source)
