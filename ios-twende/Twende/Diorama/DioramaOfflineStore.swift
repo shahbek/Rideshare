@@ -33,7 +33,8 @@ actor DioramaOfflineStore {
     private var dataRevision: UInt = 0
     private var activeReads: Int = 0
     private var waiters: [ReadWaiter] = []
-    private let decodedBudget: Int = 64 * 1_048_576
+    // The mounted renderers own their artifacts. Do not retain a second evicted-tile working set.
+    private let decodedBudget: Int = 0
 
     private var root: URL {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -53,6 +54,38 @@ actor DioramaOfflineStore {
         let free = try root.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]).volumeAvailableCapacityForImportantUsage ?? 0
         guard free > 900 * 1_048_576 else { throw Failure.storage }
     }
+    /// Inspect compatible local manifests before admitting any decode or GPU allocation.
+    func residencyCost(_ tile: DioramaTileID, context: Bool, size: CGSize) -> DioramaResidencyBudget.Cost? {
+        var costs: [DioramaResidencyBudget.Cost] = []
+        for name in candidateNames(tile, context: context) {
+            let url = root.appendingPathComponent(name).appendingPathComponent("manifest.json")
+            guard let length = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize,
+                  length <= 8 * 1_048_576,
+                  let data = try? Data(contentsOf: url),
+                  let m = try? JSONDecoder().decode(DioramaTileArchive.Manifest.self, from: data),
+                  m.key == name, m.format == DioramaTileArchive.format,
+                  m.z == tile.z, m.x == tile.x, m.y == tile.y,
+                  m.vertexStride == MemoryLayout<BuildingRenderVertex>.stride,
+                  m.instanceStride == MemoryLayout<DioramaInstanceData>.stride,
+                  m.imageSize >= 0, m.imageSize <= 4096,
+                  m.sections.count == 10, Set(m.sections.map(\.name)) == Set(["vertices", "indices", "instances", "ground", "paint", "paintTable", "paintIndices", "lights", "lightTable", "lightIndices"]) else { continue }
+            var remaining = DioramaTileArchive.maxBytes
+            var valid = true
+            for section in m.sections {
+                guard section.bytes >= 0, section.bytes <= remaining else { valid = false; break }
+                remaining -= section.bytes
+            }
+            guard valid else { continue }
+            let sizes = Dictionary(uniqueKeysWithValues: m.sections.map { ($0.name, $0.bytes) })
+            costs.append(DioramaResidencyBudget.cost(payload: DioramaTileArchive.maxBytes - remaining,
+                ground: sizes["ground"] ?? 0, vertices: sizes["vertices"] ?? 0, instances: sizes["instances"] ?? 0,
+                labels: m.labels.count, context: context, size: size))
+        }
+        // A rejected newer candidate may fall back to an older, larger compatible archive.
+        guard !costs.isEmpty else { return nil }
+        return .init(retained: costs.map(\.retained).max() ?? 0, peak: costs.map(\.peak).max() ?? 0)
+    }
+
     /// Deduplicated local reads; at most two decompressions run, with focus ahead of queued context.
     func read(_ tile: DioramaTileID, context: Bool = false) async -> DioramaTileArtifacts? {
         guard !Task.isCancelled else { return nil }

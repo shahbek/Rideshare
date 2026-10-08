@@ -2,7 +2,7 @@
 import simd
 
 /// WGS84 centerline with distances in the same local Mercator metre frame as the map's 3D renderer.
-struct TanzaniteBridgeAlignment {
+nonisolated struct TanzaniteBridgeAlignment: Sendable {
     nonisolated struct Record: Decodable {
         let source: String
         let widthMetres: Double
@@ -54,6 +54,38 @@ struct TanzaniteBridgeAlignment {
         let a = point(at: max(0, distance - 0.5), elevation: 0)
         let b = point(at: min(length, distance + 0.5), elevation: 0)
         return simd_normalize(b - a)
+    }
+
+    /// Road support matches the actual 8 m deck mesh, not the sea/terrain below it.
+    /// Only points inside the mapped carriageway and longitudinal endpoints receive support.
+    func roadElevation(at point: GeoPoint, heading: Double? = nil) -> Double? {
+        let local = DioramaProjection(origin: Self.anchor.coordinate).local(longitude: point.longitude, latitude: point.latitude)
+        let query = SIMD2(local.x, local.y)
+        let halfRoad = record.widthMetres / 2 - 1.6
+        var bestDistance = Double.greatestFiniteMagnitude
+        var station: Double?
+        for i in 0..<(points.count - 1) {
+            let delta = points[i + 1] - points[i]
+            let squared = simd_length_squared(delta)
+            guard squared > 0.0001 else { continue }
+            if let heading {
+                let angle = heading * .pi / 180
+                let direction = SIMD2(sin(angle), cos(angle))
+                // A crossing road below the bridge is not its carriageway. Allow either direction.
+                if abs(simd_dot(direction, delta / sqrt(squared))) < cos(40 * .pi / 180) { continue }
+            }
+            let raw = simd_dot(query - points[i], delta) / squared
+            if (i == 0 && raw < 0) || (i == points.count - 2 && raw > 1) { continue }
+            let t = max(0, min(1, raw))
+            let distance = simd_distance(query, points[i] + delta * t)
+            if distance <= halfRoad, distance < bestDistance {
+                bestDistance = distance; station = chainages[i] + sqrt(squared) * t
+            }
+        }
+        guard let station else { return nil }
+        let a = floor(station / 8) * 8, b = min(length, a + 8)
+        let t = (station - a) / max(0.001, b - a)
+        return deckElevation(at: a) + (deckElevation(at: b) - deckElevation(at: a)) * t
     }
 
     /// Illustrative vertical profile: gently rises from the approaches to the navigable central span.

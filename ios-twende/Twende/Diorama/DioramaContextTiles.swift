@@ -2,17 +2,19 @@ import Foundation
 @_spi(Experimental) import MapboxMaps
 import UIKit
 
-/// Persistent saved low-detail coverage of all Masaki tiles; HD masks select complementary pixels.
+/// Bounded visible coarse coverage; attached/retiring HD pins its complementary base.
 @MainActor
 final class DioramaContextTiles {
     private final class Resident {
         let host: DioramaRenderLayer
         let bytes: Int
         let triangles: Int
+        let reservation: UUID
         var isReady: Bool
         var arrival: Task<Void, Never>?
-        init(host: DioramaRenderLayer, artifacts: DioramaTileArtifacts) {
+        init(host: DioramaRenderLayer, artifacts: DioramaTileArtifacts, reservation: UUID) {
             self.host = host; bytes = artifacts.decodedBytes; triangles = artifacts.totalTriangles
+            self.reservation = reservation
             isReady = host.isRendererReady
         }
     }
@@ -25,6 +27,11 @@ final class DioramaContextTiles {
     var viewport: DioramaViewport?
     private var residents: [DioramaTileID: Resident] = [:]
     private var hdMasks: [DioramaTileID: HDMask] = [:]
+    var budget: DioramaResidencyBudget?
+    var outputSize: CGSize = .zero
+    private var loadingTile: DioramaTileID?
+    private var deferredTiles: Set<DioramaTileID> = []
+    private var allowance: Int = 0
     private var task: Task<Void, Never>?
     private var revision: UInt = 0
     private var retryAfter: [DioramaTileID: Date] = [:]
@@ -46,7 +53,7 @@ final class DioramaContextTiles {
     }
     func isReady(_ tile: DioramaTileID) -> Bool {
         guard let resident = residents[tile] else { return false }
-        return resident.isReady && resident.arrival == nil
+        return resident.isReady && resident.host.isRendererReady && resident.arrival == nil
     }
     func readinessReport(_ tile: DioramaTileID) -> String {
         guard let resident = residents[tile] else {
@@ -61,14 +68,17 @@ final class DioramaContextTiles {
     func hasCompletedHDUnion(tile: DioramaTileID, state: SIMD4<Float>) -> Bool {
         residents[tile]?.host.hasCompletedUnion(state) == true
     }
-    func hasReadyCoverage(in tiles: [DioramaTileID]) -> Bool { tiles.contains { residents[$0]?.isReady == true } }
+    func hasReadyCoverage(in tiles: [DioramaTileID]) -> Bool {
+        tiles.contains { residents[$0]?.isReady == true && residents[$0]?.host.isRendererReady == true }
+    }
     var retryDelay: TimeInterval? {
         return wantedTiles.filter { residents[$0] == nil }.compactMap { retryAfter[$0] }
             .filter { $0 > Date() }.min().map { max(0.1, $0.timeIntervalSinceNow) }
     }
     var report: String {
         let missing = retryAfter.count
-        return "Masaki base: \(residents.count)/\(DioramaOfflineStore.tiles.count) low-detail tiles · \(residents.values.reduce(0) { $0 + $1.bytes } / 1_048_576) MiB decoded payload (not total memory)"
+        return "Visible base: \(residents.count)/\(budget?.contextLimit ?? 4) low-detail tiles · \(residents.values.reduce(0) { $0 + $1.bytes } / 1_048_576) MiB decoded payload"
+            + (deferredTiles.isEmpty ? "" : " · lower-priority tiles use native map within memory allowance")
             + (missing > 0 ? " · \(missing) saved tiles awaiting retry/repair" : "")
     }
     func setReducedEffects(_ reduced: Bool, waterMotion: Bool) {
@@ -80,9 +90,22 @@ final class DioramaContextTiles {
     }
     func update(focus: DioramaTileID, config: DioramaConfig, map: MapboxMap,
                 visible: Set<DioramaCategory>, time: DioramaTimeOfDay, wireframe: Bool,
-                priorityTiles: [DioramaTileID] = [], allowsLoading: Bool = true) {
+                priorityTiles: [DioramaTileID] = [], pinnedTiles: [DioramaTileID] = [], allowsLoading: Bool = true) {
         self.map = map
+        let pins = Set(pinnedTiles)
         visibleTiles = Set(priorityTiles)
+        var seen: Set<DioramaTileID> = []
+        let next = Array((pinnedTiles + priorityTiles)
+            .filter { DioramaOfflineStore.tiles.contains($0) && seen.insert($0).inserted }
+            .prefix(budget?.contextLimit ?? 4))
+        if wantedTiles != next || allowance != budget?.limit {
+            deferredTiles.removeAll(); allowance = budget?.limit ?? 0
+        }
+        wantedTiles = next
+        if let loadingTile, !wantedTiles.contains(loadingTile) { pauseLoading() }
+        for tile in Array(residents.keys) where !wantedTiles.contains(tile) && !pins.contains(tile) {
+            remove(tile); refreshNeighbours(of: tile)
+        }
         for (tile, resident) in residents where resident.arrival != nil && !visibleTiles.contains(tile) {
             resident.arrival?.cancel(); resident.arrival = nil; resident.host.setLifecycleReveal(.zero)
             refreshNeighbours(of: tile)
@@ -96,22 +119,35 @@ final class DioramaContextTiles {
             }
             map.triggerRepaint()
         }
-        var seen: Set<DioramaTileID> = []
-        wantedTiles = (priorityTiles + DioramaOfflineStore.tiles)
-            .filter { DioramaOfflineStore.tiles.contains($0) && seen.insert($0).inserted }
-        guard allowsLoading, task == nil, wantedTiles.contains(where: { residents[$0] == nil && (retryAfter[$0] ?? .distantPast) <= Date() }) else { return }
+        guard allowsLoading, task == nil, budget?.isLoading != true,
+              wantedTiles.contains(where: { residents[$0] == nil && !deferredTiles.contains($0) && (retryAfter[$0] ?? .distantPast) <= Date() }) else { return }
         let expected = revision
         task = Task { [weak self] in
             guard let self else { return }
-            defer { if self.revision == expected { self.task = nil } }
-            // Preload the complete local set serially; camera changes only reorder remaining work.
-            while let tile = self.wantedTiles.first(where: { self.residents[$0] == nil && (self.retryAfter[$0] ?? .distantPast) <= Date() }) {
-                guard !Task.isCancelled, self.revision == expected, UIApplication.shared.applicationState == .active else { return }
+            defer { if self.revision == expected { self.task = nil; self.loadingTile = nil } }
+            while let tile = self.wantedTiles.first(where: { self.residents[$0] == nil && !self.deferredTiles.contains($0) && (self.retryAfter[$0] ?? .distantPast) <= Date() }) {
+                guard !Task.isCancelled, self.revision == expected, UIApplication.shared.applicationState == .active,
+                      let budget = self.budget else { return }
+                self.loadingTile = tile
+                guard var cost = await DioramaOfflineStore.shared.residencyCost(tile, context: true, size: self.outputSize) else {
+                    self.markUnavailable(tile); continue
+                }
+                guard !Task.isCancelled, self.revision == expected, self.wantedTiles.contains(tile) else { return }
+                guard let reservation = budget.reserve(cost, context: true) else {
+                    if budget.isLoading { return }
+                    self.deferredTiles.insert(tile); continue
+                }
+                defer { if self.residents[tile]?.reservation != reservation { budget.release(reservation) } }
                 let job = Task.detached(priority: .utility) { await DioramaOfflineStore.shared.read(tile, context: true) }
                 let artifacts = await withTaskCancellationHandler { await job.value } onCancel: { job.cancel() }
                 guard !Task.isCancelled, self.revision == expected, UIApplication.shared.applicationState == .active else { return }
                 guard let artifacts else { self.markUnavailable(tile); continue }
-                await self.install(artifacts, config: config, revision: expected)
+                guard self.wantedTiles.contains(tile) else { continue }
+                let actual = DioramaResidencyBudget.cost(artifacts, context: true, size: self.outputSize)
+                cost = .init(retained: max(cost.retained, actual.retained), peak: max(cost.peak, actual.peak))
+                guard budget.revise(reservation, cost: cost) else { self.deferredTiles.insert(tile); continue }
+                await self.install(artifacts, config: config, revision: expected, reservation: reservation)
+                if self.residents[tile]?.reservation == reservation { budget.commit(reservation, cost: cost) }
                 await Task.yield()
             }
         }
@@ -125,11 +161,31 @@ final class DioramaContextTiles {
         hdMasks[tile] = nil
         if let resident = residents[tile] { applyCoverage(tile, resident: resident) }
     }
-    func pauseLoading() { revision &+= 1; task?.cancel(); task = nil }
+    func pauseLoading() { revision &+= 1; task?.cancel(); task = nil; loadingTile = nil }
+    func retryAdmission() { deferredTiles.removeAll() }
+    /// Foreground detail wins over lower-priority coarse hosts, but never loses a paired base.
+    func makeRoomForHD(_ tile: DioramaTileID, cost: DioramaResidencyBudget.Cost, pinned: [DioramaTileID]) {
+        guard let budget, !budget.isLoading else { return }
+        let protected = Set(pinned + [tile])
+        let candidates = wantedTiles.reversed().filter { !protected.contains($0) && residents[$0] != nil }
+        guard budget.canFitAfterReleasing(candidates.compactMap { residents[$0]?.reservation }, cost: cost) else { return }
+        var evicted: Set<DioramaTileID> = []
+        for candidate in candidates {
+            if budget.canReserve(cost, context: false) { break }
+            remove(candidate); refreshNeighbours(of: candidate); evicted.insert(candidate)
+        }
+        // Releases notify admission synchronously. Restore all deferrals only after that batch.
+        deferredTiles.formUnion(evicted)
+    }
+    func trimForMemoryWarning() {
+        pauseLoading(); deferredTiles.removeAll()
+        for tile in Array(residents.keys) where !visibleTiles.contains(tile) || tile != wantedTiles.first { remove(tile) }
+        for tile in residents.keys { refreshNeighbours(of: tile) }
+    }
     func clear() {
         pauseLoading()
         for tile in Array(residents.keys) { remove(tile) }
-        hdMasks.removeAll(); retryAfter.removeAll(); wantedTiles.removeAll(); visibleTiles.removeAll()
+        hdMasks.removeAll(); retryAfter.removeAll(); wantedTiles.removeAll(); visibleTiles.removeAll(); deferredTiles.removeAll()
     }
     private func id(_ tile: DioramaTileID) -> String { "zuri-context-\(tile.key)" }
     private func remove(_ tile: DioramaTileID) {
@@ -138,7 +194,7 @@ final class DioramaContextTiles {
             for layer in [id(tile) + "-clip", id(tile)] where map.layerExists(withId: layer) { try? map.removeLayer(withId: layer) }
             if map.sourceExists(withId: id(tile) + "-source") { try? map.removeSource(withId: id(tile) + "-source") }
         }
-        residents[tile] = nil
+        if let resident = residents.removeValue(forKey: tile) { budget?.release(resident.reservation) }
     }
     private func markUnavailable(_ tile: DioramaTileID) {
         retryAfter[tile] = Date().addingTimeInterval(30)
@@ -183,7 +239,7 @@ final class DioramaContextTiles {
     private func setSlot(_ id: String, on map: MapboxMap) throws {
         try map.setLayerProperty(for: id, property: "slot", value: "middle")
     }
-    private func install(_ artifacts: DioramaTileArtifacts, config: DioramaConfig, revision expected: UInt) async {
+    private func install(_ artifacts: DioramaTileArtifacts, config: DioramaConfig, revision expected: UInt, reservation: UUID) async {
         guard let map else { return }
         let tile = artifacts.tile
         let host = DioramaRenderLayer(origin: tile.centre, vertices: artifacts.vertices, indices: artifacts.indices,
@@ -194,7 +250,7 @@ final class DioramaContextTiles {
             materialCounts: artifacts.renderMaterialCounts, preparedPoolBounds: artifacts.renderPoolBounds)
         let upload = Task.detached(priority: .utility) { await DioramaGPUUploadQueue.shared.prepare(host) }
         await withTaskCancellationHandler { await upload.value } onCancel: { upload.cancel() }
-        guard !Task.isCancelled, revision == expected, self.map === map,
+        guard !Task.isCancelled, revision == expected, self.map === map, wantedTiles.contains(tile),
               UIApplication.shared.applicationState == .active else { return }
         if host.diagnostic.contains("failed") || host.diagnostic.contains("missing") { markUnavailable(tile); return }
         host.viewport = viewport
@@ -220,7 +276,7 @@ final class DioramaContextTiles {
         }
         host.setVisible(visible, timeOfDay: time); host.setReducedEffects(reducedEffects)
         host.setWireframe(wireframe); host.setWaterMotion(waterMotion)
-        let resident = Resident(host: host, artifacts: artifacts)
+        let resident = Resident(host: host, artifacts: artifacts, reservation: reservation)
         let revealsArrival = visibleTiles.contains(tile) && !UIAccessibility.isReduceMotionEnabled
             && ProcessInfo.processInfo.thermalState != .critical
         if revealsArrival { host.setLifecycleReveal(SIMD4(0, 0, -DioramaRevealStyle.support - 2, 1)) }
@@ -237,7 +293,7 @@ final class DioramaContextTiles {
             retryAfter[tile] = nil
             if revealsArrival { startArrival(tile, resident: resident) }
             refreshNeighbours(of: tile)
-            print("[Diorama base] installed \(tile.key) preload=\(residents.count)/\(DioramaOfflineStore.tiles.count) decoded=\(resident.bytes)")
+            print("[Diorama base] installed \(tile.key) working-set=\(residents.count) decoded=\(resident.bytes)")
             if isReady(tile) { onReady?(tile) }
             map.triggerRepaint()
         } catch {

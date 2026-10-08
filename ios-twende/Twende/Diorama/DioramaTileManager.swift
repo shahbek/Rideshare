@@ -51,7 +51,7 @@ final class DioramaState {
     }
 }
 
-/// All saved coarse coverage stays installed; visible focus/neighbours own demand-loaded HD islands.
+/// Zoom/projected-scale gated, bounded visible scenery with coarse fallback and joined HD reveals.
 @MainActor
 final class DioramaTileManager {
     let config: DioramaConfig
@@ -62,6 +62,10 @@ final class DioramaTileManager {
     private let styling: DioramaMapStyling
     private let contextTiles = DioramaContextTiles()
     private let hdTiles = DioramaHDTiles()
+    private let residency = DioramaResidencyBudget()
+    private var sceneryWasVisible: Bool = false
+    private var hdWasRequested: Bool = false
+    private var lastOutputPixels: Double = 0
     private weak var map: MapboxMap?
     private var installed: Bool = false
     private var basemapTerrainSuppressed: Bool = false
@@ -85,6 +89,11 @@ final class DioramaTileManager {
     init(config: DioramaConfig = .slipway, state: DioramaState? = nil) {
         self.config = config; self.state = state ?? .shared
         styling = DioramaMapStyling(config: config)
+        contextTiles.budget = residency; hdTiles.budget = residency
+        residency.onAvailable = { [weak self] releasedResident in
+            if releasedResident { self?.contextTiles.retryAdmission(); self?.hdTiles.retryAdmission() }
+            self?.scheduleUpdate(delay: 0.2)
+        }
         contextTiles.onReady = { [weak self] _ in self?.scheduleUpdate(delay: 0) }
         contextTiles.onUnavailable = { [weak self] _ in self?.scheduleUpdate(delay: 30) }
         contextTiles.onHDFrameCompleted = { [weak self] tile in self?.hdTiles.resumeArrivalIfStalled(tile) }
@@ -103,14 +112,15 @@ final class DioramaTileManager {
                 MainActor.assumeIsolated {
                     guard let self else { return }
                     if name == UIApplication.willResignActiveNotification {
-                        self.contextTiles.pauseLoading(); self.hdTiles.pauseLoading()
+                        self.hdTiles.clear(); self.contextTiles.clear(); self.suppressBasemapTerrain(false)
                         Task { await DioramaOfflineStore.shared.releaseDecodedMemory() }
                     } else if name == UIApplication.didReceiveMemoryWarningNotification {
-                        // Keep the low-detail region; release expensive overlays as complete islands.
-                        self.contextTiles.pauseLoading(); self.hdTiles.clear()
+                        self.residency.constrain()
+                        self.hdTiles.clear(); self.contextTiles.trimForMemoryWarning()
+                        self.suppressBasemapTerrain(self.contextTiles.hasReadyCoverage(in: self.visibleTilePriority))
                         Task { await DioramaOfflineStore.shared.releaseDecodedMemory() }
                         self.hdSuspendedUntil = Date().addingTimeInterval(30)
-                        print("[Diorama HD] memory warning; overlays released, base retained; loading paused 30s")
+                        print("[Diorama HD] memory warning; HD released, base trimmed to focus; conservative allowance; loading paused 30s")
                     }
                     self.applyPolicy(); self.scheduleUpdate(delay: 0)
                 }
@@ -176,38 +186,52 @@ final class DioramaTileManager {
                 (state.isEnabled ? "Download and prepare Masaki before viewing · open Offline maps" : "Masaki diorama disabled")
             return
         }
-        exitRequested = false
+        let threshold = config.minimumZoom - (sceneryWasVisible ? 0.25 : 0)
+        guard map.cameraState.zoom >= threshold else {
+            sceneryWasVisible = false; hdWasRequested = false
+            beginExit()
+            state.status = "Native map only at this distance · custom scenery starts at z\(config.minimumZoom)\n" + residency.report
+            return
+        }
+        sceneryWasVisible = true; exitRequested = false
+        let bounds = viewportBounds?() ?? .zero
+        let outputSize = CGSize(width: bounds.width * UIScreen.main.scale, height: bounds.height * UIScreen.main.scale)
+        let pixels = outputSize.width * outputSize.height
+        if lastOutputPixels > 0, pixels > lastOutputPixels * 1.2 { hdTiles.clear() }
+        lastOutputPixels = pixels
+        contextTiles.outputSize = outputSize; hdTiles.outputSize = outputSize
         let validViewport = refreshViewportInterest(on: map)
-        // Region residency does not depend on camera focus, viewport bootstrap or HD zoom gates.
+        // Invalid layout retains only the bounded existing working set; never preloads the region.
+        guard validViewport else {
+            state.status = "Waiting for map layout\n" + residency.report
+            scheduleUpdate(delay: 0.1); return
+        }
         contextTiles.viewport = viewport
         contextTiles.update(focus: tile, config: config, map: map, visible: state.visibleCategories,
             time: state.timeOfDay, wireframe: state.showsWireframe, priorityTiles: visibleTilePriority,
+            pinnedTiles: hdTiles.tiles,
             allowsLoading: Date() >= hdSuspendedUntil)
         contextTiles.setReducedEffects(reducesEffects, waterMotion: motion)
         suppressBasemapTerrain(contextTiles.hasReadyCoverage(in: visibleTilePriority))
-        if !validViewport {
-            hdTiles.setRequestState("Waiting for map layout")
-            state.status = contextTiles.report + "\n" + hdTiles.report
-            scheduleUpdate(delay: 0.1); return
-        }
         let wanted: [DioramaTileID]
-        if map.cameraState.zoom >= config.minimumZoom, let focus = viewportFocus, Date() >= hdSuspendedUntil {
-            // Focus plus neighbouring tiles actually intersecting the view; never preload the HD region.
-            wanted = [focus] + visibleTilePriority.filter {
-                $0 != focus && abs($0.x - focus.x) <= 1 && abs($0.y - focus.y) <= 1
-            }
-            hdTiles.setRequestState("Full-detail focus requested · \(focus.key)")
+        let hdThreshold = config.fullDetailMinimumZoom - (hdWasRequested ? 0.25 : 0)
+        if map.cameraState.zoom >= hdThreshold, let focus = viewportFocus, Date() >= hdSuspendedUntil {
+            let candidates = ([focus] + visibleTilePriority.filter { $0 != focus })
+                .filter { abs($0.x - focus.x) <= 1 && abs($0.y - focus.y) <= 1 && needsFullDetail($0, on: map) }
+            wanted = Array(candidates.prefix(residency.hdLimit))
+            hdTiles.setRequestState(wanted.isEmpty ? "Distant/horizon scenery uses coarse detail" : "Close foreground HD requested")
         } else {
             wanted = []
-            if Date() < hdSuspendedUntil { hdTiles.setRequestState("HD temporarily paused after a memory warning · base retained") }
-            else if map.cameraState.zoom < config.minimumZoom {
-                hdTiles.setRequestState("Zoom in for full detail · HD starts at z\(config.minimumZoom)")
+            if Date() < hdSuspendedUntil { hdTiles.setRequestState("Memory recovery · base trimmed; conservative HD retry after cooldown") }
+            else if map.cameraState.zoom < hdThreshold {
+                hdTiles.setRequestState("Coarse distance view · HD starts at z\(config.fullDetailMinimumZoom)")
             } else { hdTiles.setRequestState("No prepared Masaki tile intersects the current view") }
         }
+        hdWasRequested = !wanted.isEmpty
         hdTiles.update(wanted: wanted, visibleTiles: visibleTilePriority, map: map, base: contextTiles, viewport: viewport, config: config,
             categories: state.visibleCategories, time: state.timeOfDay, wireframe: state.showsWireframe,
             reduced: reducesEffects, motion: motion)
-        state.status = contextTiles.report + "\n" + hdTiles.report
+        state.status = contextTiles.report + "\n" + hdTiles.report + "\n" + residency.report
         if state.showsDebugOverlay || debugWasShown {
             styling.setTileBounds(hdTiles.tiles, visible: state.showsDebugOverlay, on: map)
         }
@@ -215,6 +239,21 @@ final class DioramaTileManager {
         if let retry = contextTiles.retryDelay { scheduleUpdate(delay: retry) }
         if let retry = hdTiles.retryDelay { scheduleUpdate(delay: retry) }
         if hdSuspendedUntil > Date() { scheduleUpdate(delay: hdSuspendedUntil.timeIntervalSinceNow) }
+    }
+
+    /// Detail follows ground distance and projected size, not pitch alone. A low horizon can
+    /// contain kilometres of scenery even at a high zoom; never give that horizon HD textures.
+    private func needsFullDetail(_ tile: DioramaTileID, on map: MapboxMap) -> Bool {
+        let origin = map.cameraState.center
+        let projection = DioramaProjection(origin: origin), rect = projection.rect(of: tile)
+        let nearest = DV2(min(rect.maxX, max(rect.minX, 0)), min(rect.maxY, max(rect.minY, 0)))
+        guard hypot(nearest.x, nearest.y) <= 450 else { return false }
+        let c = projection.coordinate(nearest), point = GeoPoint(latitude: c.latitude, longitude: c.longitude)
+        let a = map.point(for: point.coordinate)
+        let b = map.point(for: point.offset(eastMetres: 10, northMetres: 0).coordinate)
+        let d = map.point(for: point.offset(eastMetres: 0, northMetres: 10).coordinate)
+        let extent = max(hypot(b.x - a.x, b.y - a.y), hypot(d.x - a.x, d.y - a.y))
+        return extent.isFinite && extent >= 10
     }
 
     private func beginExit() {

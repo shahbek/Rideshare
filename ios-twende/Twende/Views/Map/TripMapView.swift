@@ -268,6 +268,11 @@ extension TripMapView {
         }
 
         func observe(_ mapView: MapView) {
+            viewport.setOnSurfaceChange { [weak self] in
+                Task { @MainActor [weak self] in
+                    self?.refreshRouteElevation(); self?.mapView?.mapboxMap.triggerRepaint()
+                }
+            }
             viewport.setOnRefresh { [weak self] in
                 Task { @MainActor [weak self] in self?.diorama?.scheduleUpdate(delay: 0.08) }
             }
@@ -281,6 +286,7 @@ extension TripMapView {
                 .store(in: &settingsCancelables)
             mapView.mapboxMap.onMapLoaded.observe { [weak self] _ in
                 self?.refreshBuildingHighlight(immediately: true)
+                self?.refreshRouteElevation()
                 self?.diorama?.scheduleUpdate(delay: 0)
             }.store(in: &cancelables)
             mapView.mapboxMap.onMapIdle.observe { [weak self] _ in
@@ -289,6 +295,7 @@ extension TripMapView {
                 self.reportSelectionCoordinate()
                 self.refreshBuildingHighlight(immediately: true)
                 if let map = self.mapView?.mapboxMap { self.airtelHouse.update(on: map, settled: true) }
+                self.refreshRouteElevation()
                 self.diorama?.scheduleUpdate(delay: 0.05)
             }.store(in: &cancelables)
             mapView.mapboxMap.onStyleLoaded.observe { [weak self] _ in
@@ -753,25 +760,42 @@ extension TripMapView {
             guard routeInstalled, let map = mapView?.mapboxMap else { return }
             let motion = RoutePolylineMotion(points: renderedRoutePoints)
             guard motion.points.count > 1 else { return }
+            var fractions = Set((0...128).map { Double($0) / 128 })
+            if let bridge = viewport.bridgeAlignmentSnapshot() {
+                let metres = zip(motion.points, motion.points.dropFirst()).reduce(0.0) { $0 + $1.0.distanceKm(to: $1.1) * 1_000 }
+                let margin = 2 / max(1, metres)
+                let projection = DioramaProjection(origin: TanzaniteBridgeAlignment.anchor.coordinate)
+                // Include the actual deck subdivisions even when this is a long city route.
+                for station in Array(stride(from: 0.0, to: bridge.length, by: 8)) + [bridge.length] {
+                    let p = bridge.point(at: station), c = projection.coordinate(DV2(p.x, p.y))
+                    if let fraction = motion.fraction(nearest: GeoPoint(latitude: c.latitude, longitude: c.longitude)) {
+                        fractions.insert(fraction)
+                        fractions.insert(max(0, fraction - margin)); fractions.insert(min(1, fraction + margin))
+                    }
+                }
+            }
+            let progress = fractions.sorted()
+            let bridgeHeights = progress.map { fraction in motion.sample(at: fraction).flatMap { viewport.bridgeRoadHeight(at: $0.point, heading: $0.heading) } }
+            let usesSeaHeight = dioramaOwnsGround || bridgeHeights.contains { $0 != nil }
             var heights: [Double] = []
-            for index in 0...128 {
-                let fraction = Double(index) / 128
+            for (index, fraction) in progress.enumerated() {
                 guard let sample = motion.sample(at: fraction) else { return }
-                let height = dioramaOwnsGround ? diorama?.groundHeight(at: sample.point) : nil
+                let ground = dioramaOwnsGround ? diorama?.groundHeight(at: sample.point) : nil
+                let height = bridgeHeights[index] ?? ground ?? (usesSeaHeight ? map.elevation(at: sample.point.coordinate) : nil)
                 heights.append(height.map { $0 + 0.12 } ?? 0)
             }
-            guard heights != lastRouteElevation else { return }
+            let signature = zip(progress, heights).flatMap { [$0.0, $0.1] } + [usesSeaHeight ? 1.0 : 0.0]
+            guard signature != lastRouteElevation else { return }
             var expression: [Any] = ["interpolate", ["linear"], ["line-progress"]]
-            for (index, height) in heights.enumerated() {
-                expression.append(Double(index) / 128)
-                expression.append(height)
+            for (fraction, height) in zip(progress, heights) {
+                expression.append(fraction); expression.append(height)
             }
             do {
                 for layer in [Self.casingLayerID, Self.coreLayerID, Self.pulseLayerID] {
-                    try map.setLayerProperty(for: layer, property: "line-elevation-reference", value: dioramaOwnsGround ? "sea" : "none")
+                    try map.setLayerProperty(for: layer, property: "line-elevation-reference", value: usesSeaHeight ? "sea" : "none")
                     try map.setLayerProperty(for: layer, property: "line-z-offset", value: expression)
                 }
-                lastRouteElevation = heights
+                lastRouteElevation = signature
             } catch {
                 print("[TripMap] Route elevation could not be applied")
             }

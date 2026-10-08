@@ -363,7 +363,9 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost, @unchecke
         DioramaGPUPreparation.shared.capture(device: metalDevice, color: colorPixelFormat, depth: depthStencilPixelFormat)
         let formats = SIMD2(colorPixelFormat, depthStencilPixelFormat)
         if preparedFormats == formats, isRendererReady { onInitialized?(); return }
-        lock.lock(); rendererReady = false; lock.unlock()
+        lock.lock()
+        rendererReady = false; completedReveal = nil; completedLifecycleReveal = nil; completedUnion = nil
+        lock.unlock()
         let uploadStarted = CACurrentMediaTime()
         guard !vertices.isEmpty, !indices.isEmpty,
               let library = DioramaShaderSource.library(for: metalDevice),
@@ -832,7 +834,10 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost, @unchecke
         postProcess = nil
         labelRenderer = nil
         publishLabels([])
-        lock.lock(); labelsReady = false; rendererReady = false; lock.unlock()
+        lock.lock()
+        labelsReady = false; rendererReady = false
+        completedReveal = nil; completedLifecycleReveal = nil; completedUnion = nil
+        lock.unlock()
     }
 
     private func setDiagnostic(_ text: String) {

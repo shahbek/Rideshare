@@ -23,12 +23,15 @@ nonisolated final class DioramaFleetRenderLayer: NSObject, CustomLayerHost {
     private struct Support {
         let pose: Pose
         let host: ObjectIdentifier?
+        let bridgeHeight: Double?
+        let surfaceRevision: UInt
         let matrix: simd_float4x4
     }
     private struct Receiver {
         let model: simd_float4x4
         let host: ObjectIdentifier?
         let bounds: SIMD4<Float>
+        let surfaceRevision: UInt
         let points: [SIMD4<Float>]
     }
     private struct Draw {
@@ -191,24 +194,30 @@ nonisolated final class DioramaFleetRenderLayer: NSObject, CustomLayerHost {
             if environment == nil { uniforms.lightGrid = SIMD4(0, 0, 1, 1); uniforms.groundColor.w = 0 }
             uniforms.water.z = Float(target.width); uniforms.water.w = Float(target.height)
             let hostID = host.map(ObjectIdentifier.init)
+            let surfaceRevision = viewport.surfaceRevision
+            let bridgeHeight = viewport.bridgeRoadHeight(at: pose.point, heading: pose.heading)
             var model: simd_float4x4
-            if let cached = support[pose.id], cached.pose == pose, cached.host == hostID, host != nil {
+            if let cached = support[pose.id], cached.pose == pose, cached.host == hostID,
+               cached.bridgeHeight == bridgeHeight, cached.surfaceRevision == surfaceRevision, host != nil || bridgeHeight != nil {
                 model = cached.matrix
             } else {
                 let angle = pose.heading * .pi / 180
                 let s = sin(angle), c = cos(angle)
-                let h = host?.groundHeight(at: pose.point)
+                let h = bridgeHeight ?? host?.groundHeight(at: pose.point)
                     ?? parameters.elevationData?.getElevationFor(pose.point.coordinate)?.doubleValue ?? 0
-                let front = host?.groundHeight(at: pose.point.offset(eastMetres: s * 1.5, northMetres: c * 1.5)) ?? h
-                let back = host?.groundHeight(at: pose.point.offset(eastMetres: -s * 1.5, northMetres: -c * 1.5)) ?? h
-                let rightH = host?.groundHeight(at: pose.point.offset(eastMetres: c * 0.8, northMetres: -s * 0.8)) ?? h
-                let leftH = host?.groundHeight(at: pose.point.offset(eastMetres: -c * 0.8, northMetres: s * 0.8)) ?? h
+                func roadHeight(_ point: GeoPoint) -> Double {
+                    viewport.bridgeRoadHeight(at: point, heading: pose.heading) ?? host?.groundHeight(at: point) ?? h
+                }
+                let front = roadHeight(pose.point.offset(eastMetres: s * 1.5, northMetres: c * 1.5))
+                let back = roadHeight(pose.point.offset(eastMetres: -s * 1.5, northMetres: -c * 1.5))
+                let rightH = roadHeight(pose.point.offset(eastMetres: c * 0.8, northMetres: -s * 0.8))
+                let leftH = roadHeight(pose.point.offset(eastMetres: -c * 0.8, northMetres: s * 0.8))
                 let forward = simd_normalize(SIMD3<Float>(Float(s), Float(c), Float(max(-0.3, min(0.3, (front - back) / 3)))))
                 var right = simd_normalize(SIMD3<Float>(Float(c), Float(-s), Float(max(-0.3, min(0.3, (rightH - leftH) / 1.6)))))
                 let up = simd_normalize(simd_cross(right, forward)); right = simd_normalize(simd_cross(forward, up))
                 let local = DioramaProjection(origin: origin).local(longitude: pose.point.longitude, latitude: pose.point.latitude)
-                model = simd_float4x4(columns: (SIMD4(right, 0), SIMD4(forward, 0), SIMD4(up, 0), SIMD4(Float(local.x), Float(local.y), Float(h + 0.015), 1)))
-                support[pose.id] = Support(pose: pose, host: hostID, matrix: model)
+                model = simd_float4x4(columns: (SIMD4(right, 0), SIMD4(forward, 0), SIMD4(up, 0), SIMD4(Float(local.x), Float(local.y), Float(h + (bridgeHeight == nil ? 0.015 : 0.06)), 1)))
+                support[pose.id] = Support(pose: pose, host: hostID, bridgeHeight: bridgeHeight, surfaceRevision: surfaceRevision, matrix: model)
             }
             let bounds = DioramaRenderLayer.Range(category: .props, start: 0, count: 0,
                 minimum: geometry.minimum, maximum: geometry.maximum)
@@ -232,7 +241,7 @@ nonisolated final class DioramaFleetRenderLayer: NSObject, CustomLayerHost {
                 projectedShadows[pose.id] = DioramaProjectedShadow(device: device, color: formats.x, depth: formats.y, size: 256)
             }
             let receiver: [SIMD4<Float>]
-            if let cached = receivers[pose.id], cached.model == model, cached.host == hostID, cached.bounds == shadowBounds {
+            if let cached = receivers[pose.id], cached.model == model, cached.host == hostID, cached.bounds == shadowBounds, cached.surfaceRevision == surfaceRevision {
                 receiver = cached.points
             } else {
                 let geographic = DioramaProjection(origin: origin), inverse = simd_inverse(model)
@@ -242,10 +251,11 @@ nonisolated final class DioramaFleetRenderLayer: NSObject, CustomLayerHost {
                     let p = model * SIMD4(x,y,0,1)
                     let c = geographic.coordinate(DV2(Double(p.x),Double(p.y)))
                     let point = GeoPoint(latitude: c.latitude, longitude: c.longitude)
-                    let h = host?.groundHeight(at: point) ?? parameters.elevationData?.getElevationFor(point.coordinate)?.doubleValue ?? Double(p.z)
+                    let h = viewport.bridgeRoadHeight(at: point) ?? host?.groundHeight(at: point)
+                        ?? parameters.elevationData?.getElevationFor(point.coordinate)?.doubleValue ?? Double(p.z)
                     return inverse * SIMD4(p.x,p.y,Float(h + 0.03),1)
                 }
-                receivers[pose.id] = Receiver(model: model, host: hostID, bounds: shadowBounds, points: receiver)
+                receivers[pose.id] = Receiver(model: model, host: hostID, bounds: shadowBounds, surfaceRevision: surfaceRevision, points: receiver)
             }
             let projected = projectedShadows[pose.id]
             let field = receivesShadow ? projected?.encode(command: mtlCommandBuffer, vertices: geometry.vertices,

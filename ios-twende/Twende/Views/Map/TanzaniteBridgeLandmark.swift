@@ -9,6 +9,7 @@ final class TanzaniteBridgeLandmark {
     var viewport: DioramaViewport?
     private var host: DioramaLandmarkLayer?
     private var pending: Task<Void, Never>?
+    private var revision: UInt = 0
 
     func update(on map: MapboxMap) {
         updateLighting()
@@ -16,10 +17,13 @@ final class TanzaniteBridgeLandmark {
         let distance = GeoPoint(camera.center).distanceKm(to: TanzaniteBridgeAlignment.anchor)
         guard camera.zoom >= 12.5, distance < 5 else { remove(from: map); return }
         guard !map.layerExists(withId: Self.layerID), pending == nil else { return }
+        let expected = revision
         pending = Task { [weak self, weak map] in
             do { try await Task.sleep(for: .milliseconds(200)) } catch { return }
-            guard let self, let map else { return }
+            guard !Task.isCancelled, let self, let map, self.revision == expected else { return }
             self.pending = nil
+            guard map.cameraState.zoom >= 12.5,
+                  GeoPoint(map.cameraState.center).distanceKm(to: TanzaniteBridgeAlignment.anchor) < 5 else { return }
             guard let alignment = TanzaniteBridgeAlignment.load() else { return }
             let scene: SCNScene
             if let cached = Self.cachedScene { scene = cached }
@@ -27,13 +31,14 @@ final class TanzaniteBridgeLandmark {
                 scene = TanzaniteBridgeGeometry.make(alignment: alignment)
                 Self.cachedScene = scene
             }
-            self.install(scene: scene, on: map)
+            self.install(scene: scene, alignment: alignment, on: map)
         }
     }
 
-    private func install(scene: SCNScene, on map: MapboxMap) {
+    private func install(scene: SCNScene, alignment: TanzaniteBridgeAlignment, on map: MapboxMap) {
         do {
-            let host = DioramaLandmarkLayer(origin: TanzaniteBridgeAlignment.anchor.coordinate, scene: scene, usesSeaDatum: true)
+            let host = DioramaLandmarkLayer(origin: TanzaniteBridgeAlignment.anchor.coordinate, scene: scene,
+                usesSeaDatum: true, bridgeAlignment: alignment)
             host.viewport = viewport
             host.onInitializationFailed = { [weak self, weak map, weak host] in
                 Task { @MainActor [weak self, weak map, weak host] in
@@ -61,10 +66,17 @@ final class TanzaniteBridgeLandmark {
                 || ProcessInfo.processInfo.thermalState.rawValue >= ProcessInfo.ThermalState.serious.rawValue)
     }
 
-    func styleDidReload() { pending?.cancel(); pending = nil; host = nil }
+    func styleDidReload() {
+        revision &+= 1
+        pending?.cancel(); pending = nil
+        if let host { viewport?.removeBridge(owner: ObjectIdentifier(host)) }
+        host = nil
+    }
     func remove(from map: MapboxMap) {
+        revision &+= 1
         pending?.cancel(); pending = nil
         if map.layerExists(withId: Self.layerID) { try? map.removeLayer(withId: Self.layerID) }
+        if let host { viewport?.removeBridge(owner: ObjectIdentifier(host)) }
         host = nil
     }
 }

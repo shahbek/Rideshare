@@ -139,6 +139,7 @@ nonisolated struct DioramaConfig: Sendable {
     // MARK: Tile
     var tileZoom: Int = 16
     var minimumZoom: Double = 15.5
+    var fullDetailMinimumZoom: Double = 17.5
     /// The Slipway, Msasani peninsula: one z16 tile (about 600 m across) holding the Slipway complex,
     /// the DoubleTree, Slipway Villas and the bay. Data comes from the bundled `slipway_tile.json`.
     var seedLatitude: Double = -6.7546

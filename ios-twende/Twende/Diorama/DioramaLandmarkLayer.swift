@@ -12,6 +12,7 @@ nonisolated final class DioramaLandmarkLayer: NSObject, CustomLayerHost, @unchec
     private var isReady: Bool = false
     private let origin: CLLocationCoordinate2D
     private let usesSeaDatum: Bool
+    private let bridgeAlignment: TanzaniteBridgeAlignment?
     private let renderer: DioramaRenderLayer
     private let vertices: [BuildingRenderVertex]
     private let indices: [UInt32]
@@ -33,8 +34,9 @@ nonisolated final class DioramaLandmarkLayer: NSObject, CustomLayerHost, @unchec
     var diagnostic: String { renderer.diagnostic }
 
     @MainActor init(origin: CLLocationCoordinate2D, scene: SCNScene, ring: [SIMD2<Double>] = [],
-                    isAirtel: Bool = false, usesSeaDatum: Bool = false) {
+                    isAirtel: Bool = false, usesSeaDatum: Bool = false, bridgeAlignment: TanzaniteBridgeAlignment? = nil) {
         self.origin = origin; self.isAirtel = isAirtel; self.usesSeaDatum = usesSeaDatum
+        self.bridgeAlignment = bridgeAlignment
         let projection = DioramaProjection(origin: origin)
         floorAnchors = ring.map { xy in
             let c = projection.coordinate(DV2(xy.x, xy.y))
@@ -99,8 +101,9 @@ nonisolated final class DioramaLandmarkLayer: NSObject, CustomLayerHost, @unchec
 
     func renderingWillStart(_ device: MTLDevice, colorPixelFormat: UInt, depthStencilPixelFormat: UInt) {
         renderer.renderingWillStart(device, colorPixelFormat: colorPixelFormat, depthStencilPixelFormat: depthStencilPixelFormat)
-        isReady = renderer.diagnostic.hasPrefix("ready")
+        isReady = renderer.isRendererReady
         guard isReady else { return }
+        if let bridgeAlignment { viewport?.publishBridge(bridgeAlignment, owner: ObjectIdentifier(self)) }
         func upload<T>(_ list: [T]) -> MTLBuffer? {
             list.withUnsafeBytes { bytes in
                 guard let base = bytes.baseAddress, !bytes.isEmpty else { return nil }
@@ -168,6 +171,7 @@ nonisolated final class DioramaLandmarkLayer: NSObject, CustomLayerHost, @unchec
 
     func renderingWillEnd() {
         isReady = false
+        viewport?.removeBridge(owner: ObjectIdentifier(self))
         DioramaLandmarkPresence.shared.remove(host: self)
         renderer.renderingWillEnd(); vertexBuffer = nil; indexBuffer = nil; projected = nil
         receiver.removeAll(); receiverKey = nil; receiverHeight = nil; lastHeight = nil; lastSupport = nil

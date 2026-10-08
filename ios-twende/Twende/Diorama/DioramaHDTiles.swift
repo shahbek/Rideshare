@@ -8,11 +8,12 @@ final class DioramaHDTiles {
     private final class Resident {
         let host: DioramaRenderLayer
         let bytes: Int
+        let reservation: UUID
         var reveal: SIMD4<Float>
         var arrival: Task<Void, Never>?
         var isRevealStalled: Bool = false
-        init(host: DioramaRenderLayer, bytes: Int) {
-            self.host = host; self.bytes = bytes
+        init(host: DioramaRenderLayer, bytes: Int, reservation: UUID) {
+            self.host = host; self.bytes = bytes; self.reservation = reservation
             reveal = SIMD4(0, 0, -DioramaRevealStyle.support - 2, 1)
         }
     }
@@ -40,7 +41,8 @@ final class DioramaHDTiles {
     private var revision: UInt = 0
     private var shapeRevision: UInt = 0
     private var admissionRetry: Date = .distantPast
-    private let payloadBudget: Int = 384 * 1_048_576
+    var budget: DioramaResidencyBudget?
+    var outputSize: CGSize = .zero
     private weak var map: MapboxMap?
     private weak var base: DioramaContextTiles?
     private var viewport: DioramaViewport?
@@ -67,7 +69,7 @@ final class DioramaHDTiles {
         if let failure = failures[focus] { return summary + "\n" + focus.key + ": " + failure }
         if residents[focus]?.arrival != nil { return summary + "\nHD expanding reveal · " + focus.key }
         if residents[focus] != nil { return summary + "\nFull-detail focus ready · " + focus.key }
-        if deferredTiles.contains(focus) { return summary + "\nHD payload allowance reached · base retained" }
+        if deferredTiles.contains(focus) { return summary + "\nHD exceeds available CPU/GPU allowance · coarse/native fallback retained" }
         return summary + "\n" + focus.key + ": " + (base?.readinessReport(focus) ?? "waiting for base")
     }
     func setRequestState(_ value: String) {
@@ -90,7 +92,7 @@ final class DioramaHDTiles {
         self.map = map; self.base = base; self.viewport = viewport; self.config = config
         self.categories = categories; self.time = time; self.wireframe = wireframe
         self.reduced = reduced; self.motion = motion
-        let next = Array(wanted.prefix(DioramaUnionShape.capacity))
+        let next = Array(wanted.prefix(budget?.hdLimit ?? 1))
         if self.wanted != next { deferredTiles.removeAll(); admissionRetry = .distantPast }
         self.wanted = next; self.visibleTiles = Set(visibleTiles)
         setPolicy(categories: categories, time: time, wireframe: wireframe, reduced: reduced, motion: motion)
@@ -112,6 +114,8 @@ final class DioramaHDTiles {
         revision &+= 1; readTask?.cancel(); readTask = nil; loadingTile = nil; loadingPhase = ""
     }
 
+    func retryAdmission() { deferredTiles.removeAll(); admissionRetry = .distantPast }
+
     func demoteAll() {
         pauseLoading(); wanted.removeAll()
         reconcileGroups()
@@ -132,7 +136,8 @@ final class DioramaHDTiles {
             for layer in [id(tile) + "-labels", id(tile)] where map.layerExists(withId: layer) { try? map.removeLayer(withId: layer) }
             if map.sourceExists(withId: id(tile) + "-source") { try? map.removeSource(withId: id(tile) + "-source") }
         }
-        residents[tile] = nil; base?.removeFocusMask(tile); onArtifact?(tile, nil)
+        if let resident = residents.removeValue(forKey: tile) { budget?.release(resident.reservation) }
+        base?.removeFocusMask(tile); onArtifact?(tile, nil)
     }
 
     private func nextLoadableTile() -> DioramaTileID? {
@@ -140,7 +145,7 @@ final class DioramaHDTiles {
             && (retries[$0] ?? .distantPast) <= Date() && base?.isReady($0) == true }
     }
     private func startLoading() {
-        guard readTask == nil, Date() >= admissionRetry, let map, nextLoadableTile() != nil else { return }
+        guard readTask == nil, budget?.isLoading != true, Date() >= admissionRetry, let map, nextLoadableTile() != nil else { return }
         let expected = revision
         readTask = Task { [weak self, weak map] in
             guard let self, let map else { return }
@@ -151,10 +156,25 @@ final class DioramaHDTiles {
             }
             while let tile = self.nextLoadableTile() {
                 guard !Task.isCancelled, self.revision == expected, UIApplication.shared.applicationState == .active else { return }
-                // All low-detail packages preload; HD waits only for its own already-installed base.
+                // Only admitted visible bases load; reserve CPU/GPU peak before decoding HD.
                 self.loadingTile = tile
                 do { try await Task.sleep(for: .milliseconds(180)) } catch { return }
-                guard self.wanted.contains(tile) else { continue }
+                guard self.wanted.contains(tile), let budget = self.budget else { continue }
+                guard var cost = await DioramaOfflineStore.shared.residencyCost(tile, context: false, size: self.outputSize) else {
+                    self.retries[tile] = Date().addingTimeInterval(30)
+                    self.failures[tile] = "Saved HD manifest unavailable · downloads retained"; continue
+                }
+                guard !Task.isCancelled, self.revision == expected, self.wanted.contains(tile) else { return }
+                if !budget.canReserve(cost, context: false), !budget.isLoading {
+                    self.base?.makeRoomForHD(tile, cost: cost, pinned: self.tiles)
+                }
+                guard let reservation = budget.reserve(cost, context: false) else {
+                    if budget.isLoading { return }
+                    self.deferredTiles.insert(tile)
+                    print("[Diorama HD] preflight deferred \(tile.key) peak=\(cost.peak) · \(budget.report)")
+                    continue
+                }
+                defer { if self.residents[tile]?.reservation != reservation { budget.release(reservation) } }
                 self.loadingPhase = "Reading saved HD · \(tile.key)"; self.onChanged?()
                 print("[Diorama HD] reading \(tile.key)")
                 let job = Task.detached(priority: .userInitiated) { await DioramaOfflineStore.shared.read(tile) }
@@ -169,22 +189,10 @@ final class DioramaHDTiles {
                     print("[Diorama HD] saved read unavailable \(tile.key): \(reason); low-detail retained")
                     continue
                 }
-                let bytes = self.residents.values.reduce(0) { $0 + $1.bytes }
-                if self.residents.count >= DioramaUnionShape.capacity || (!self.residents.isEmpty && bytes + artifact.decodedBytes > self.payloadBudget) {
-                    // Never evict just one member of an attached island to make room.
-                    let retiring = self.groups.values.contains { $0.isRemoving }
-                    if retiring { self.admissionRetry = Date().addingTimeInterval(2); return }
-                    let priority = self.wanted.firstIndex(of: tile) ?? Int.max
-                    if let victim = self.components().max(by: { self.priority(of: $0) < self.priority(of: $1) }),
-                       self.priority(of: victim) > priority {
-                        self.beginGroup(victim, mustRetire: true)
-                        self.admissionRetry = Date().addingTimeInterval(2)
-                        return
-                    }
-                    // A visible focus-containing island wins over another overlay. Do not churn
-                    // the same island forever when the settled view exceeds the payload allowance.
-                    self.deferredTiles.insert(tile)
-                    print("[Diorama HD] overlay deferred by payload allowance \(tile.key); base retained")
+                let actual = DioramaResidencyBudget.cost(artifact, context: false, size: self.outputSize)
+                cost = .init(retained: max(cost.retained, actual.retained), peak: max(cost.peak, actual.peak))
+                guard budget.revise(reservation, cost: cost) else {
+                    self.deferredTiles.insert(tile); self.failures[tile] = "Patched HD exceeds CPU/GPU allowance · base retained"
                     continue
                 }
                 if self.groups.values.contains(where: { group in
@@ -195,7 +203,8 @@ final class DioramaHDTiles {
                 }
                 self.retries[tile] = nil; self.failures[tile] = nil
                 self.loadingPhase = "Preparing full-detail GPU resources · \(tile.key)"; self.onChanged?()
-                await self.install(artifact, map: map, revision: expected)
+                await self.install(artifact, map: map, revision: expected, reservation: reservation)
+                if self.residents[tile]?.reservation == reservation { budget.commit(reservation, cost: cost) }
                 await Task.yield()
             }
         }
@@ -205,7 +214,7 @@ final class DioramaHDTiles {
         component.compactMap { wanted.firstIndex(of: $0) }.min() ?? Int.max
     }
 
-    private func install(_ artifacts: DioramaTileArtifacts, map: MapboxMap, revision expected: UInt) async {
+    private func install(_ artifacts: DioramaTileArtifacts, map: MapboxMap, revision expected: UInt, reservation: UUID) async {
         let tile = artifacts.tile
         let host = DioramaRenderLayer(origin: tile.centre, vertices: artifacts.vertices, indices: artifacts.indices,
             ranges: artifacts.ranges, groups: artifacts.groups, instances: artifacts.allInstances,
@@ -227,7 +236,7 @@ final class DioramaHDTiles {
         host.viewport = viewport
         host.setVisible(categories, timeOfDay: time); host.setWireframe(wireframe)
         host.setReducedEffects(reduced); host.setWaterMotion(motion)
-        let resident = Resident(host: host, bytes: artifacts.decodedBytes)
+        let resident = Resident(host: host, bytes: artifacts.decodedBytes, reservation: reservation)
         host.setReveal(resident.reveal)
         host.onInitializationFailed = { [weak self, weak host] in
             Task { @MainActor [weak self, weak host] in
@@ -344,12 +353,12 @@ final class DioramaHDTiles {
         [tile.offset(dx: -1, dy: 0), tile.offset(dx: 0, dy: 1), tile.offset(dx: 1, dy: 0), tile.offset(dx: 0, dy: -1)]
     }
     private func reconcileGroups() {
-        let desired: Set<DioramaTileID> = wanted.isEmpty ? [] : visibleTiles
+        let desired = Set(wanted)
         for group in groups.values {
-            let shouldRemove = group.mustRetire || group.tiles.isDisjoint(with: desired)
+            let shouldRemove = group.mustRetire || !group.tiles.isSubset(of: desired)
             if group.isRemoving != shouldRemove { animate(group, removing: shouldRemove) }
         }
-        for component in components() where component.isDisjoint(with: desired) { beginGroup(component) }
+        for component in components() where !component.isSubset(of: desired) { beginGroup(component) }
     }
     private func beginGroup(_ tiles: Set<DioramaTileID>, mustRetire: Bool = false) {
         guard !tiles.isEmpty else { return }

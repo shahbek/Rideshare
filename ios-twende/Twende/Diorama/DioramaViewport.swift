@@ -18,6 +18,37 @@ nonisolated final class DioramaViewport: @unchecked Sendable {
     private let lock = NSLock()
     private var value: Snapshot?
     private var onRefresh: (@Sendable () -> Void)?
+    private var bridge: (owner: ObjectIdentifier, alignment: TanzaniteBridgeAlignment)?
+    private var onSurfaceChange: (@Sendable () -> Void)?
+    private var surfaceGeneration: UInt = 0
+    var surfaceRevision: UInt { lock.lock(); defer { lock.unlock() }; return surfaceGeneration }
+
+    func setOnSurfaceChange(_ callback: @escaping @Sendable () -> Void) {
+        lock.lock(); onSurfaceChange = callback; lock.unlock()
+    }
+    func publishBridge(_ alignment: TanzaniteBridgeAlignment, owner: ObjectIdentifier) {
+        lock.lock()
+        let changed = bridge?.owner != owner
+        bridge = (owner, alignment)
+        if changed { surfaceGeneration &+= 1 }
+        let callback = onSurfaceChange
+        lock.unlock()
+        if changed { callback?() }
+    }
+    func removeBridge(owner: ObjectIdentifier) {
+        lock.lock()
+        let changed = bridge?.owner == owner
+        if changed { bridge = nil; surfaceGeneration &+= 1 }
+        let callback = onSurfaceChange
+        lock.unlock()
+        if changed { callback?() }
+    }
+    func bridgeAlignmentSnapshot() -> TanzaniteBridgeAlignment? {
+        lock.lock(); defer { lock.unlock() }; return bridge?.alignment
+    }
+    func bridgeRoadHeight(at point: GeoPoint, heading: Double? = nil) -> Double? {
+        bridgeAlignmentSnapshot()?.roadElevation(at: point, heading: heading)
+    }
 
     func setOnRefresh(_ callback: @escaping @Sendable () -> Void) {
         lock.lock(); onRefresh = callback; lock.unlock()
