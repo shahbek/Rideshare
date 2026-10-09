@@ -1,0 +1,89 @@
+{
+  "revision": 1,
+  "researchedAt": "2026-10-09",
+  "status": "research_partial_generation_blocked_not_installed",
+  "skylineReference": "https://r2-pub.rork.com/attachments/mpg9opplmy4kp1jciw77y.jpeg",
+  "geometrySource": "https://api.openstreetmap.org/api/0.6/map.json?bbox=39.282,-6.825,39.294,-6.812",
+  "attribution": "© OpenStreetMap contributors, ODbL",
+  "scope": {
+    "description": "Dar central harbour skyline and surrounding CBD; final district/tile inventory remains to be completed",
+    "researchBounds": [39.282, -6.825, 39.294, -6.812],
+    "note": "The skyline crosses addressed tile boundaries. TPA/PSPF lie west of longitude 39.287109375; St Joseph lies east. Do not claim a single z15 tile contains them all. No new downloaded region or whole-tile geometry has been published."
+  },
+  "preservedExisting": ["pspf-se", "pspf-nw", "st-joseph", "azania"],
+  "structures": [
+    {
+      "id": "harbour-tpa",
+      "name": "TPA One Stop Centre / Bandari Tower",
+      "identityConfidence": "verified mapped name and contractor project",
+      "osmWay": 368888931,
+      "osmName": "TPA One Step Centre",
+      "reference": "https://estimconstruction.co.tz/portfolio/tpa/",
+      "photos": ["https://estimconstruction.co.tz/wp-content/uploads/2019/11/Website-TPA.png", "https://estimconstruction.co.tz/wp-content/uploads/2019/11/Website-TPA2.png"],
+      "heightEvidence": "Contractor reports 162 m/40 floors; another skyscraper database reports 157 m. OSM levels=34. Reconcile before calibration; no surveyed height claim.",
+      "ring": [[39.286347,-6.8219114],[39.2863892,-6.8218324],[39.2864804,-6.8217032],[39.2865582,-6.82163],[39.2866414,-6.8215581],[39.2866843,-6.8215234],[39.2867239,-6.8215188],[39.2867346,-6.8215274],[39.2867547,-6.8215341],[39.2867674,-6.8215507],[39.2867715,-6.8215787],[39.2867641,-6.8216386],[39.2867534,-6.8217585],[39.2867359,-6.8218444],[39.2866478,-6.8220459],[39.28639,-6.8226069],[39.2863591,-6.8225879],[39.2863409,-6.8226227],[39.286323,-6.8226478],[39.2862958,-6.8226696],[39.2862752,-6.8226809],[39.2862646,-6.8226806],[39.2862307,-6.8226938],[39.2861992,-6.8226959],[39.2861286,-6.8226604],[39.2860864,-6.8225774],[39.2860904,-6.8225403],[39.2860636,-6.822529],[39.286347,-6.8219114]],
+      "conceptName": "harbour_tpa_concept",
+      "conceptGenerationId": "erumcg1bn1gzw2shbyyls",
+      "status": "concept_failed_external_input_url_not_trusted",
+      "modelId": null,
+      "bundledResource": null
+    },
+    {
+      "id": "harbour-mnf",
+      "name": "Mwalimu Nyerere Foundation Square / Johari Rotana",
+      "identityConfidence": "high confidence central exposed-grid twin skyline match; completed comparison inspected",
+      "reference": "https://disclosures.ifc.org/project-detail/SPI/29058/the-mwalimu-nyerere-foundation-house",
+      "completionReference": "https://www.skyscrapercenter.com/building/mwalimu-nyerere-foundation-square/36545",
+      "photos": ["https://cf.bstatic.com/xdata/images/hotel/max1024x768/504598076.jpg?k=6d18f9ff9f70f828cd1f2278a1fd2d6730dc61705026eeb5ca3c6bc6314e4320&o="],
+      "locationEvidence": "Mansfield/Bridge/Morogoro/Sokoine area; exact current complex footprint and anchor still unverified. Reject the older abandoned Shaaban Robert proposal.",
+      "osmWay": null,
+      "ring": null,
+      "heightEvidence": "IFC project describes 32 storeys; operator/reports differ on occupied hotel floor count. Current architectural height not yet verified.",
+      "photoVintage": "User skyline shows construction-stage exposed frame; compare completed 2019 complex rather than model the unfinished facade.",
+      "conceptName": "harbour_mnf_concept",
+      "conceptGenerationId": "ce2bw8o9ypxnfmkn2zzc5",
+      "status": "concept_failed_external_input_url_not_trusted_and_geography_pending",
+      "modelId": null,
+      "bundledResource": null
+    },
+    {
+      "id": "harbour-golden-jubilee",
+      "name": "Golden Jubilee Towers, Ohio Street",
+      "identityConfidence": "verified named OSM structure and contractor exterior; exact supplied skyline correspondence not established",
+      "osmWay": 688369590,
+      "reference": "https://estimconstruction.co.tz/portfolio/golden-jubilee-tower/",
+      "photos": ["https://estimconstruction.com/wp-content/uploads/2020/02/Golden-Jubilee-1.jpg"],
+      "osmApproximateVertexMean": [39.2891474, -6.8138005],
+      "heightEvidence": "Contractor 23 floors; OSM 25. Adjacent way 688369559 is separately named Golden Jubilee Tower with 9 levels: do not accidentally use it as the main tower footprint.",
+      "conceptName": "harbour_golden_jubilee_concept",
+      "conceptGenerationId": "hwiuadsnwlq3nd018g1b3",
+      "status": "concept_failed_external_input_url_not_trusted",
+      "modelId": null,
+      "bundledResource": null
+    },
+    {
+      "id": "harbour-view",
+      "name": "Harbour View Towers",
+      "identityConfidence": "verified mapped structure; not the still-unidentified pale skyline tower",
+      "osmWay": 688369328,
+      "photos": ["https://cf.bstatic.com/xdata/images/hotel/max1024x768/505251158.jpg?k=95c390b858c7916ef5c99e4d56e8f6125e0478bfc42c71dd508aa69a7e46d3fd&o="],
+      "ring": [[39.2857142,-6.8202202],[39.2857374,-6.8201958],[39.2857566,-6.8201963],[39.285782,-6.8201736],[39.285795,-6.8201733],[39.2858263,-6.8201469],[39.2859655,-6.8202917],[39.2859716,-6.8202893],[39.2859985,-6.8203207],[39.2859554,-6.8203604],[39.285946,-6.8203521],[39.2859087,-6.820385],[39.2858975,-6.8203753],[39.2858665,-6.820389],[39.2857142,-6.8202202]],
+      "status": "research_only_height_and_complete_photo_pending"
+    },
+    {
+      "id": "garden-avenue-ppf",
+      "name": "Garden Avenue Towers / former PPF Tower",
+      "osmWay": 688369592,
+      "osmApproximateVertexMean": [39.2896505, -6.8141042],
+      "identityConfidence": "mapped identity verified; reddish skyline tower correspondence remains unverified",
+      "reference": "https://www.m.travel-images.com/tanzania/photo-tanzania190.html",
+      "status": "photo_match_pending_not_generated"
+    }
+  ],
+  "unresolvedSkyline": [
+    {"position": "pale green-white tower immediately right of MNF", "status": "identity_and_footprint_unverified"},
+    {"position": "slender reddish tower farther right", "status": "identity_unverified_PPF_candidate_not_confirmed"},
+    {"position": "far-right green tower cluster", "status": "Bank of Tanzania candidate; labelled reference inspected, exact skyline match and footprint not certified", "reference": "https://www.archnet.org/sites/5755"}
+  ],
+  "generationBlocker": "generateImageAsset inputImages rejects direct external research URLs. User-uploaded trusted Rork reference photos are required; no models or runtime map changes have been made."
+}
