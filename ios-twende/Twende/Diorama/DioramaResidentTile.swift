@@ -42,6 +42,8 @@ nonisolated final class DioramaResidentTile: @unchecked Sendable {
     let summary: DioramaTileSummary
     /// Simplified pixel-error levels from a verified local sidecar; nil draws full detail everywhere.
     let lod: DioramaLODTable?
+    /// Constant-time painted-ground lookup for vehicles, shadows and route heights.
+    let groundIndex: DioramaGroundIndex?
     /// Metal allocations owned by this tile (shared storage; also the CPU view).
     let gpuBytes: Int
     /// CPU placement lists, labels and light grid.
@@ -52,8 +54,8 @@ nonisolated final class DioramaResidentTile: @unchecked Sendable {
          lightGrid: DioramaLightGrid, paintBuffer: MTLBuffer, paintTableBuffer: MTLBuffer, paintIndexBuffer: MTLBuffer,
          groundTexture: MTLTexture?, waterHeight: Double, labels: [DioramaBuildingLabel], poolBounds: DioramaRenderLayer.Range?,
          shadowBounds: (minimum: SIMD3<Float>, maximum: SIMD3<Float>)?, materialCounts: SIMD2<Int>, summary: DioramaTileSummary,
-         lod: DioramaLODTable? = nil) {
-        self.lod = lod
+         lod: DioramaLODTable? = nil, groundIndex: DioramaGroundIndex? = nil) {
+        self.lod = lod; self.groundIndex = groundIndex
         self.tile = tile; self.device = device
         self.vertexBuffer = vertexBuffer; self.vertexCount = vertexCount
         self.indexBuffer = indexBuffer; self.indexCount = indexCount
@@ -69,6 +71,7 @@ nonisolated final class DioramaResidentTile: @unchecked Sendable {
         cpuBytes = groups.reduce(0) { $0 + $1.instances.count * MemoryLayout<DioramaInstanceData>.stride }
             + lightGrid.lights.count * MemoryLayout<DioramaShaderLight>.stride * 2
             + labels.reduce(0) { $0 + $1.footprint.count * 16 + $1.title.utf8.count + 64 }
+            + (groundIndex?.bytes ?? 0)
     }
     var totalTriangles: Int { indexCount / 3 }
 
@@ -371,6 +374,9 @@ nonisolated extension DioramaTileArchive {
         if let lod, let metadata = DioramaLODStore.sidecar(for: directory, patched: patch != nil).flatMap(DioramaLODStore.readMetadata) {
             report.append(metadata.report + " · \(lod.bytes / 1_048_576) MiB")
         } else { report.append("Pixel-error LOD: not optimized yet · full detail at every distance") }
+        let painted = DioramaHalf.bits(9)
+        let groundIndex = DioramaGroundIndex(rect: DioramaProjection(origin: origin).rect(of: .init(z: m.z, x: m.x, y: m.y)),
+            ranges: ranges, index: { idx[$0] }, position: { packed[$0].position }, isGround: { packed[$0].color.w == painted })
         let summary = DioramaTileSummary(shorelineReport: m.shorelineReport, optimizationReport: report, stageTimings: m.stageTimings,
             totalTriangles: indexCount / 3, totalInstances: instances.count,
             totalBytes: vertexCount * MemoryLayout<DioramaPackedVertex>.stride + indexCount * 4, generationSeconds: m.generationSeconds)
@@ -379,6 +385,6 @@ nonisolated extension DioramaTileArchive {
             ranges: ranges, groups: groups, lightGrid: grid, paintBuffer: paintBuffer, paintTableBuffer: paintTableBuffer,
             paintIndexBuffer: paintIndexBuffer, groundTexture: groundTexture, waterHeight: m.waterHeight,
             labels: m.labels.map { .init(id: $0.id, title: $0.title, anchor: $0.anchor, footprint: $0.footprint.map { DV2($0.x, $0.y) }, isNamed: $0.isNamed) },
-            poolBounds: pool, shadowBounds: shadow, materialCounts: SIMD2(foliage, architecture), summary: summary, lod: lod)
+            poolBounds: pool, shadowBounds: shadow, materialCounts: SIMD2(foliage, architecture), summary: summary, lod: lod, groundIndex: groundIndex)
     }
 }

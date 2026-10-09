@@ -83,7 +83,9 @@ final class DioramaResidencyBudget {
         let groupCPU = plan.groupInstances * MemoryLayout<DioramaInstanceData>.stride
         let ground = plan.imageSize * plan.imageSize * 4 * 4 / 3
         let gpu = vertices + indices + instances + ground + plan.paintBytes + plan.lightBytes + plan.lodBytes
-        let retained = gpu + groupCPU + plan.lightBytes + (plan.ownershipCopy ? indices : 0)
+        // Painted-ground lookup grid: offsets plus at most a few cell references per triangle.
+        let groundGrid = min(plan.indexCapacity / 3 * 8, 4 * 1_048_576)
+        let retained = gpu + groupCPU + plan.lightBytes + groundGrid + (plan.ownershipCopy ? indices : 0)
             + effectBytes(context: context, labelTitles: labelTitles, size: size, scale: scale) + 2 * 1_048_576
         let transient = 4 * 1_048_576 + plan.vertexCount + groupCPU + instances
             + (plan.ownershipCopy ? indices : 0) + 6 * 1_048_576

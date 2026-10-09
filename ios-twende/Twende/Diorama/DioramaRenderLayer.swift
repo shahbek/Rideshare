@@ -82,6 +82,9 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost, @unchecke
         let local = DioramaProjection(origin: origin).local(longitude: point.longitude, latitude: point.latitude)
         guard groundRect.contains(local) else { return nil }
         groundQueryLock.lock(); defer { groundQueryLock.unlock() }
+        if let resident, let grid = resident.groundIndex {
+            return cameraGround.height(local, grid: grid, index: resident.index, position: resident.position)
+        }
         if let resident {
             return cameraGround.height(local, ranges: ranges, index: resident.index, position: resident.position, isGround: resident.isPaintedGround)
         }
