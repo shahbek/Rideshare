@@ -1,11 +1,12 @@
 import SceneKit
 import simd
 
-/// Authored open-plan rooftop office with a clear circulation spine; furnishings are illustrative.
+/// Authored top-storey office below the roof, with floor-supported furniture and a clear circulation spine.
 enum AirtelOfficeGeometry {
     static func add(to root: SCNNode, ring: [SIMD2<Double>], floor: Double, ceiling: Double) {
         typealias P = DarLandmarkParts
-        guard ring.count >= 3, let edge = ring.indices.max(by: {
+        guard ring.count >= 3, floor.isFinite, ceiling.isFinite, ceiling - floor >= 3,
+              let edge = ring.indices.max(by: {
             simd_distance(ring[$0], ring[($0 + 1) % ring.count]) < simd_distance(ring[$1], ring[($1 + 1) % ring.count])
         }) else { return }
         var along = simd_normalize(ring[(edge + 1) % ring.count] - ring[edge])
@@ -13,6 +14,7 @@ enum AirtelOfficeGeometry {
         let across = SIMD2(-along.y, along.x)
         let local = ring.map { SIMD2(simd_dot($0, along), simd_dot($0, across)) }
         let room = SCNNode(); room.name = "panoramicOfficeInterior"
+        let finishedFloor = floor + 0.22
         room.simdTransform = simd_float4x4(columns: (
             SIMD4(Float(along.x), Float(along.y), 0, 0), SIMD4(Float(across.x), Float(across.y), 0, 0),
             SIMD4(0, 0, 1, 0), SIMD4(0, 0, 0, 1)))
@@ -22,11 +24,11 @@ enum AirtelOfficeGeometry {
         let display = BuildingSurfaces.make("office.display", color: "#418D98", roughness: 1)
         let rug = BuildingSurfaces.make("office.rug", color: "#B9C7A6", roughness: 1)
         let floorRing = DioramaPolygon.offset(local.map { DV2($0.x, $0.y) }, by: -0.28)?.map { SIMD2($0.x, $0.y) } ?? local
-        P.volume(floorRing, bottom: floor, top: floor + 0.22, material: P.plaster, name: "officeTerrazzoFloor", root: room)
+        P.volume(floorRing, bottom: floor, top: finishedFloor, material: P.plaster, name: "officeTerrazzoFloor", root: room)
         let polygon = floorRing.map { DV2($0.x, $0.y) }
         let minX = local.map(\.x).min() ?? 0, maxX = local.map(\.x).max() ?? 0
         let minY = local.map(\.y).min() ?? 0, maxY = local.map(\.y).max() ?? 0
-        let midY = (minY + maxY) * 0.5, length = maxX - minX, z = floor + 0.22
+        let midY = (minY + maxY) * 0.5, length = maxX - minX, z = finishedFloor
         func fits(_ x: Double, _ y: Double, _ width: Double, _ depth: Double) -> Bool {
             let box = P.rectangle(x: x, y: y, width: width, depth: depth)
             return box.indices.allSatisfy { i in
@@ -44,7 +46,7 @@ enum AirtelOfficeGeometry {
             box(x, y, 0.78, 0.74, z + 0.45, z + 0.64, fabric, "officeChairSeat")
             box(x, y - facing * 0.33, 0.78, 0.18, z + 0.55, z + 1.28, fabric, "officeChairBack")
             box(x, y, 0.15, 0.15, z + 0.1, z + 0.45, P.silver, "officeChairStem")
-            box(x, y, 0.68, 0.58, z + 0.02, z + 0.12, P.silver, "officeChairBase")
+            box(x, y, 0.68, 0.58, z, z + 0.12, P.silver, "officeChairBase")
         }
         // Two coherent work zones flank a 2.6m unobstructed central aisle.
         for x in [minX + length * 0.34, minX + length * 0.49, minX + length * 0.64] {
@@ -80,9 +82,11 @@ enum AirtelOfficeGeometry {
         if fits(loungeX, midY, 5.3, 5.8) {
             box(loungeX, midY, 4.7, 5.0, z, z + 0.055, rug, "loungeRug")
             for side in [-1.0, 1.0] {
+                box(loungeX, midY + side * 1.65, 2.95, 0.65, z + 0.055, z + 0.23, fabric, "loungeSofaPlinth")
                 box(loungeX, midY + side * 1.65, 3.3, 0.9, z + 0.2, z + 0.62, P.trim, "loungeSofaSeat")
                 box(loungeX, midY + side * 2.05, 3.3, 0.25, z + 0.4, z + 1.2, P.trim, "loungeSofaBack")
             }
+            box(loungeX, midY, 1.2, 0.6, z + 0.055, z + 0.34, P.plaster, "loungeCoffeeTableBase")
             box(loungeX, midY, 2.5, 1.1, z + 0.32, z + 0.52, timber, "loungeCoffeeTable")
         }
         // Low joinery and greenery stay beside the glass, never across the circulation spine.
