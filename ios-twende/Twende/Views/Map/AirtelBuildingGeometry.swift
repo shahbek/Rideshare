@@ -8,7 +8,10 @@ enum AirtelBuildingGeometry {
     static let glassTop: Double = 24.8
     static let officeFloor: Double = 20.4
     static let canopyHeight: Double = 26.7
-    static let screenTop: Double = 31.2
+    static let screenTop: Double = 29.6
+    private static let canopyTop: Double = canopyHeight + 0.5
+    private static let rooftopFloor: Double = canopyTop + 0.3
+    private static let roofConcrete = BuildingSurfaces.make("airtel.roofConcrete", color: "#C9C2B6", roughness: 0.9, metalness: 0)
     private static let white = BuildingSurfaces.make("airtel.whiteAluminium", color: "#F4EFE7", roughness: 0.55, metalness: 0.12)
     private static let silver = BuildingSurfaces.make("airtel.silverSpandrel", color: "#BFCBCB", roughness: 0.48, metalness: 0.25)
     private static let frame = BuildingSurfaces.make("airtel.charcoalAluminium", color: "#30494E", roughness: 0.46, metalness: 0.35)
@@ -49,8 +52,8 @@ enum AirtelBuildingGeometry {
         root.addChildNode(LandmarkMesh.volume(body, bottom: glassTop, top: glassTop + 0.3, material: white, name: "airtelClosedRoof"))
         root.addChildNode(LandmarkMesh.volume(outline, bottom: 7.0, top: 7.25, material: white, name: "airtelPodiumDeck"))
 
-        addFlyingRoof(to: root, outline: outline, body: body, front: front)
-        var columns = BuildingMesh()
+        addRoof(to: root, outline: outline, body: body, front: front)
+        var columns = BuildingMesh(), columnBases = BuildingMesh(), columnCapitals = BuildingMesh()
         for edge in outline.indices {
             let p = outline[edge], q = outline[(edge + 1) % outline.count]
             let length = simd_distance(p, q)
@@ -58,10 +61,15 @@ enum AirtelBuildingGeometry {
             let count = max(2, Int(length / 6))
             for i in 0..<count {
                 let xy = p + (q - p) * ((Double(i) + 0.5) / Double(count))
-                LandmarkMesh.beam(&columns, from: v(xy * 0.99, 0.3), to: v(xy * 0.99, 7.05), radius: 0.34, sides: 12)
+                let support = xy * 0.99
+                LandmarkMesh.beam(&columnBases, from: v(support, 0.2), to: v(support, 0.55), radius: 0.78, sides: 12)
+                LandmarkMesh.beam(&columns, from: v(support, 0.45), to: v(support, 7.05), radius: 0.62, sides: 12)
+                LandmarkMesh.beam(&columnCapitals, from: v(support, 6.65), to: v(support, 7.2), radius: 0.76, sides: 12)
             }
         }
         root.addChildNode(columns.node(name: "airtelPalePodiumColumns", material: silver))
+        root.addChildNode(columnBases.node(name: "airtelPodiumColumnFeet", material: white))
+        root.addChildNode(columnCapitals.node(name: "airtelPodiumColumnCapitals", material: white))
         // Entrance under the recessed bay, with a projecting shallow canopy.
         let entrance = a + (b - a) * 0.655 - outward * 1.4
         let u = -direction * 3.3, n = outward * 1.1
@@ -140,56 +148,168 @@ enum AirtelBuildingGeometry {
         root.addChildNode(mesh.node(name: name, material: material))
     }
 
-    private static func addFlyingRoof(to root: SCNNode, outline: [SIMD2<Double>], body: [SIMD2<Double>], front: Int) {
+    private static func addRoof(to root: SCNNode, outline: [SIMD2<Double>], body: [SIMD2<Double>], front: Int) {
         let a = outline[front], b = outline[(front + 1) % outline.count]
         let along = simd_normalize(b - a), outward = SIMD2(along.y, -along.x), inward = -outward
-        let centre = outline.reduce(SIMD2<Double>.zero, +) / Double(outline.count)
-        let canopy = outline.map { centre + ($0 - centre) * 1.055 }
-        let depths = canopy.map { simd_dot($0, inward) }
-        let near = depths.min() ?? 0, far = depths.max() ?? 1
-        let pitch = (screenTop - 0.5 - canopyHeight) / max(1, far - near)
-        func roofHeight(_ p: SIMD2<Double>) -> Double {
-            canopyHeight + (simd_dot(p, inward) - near) * pitch
+        let lengths = outline.map { simd_dot($0, along) }, depths = outline.map { simd_dot($0, inward) }
+        let centre = along * ((lengths.min() ?? 0) + (lengths.max() ?? 0)) / 2
+            + inward * ((depths.min() ?? 0) + (depths.max() ?? 0)) / 2
+        let canopy = DioramaPolygon.offset(outline.map { DV2($0.x, $0.y) }, by: 1.05)?.map { SIMD2($0.x, $0.y) }
+            ?? outline.map { centre + ($0 - centre) * 1.055 }
+        // Every roof plane is level. The inset roof is a complete deck, not a single logo wall.
+        root.addChildNode(LandmarkMesh.volume(canopy, bottom: canopyHeight, top: canopyTop,
+            material: white, name: "airtelCantileverCanopy"))
+        addCurvedRoofSupports(to: root, body: body)
+        let rooftop = outline.map { p in
+            let d = p - centre
+            return centre + along * (simd_dot(d, along) * 0.88) + inward * (simd_dot(d, inward) * 0.76)
         }
-        // A closed, gently sloping white sail with a real underside; it is not an occupied storey.
-        let sail = LandmarkMesh.volume(canopy, bottom: 0, top: 0.5, material: white, name: "airtelCantileverCanopy")
-        sail.simdTransform = simd_float4x4(columns: (
-            SIMD4(1, 0, Float(inward.x * pitch), 0), SIMD4(0, 1, Float(inward.y * pitch), 0),
-            SIMD4(0, 0, 1, 0), SIMD4(0, 0, Float(canopyHeight - near * pitch), 1)))
-        root.addChildNode(sail)
-        var supports = BuildingMesh()
-        for edge in body.indices {
-            let p = body[edge], q = body[(edge + 1) % body.count]
-            let length = simd_distance(p, q)
-            guard length > 8 else { continue }
-            let count = max(1, Int(length / 9))
-            for i in 0..<count {
-                let xy = p + (q - p) * ((Double(i) + 0.5) / Double(count))
-                let foot = centre + (xy - centre) * 0.87
-                let tip = centre + (xy - centre) * 1.04
-                LandmarkMesh.beam(&supports, from: v(foot, glassTop + 0.3), to: v(foot, roofHeight(foot)), radius: 0.18, sides: 8)
-                LandmarkMesh.beam(&supports, from: v(foot, glassTop + 0.8), to: v(tip, roofHeight(tip)), radius: 0.16, sides: 8)
+        root.addChildNode(LandmarkMesh.volume(rooftop, bottom: canopyTop - 0.02, top: rooftopFloor,
+            material: roofConcrete, name: "airtelInsetRooftopDeck"))
+        addRoofParapet(to: root, ring: rooftop)
+        let frontEdge = AirtelBuildingSite.frontEdge(rooftop)
+        let rearEdge = rooftop.indices.filter { edge in
+            let d = rooftop[(edge + 1) % rooftop.count] - rooftop[edge]
+            guard simd_length(d) > 4 else { return false }
+            return simd_dot(simd_normalize(SIMD2(d.y, -d.x)), inward) > 0.65
+        }.max { left, right in
+            simd_distance(rooftop[left], rooftop[(left + 1) % rooftop.count])
+                < simd_distance(rooftop[right], rooftop[(right + 1) % rooftop.count])
+        }
+        addRoofSign(to: root, ring: rooftop, edge: frontEdge, name: "airtelNorthSign")
+        if let rearEdge { addRoofSign(to: root, ring: rooftop, edge: rearEdge, name: "airtelRearSign") }
+        let services = addRoofServices(to: root, ring: rooftop, centre: centre, along: along, inward: inward)
+        let roofPolygon = rooftop.map { DV2($0.x, $0.y) }
+        let mastSites = [centre + along * 4 + inward * 1.5, centre + along * 9 + inward * 1.5,
+                         centre + along * 1 + inward * 4, centre - along * 3 + inward * 4]
+        let mastSite = mastSites.first { site in
+            let feet = [site + SIMD2(-0.65, -0.4), site + SIMD2(0.65, -0.4), site + SIMD2(0, 0.7)]
+            return feet.allSatisfy { foot in
+                let point = DV2(foot.x, foot.y)
+                return DioramaPolygon.contains(roofPolygon, point)
+                    && DioramaPolygon.distanceToRing(roofPolygon, point) > 0.65
+                    && services.allSatisfy { service in
+                        !DioramaPolygon.contains(service, point) && DioramaPolygon.distanceToRing(service, point) > 0.4
+                    }
             }
         }
-        root.addChildNode(supports.node(name: "airtelCanopyBraces", material: white))
-        // A single slim sign blade sits on the canopy, rather than enclosing a fictitious glass room.
-        let signA = a + (b - a) * 0.08 - outward * 2.2
-        let signB = a + (b - a) * 0.92 - outward * 2.2
-        let bladeRing = [signA, signB, signB - outward * 0.42, signA - outward * 0.42]
-        let bladeBase = max(roofHeight(signA), roofHeight(signB)) + 0.45
-        let bladeTop = max(bladeBase + 0.8, screenTop)
-        root.addChildNode(LandmarkMesh.volume(bladeRing, bottom: bladeBase, top: bladeTop,
-            material: white, name: "airtelRoofSignBlade"))
-        let signWidth = min(11.5, simd_distance(signA, signB) * 0.60, (bladeTop - bladeBase - 0.3) * 3.2)
-        let sign = AirtelSignage.make(width: signWidth, material: signLight)
-        let signCentre = (signA + signB) / 2 + outward * 0.08
-        sign.name = "airtelNorthSign"
+        if let mastSite { mast(root: root, at: mastSite, roofHeight: { _ in rooftopFloor }) }
+    }
+
+    private static func addCurvedRoofSupports(to root: SCNNode, body: [SIMD2<Double>]) {
+        var supports = BuildingMesh()
+        let polygon = body.map { DV2($0.x, $0.y) }
+        for edge in body.indices {
+            let p = body[edge], q = body[(edge + 1) % body.count], d = q - p
+            let length = simd_length(d)
+            guard length > 8 else { continue }
+            let normal = simd_normalize(SIMD2(d.y, -d.x))
+            let count = max(1, Int(length / 8))
+            for bay in 0..<count {
+                let xy = p + d * ((Double(bay) + 0.5) / Double(count))
+                let foot = xy - normal * 1.05
+                guard DioramaPolygon.contains(polygon, DV2(foot.x, foot.y)),
+                      DioramaPolygon.distanceToRing(polygon, DV2(foot.x, foot.y)) > 0.3 else { continue }
+                let joint = v(foot, glassTop + 0.75)
+                LandmarkMesh.beam(&supports, from: v(foot, glassTop + 0.3), to: joint, radius: 0.25, sides: 10)
+                for tipXY in [xy + normal * 0.65, foot - normal * 0.95] {
+                    let end = v(tipXY, canopyHeight + 0.02)
+                    let direction = simd_normalize(tipXY - foot)
+                    curvedSupport(&supports, start: joint, controlA: v(foot, canopyHeight - 0.08),
+                        controlB: v(tipXY - direction * 0.55, canopyHeight + 0.02), end: end,
+                        planeNormal: SIMD3(-normal.y, normal.x, 0), radius: 0.23)
+                }
+            }
+        }
+        root.addChildNode(supports.node(name: "airtelCanopyCurvedBeams", material: white))
+    }
+
+    // Shared tube rings/normals follow a cubic curve; no faceted rods or per-segment internal caps.
+    private static func curvedSupport(_ mesh: inout BuildingMesh, start: SIMD3<Double>,
+                                      controlA: SIMD3<Double>, controlB: SIMD3<Double>, end: SIMD3<Double>,
+                                      planeNormal: SIMD3<Double>, radius: Double) {
+        let steps = 10, sides = 10
+        func sample(_ step: Int, _ side: Int) -> (point: SIMD3<Double>, normal: SIMD3<Double>) {
+            let t = Double(step) / Double(steps), s = 1 - t
+            let centre = start * (s * s * s) + controlA * (3 * s * s * t)
+                + controlB * (3 * s * t * t) + end * (t * t * t)
+            let tangent = simd_normalize((controlA - start) * (3 * s * s)
+                + (controlB - controlA) * (6 * s * t) + (end - controlB) * (3 * t * t))
+            let across = simd_cross(tangent, planeNormal)
+            let angle = Double(side) * 2 * .pi / Double(sides)
+            let normal = planeNormal * cos(angle) + across * sin(angle)
+            return (centre + normal * radius, normal)
+        }
+        for step in 0..<steps {
+            for side in 0..<sides {
+                let a = sample(step, side), b = sample(step, side + 1)
+                let c = sample(step + 1, side + 1), d = sample(step + 1, side)
+                mesh.smoothQuad(a.point, b.point, c.point, d.point, normals: [a.normal, b.normal, c.normal, d.normal])
+            }
+        }
+        let startAxis = simd_normalize(controlA - start), endAxis = simd_normalize(end - controlB)
+        for side in 0..<sides {
+            mesh.triangle(start, sample(0, side + 1).point, sample(0, side).point, normal: -startAxis)
+            mesh.triangle(end, sample(steps, side).point, sample(steps, side + 1).point, normal: endAxis)
+        }
+    }
+
+    private static func addRoofParapet(to root: SCNNode, ring: [SIMD2<Double>]) {
+        guard let inner = DioramaPolygon.offset(ring.map { DV2($0.x, $0.y) }, by: -0.48),
+              inner.count == ring.count else { return }
+        let normals = BuildingContour.outwardNormals(ring)
+        var parapet = BuildingMesh(), coping = BuildingMesh()
+        let bottom = rooftopFloor - 0.02, top = screenTop - 0.12
+        for i in ring.indices {
+            let j = (i + 1) % ring.count
+            let a = ring[i], b = ring[j], c = SIMD2(inner[j].x, inner[j].y), d = SIMD2(inner[i].x, inner[i].y)
+            let n0 = v(normals[i], 0), n1 = v(normals[j], 0)
+            parapet.smoothQuad(v(a, bottom), v(b, bottom), v(b, top), v(a, top), normals: [n0, n1, n1, n0])
+            parapet.smoothQuad(v(c, bottom), v(d, bottom), v(d, top), v(c, top), normals: [-n1, -n0, -n0, -n1])
+            parapet.quad(v(a, top), v(b, top), v(c, top), v(d, top))
+            parapet.quad(v(d, bottom), v(c, bottom), v(b, bottom), v(a, bottom))
+        }
+        coping.perimeter(rings: [ring], bottom: screenTop - 0.2, top: screenTop, projection: 0.10, profileSegments: 6)
+        root.addChildNode(parapet.node(name: "airtelRoundedRooftopEdge", material: white))
+        root.addChildNode(coping.node(name: "airtelRooftopCoping", material: white))
+    }
+
+    private static func addRoofSign(to root: SCNNode, ring: [SIMD2<Double>], edge: Int, name: String) {
+        let a = ring[edge], b = ring[(edge + 1) % ring.count]
+        let length = simd_distance(a, b), along = simd_normalize(b - a)
+        let outward = SIMD2(along.y, -along.x)
+        let width = min(11.5, length * 0.42, (screenTop - rooftopFloor - 0.35) * 3.2)
+        guard width > 1 else { return }
+        let sign = AirtelSignage.make(width: width, material: signLight)
+        let bounds = sign.boundingBox
+        let height = Double(bounds.max.y - bounds.min.y)
+        let centre = (a + b) / 2 + outward * 0.12
+        let baseline = (rooftopFloor + screenTop) / 2 - height / 2 - Double(bounds.min.y)
+        sign.name = name
         sign.simdTransform = simd_float4x4(columns: (
             SIMD4(Float(along.x), Float(along.y), 0, 0), SIMD4(0, 0, 1, 0),
             SIMD4(Float(outward.x), Float(outward.y), 0, 0),
-            SIMD4(Float(signCentre.x), Float(signCentre.y), Float(bladeBase + 0.2), 1)))
+            SIMD4(Float(centre.x), Float(centre.y), Float(baseline), 1)))
         root.addChildNode(sign)
-        mast(root: root, at: SIMD2(3, -3), roofHeight: { roofHeight($0) + 0.5 })
+    }
+
+    private static func addRoofServices(to root: SCNNode, ring: [SIMD2<Double>], centre: SIMD2<Double>,
+                                        along: SIMD2<Double>, inward: SIMD2<Double>) -> [[DV2]] {
+        let polygon = ring.map { DV2($0.x, $0.y) }
+        var footprints: [[DV2]] = []
+        for (distance, width, depth, height) in [(-6.5, 6.0, 3.5, 0.95), (2.0, 3.2, 2.2, 0.65)] {
+            let origin = centre + along * distance - inward * 1.2
+            let x = along * (width / 2), y = inward * (depth / 2)
+            let shape = [origin - x - y, origin + x - y, origin + x + y, origin - x + y]
+            guard shape.allSatisfy({
+                DioramaPolygon.contains(polygon, DV2($0.x, $0.y))
+                    && DioramaPolygon.distanceToRing(polygon, DV2($0.x, $0.y)) > 0.85
+            }) else { continue }
+            root.addChildNode(LandmarkMesh.volume(shape, bottom: rooftopFloor, top: rooftopFloor + height,
+                material: white, name: "airtelRoofServiceHousing"))
+            footprints.append(shape.map { DV2($0.x, $0.y) })
+        }
+        return footprints
     }
 
     private static func mast(root: SCNNode, at centre: SIMD2<Double>, roofHeight: (SIMD2<Double>) -> Double) {
@@ -198,9 +318,11 @@ enum AirtelBuildingGeometry {
         for i in feet.indices {
             let next = feet[(i + 1) % feet.count]
             LandmarkMesh.beam(&steel, from: v(feet[i], roofHeight(feet[i])), to: v(feet[i], 42), radius: 0.18, sides: 8)
-            for level in 0..<3 {
-                let z = max(roofHeight(feet[i]), roofHeight(next)) + Double(level) * 3.2
-                LandmarkMesh.beam(&steel, from: v(feet[i], z), to: v(next, z + 3.2), radius: 0.13, sides: 8)
+            let base = max(roofHeight(feet[i]), roofHeight(next))
+            let levels = max(1, Int(ceil((42 - base) / 3.2)))
+            for level in 0..<levels {
+                let z = base + Double(level) * 3.2
+                LandmarkMesh.beam(&steel, from: v(feet[i], z), to: v(next, min(42, z + 3.2)), radius: 0.13, sides: 8)
                 LandmarkMesh.beam(&steel, from: v(feet[i], z), to: v(next, z), radius: 0.15, sides: 8)
             }
         }
