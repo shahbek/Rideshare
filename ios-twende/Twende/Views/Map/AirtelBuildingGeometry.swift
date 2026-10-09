@@ -31,12 +31,8 @@ enum AirtelBuildingGeometry {
         let podium = outline.map { $0 * 0.965 }
         facade(ring: podium, bottom: 0.25, top: glassBase, rows: 2, bayWidth: 4.5,
                 colors: ["#BFCBCB", "#C6D6D6"], root: root, name: "airtelPodium")
-        let officeFloor = glassTop - 4.4
-        facade(ring: body, bottom: glassBase, top: officeFloor, rows: 3, bayWidth: 4.5,
+        facade(ring: body, bottom: glassBase, top: glassTop, rows: 4, bayWidth: 4.5,
                 colors: ["#326A72", "#417E86", "#558C94"], root: root, name: "airtelCurtainWall")
-        facade(ring: body, bottom: officeFloor, top: glassTop, rows: 1, bayWidth: 7,
-                colors: ["#BFCBCB"], root: root, name: "airtelPanoramicOffice", panoramic: true)
-        AirtelOfficeGeometry.add(to: root, ring: body, floor: officeFloor, ceiling: glassTop)
         for floor in 1..<4 {
             let z = glassBase + Double(floor) * 4.4
             band(body, bottom: z - 0.42, top: z + 0.15, offset: 0.035, material: silver, root: root, name: "airtelSpandrel.\(floor)")
@@ -52,10 +48,17 @@ enum AirtelBuildingGeometry {
         let canopy = outline.map { $0 * 1.055 }
         root.addChildNode(LandmarkMesh.volume(canopy, bottom: canopyHeight, top: canopyHeight + 0.5, material: white, name: "airtelCantileverCanopy"))
         let screen = outline.map { $0 * 0.88 }
-        band(screen, bottom: 28.15, top: screenTop, offset: 0, material: white, root: root, name: "airtelRoofScreen")
-        facade(ring: screen, bottom: 27.4, top: 28.15, rows: 1, bayWidth: 2.5,
-                colors: ["#558C94"], root: root, name: "airtelRoofRibbon")
-        root.addChildNode(LandmarkMesh.volume(screen, bottom: screenTop - 0.22, top: screenTop, material: white, name: "airtelScreenCap"))
+        // Put the panoramic office above the opaque cantilever, not hidden beneath two roofs.
+        facade(ring: screen, bottom: 27.4, top: screenTop, rows: 1, bayWidth: 7,
+                colors: ["#BFCBCB"], root: root, name: "airtelPanoramicOffice", panoramic: true)
+        AirtelOfficeGeometry.add(to: root, ring: screen, floor: 27.4, ceiling: screenTop)
+        let clearRoof = BuildingSurfaces.make("landmark.panoramicGlass", color: "#BFCBCB", roughness: 1, metalness: 0)
+        clearRoof.transparency = 0.035
+        root.addChildNode(BuildingFootprint(rings: [screen]).deck(at: screenTop, thickness: 0.06,
+            material: clearRoof, name: "airtelTransparentOfficeRoof"))
+        var roofRim = BuildingMesh()
+        roofRim.perimeter(rings: [screen], bottom: screenTop - 0.12, top: screenTop + 0.12, projection: 0.15)
+        root.addChildNode(roofRim.node(name: "airtelOfficeRoofRim", material: white))
         var supports = BuildingMesh(), columns = BuildingMesh()
         for edge in outline.indices {
             let p = outline[edge], q = outline[(edge + 1) % outline.count]
@@ -128,10 +131,7 @@ enum AirtelBuildingGeometry {
                     } else {
                         panes[colorIndex].smoothQuad(v(p, low), v(q, low), v(q, high), v(p, high), normals: ns)
                     }
-                    if !curved {
-                        let offset = normal * 0.11
-                        LandmarkMesh.beam(&mullions, from: v(p + offset, low), to: v(q + offset, low), radius: 0.16, sides: 8)
-                    }
+
                 }
                 if !curved {
                     let offset = normal * 0.11
@@ -139,10 +139,15 @@ enum AirtelBuildingGeometry {
                 }
             }
         }
+        // One shared perimeter skin carries every rail around the rounded corners/recess.
+        for row in 0...rows {
+            let z = bottom + (top - bottom) * Double(row) / Double(rows)
+            mullions.perimeter(rings: [ring], bottom: z - 0.16, top: z + 0.16, projection: 0.23)
+        }
         let group = SCNNode(); group.name = name
         for i in colors.indices {
             let material = BuildingSurfaces.make(panoramic ? "landmark.panoramicGlass" : "airtel.tealGlass", color: colors[i], roughness: 0.4, metalness: 0.08)
-            if panoramic { material.transparency = 0.14 }
+            if panoramic { material.transparency = 0.045; material.metalness.contents = 0; material.roughness.contents = 1 }
             group.addChildNode(panes[i].node(name: "curtainGlass", material: material))
         }
         group.addChildNode(lit.node(name: "occupiedOfficeWindows", material: LandmarkLightingGeometry.window))
@@ -152,11 +157,7 @@ enum AirtelBuildingGeometry {
 
     private static func band(_ ring: [SIMD2<Double>], bottom: Double, top: Double, offset: Double, material: SCNMaterial, root: SCNNode, name: String) {
         var mesh = BuildingMesh()
-        for i in ring.indices {
-            let a = ring[i], b = ring[(i + 1) % ring.count], d = simd_normalize(b - a)
-            let n = SIMD2(d.y, -d.x) * offset
-            mesh.quad(v(a + n, bottom), v(b + n, bottom), v(b + n, top), v(a + n, top))
-        }
+        mesh.perimeter(rings: [ring], bottom: bottom, top: top, projection: max(0.08, offset))
         root.addChildNode(mesh.node(name: name, material: material))
     }
 

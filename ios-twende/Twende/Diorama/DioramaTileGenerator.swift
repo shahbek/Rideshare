@@ -31,6 +31,8 @@ nonisolated struct DioramaInstanceGroup: Sendable {
     let minimum: SIMD3<Float>
     let maximum: SIMD3<Float>
     var landmarkPlaceholder: Bool = false
+    /// Map-local read-time owner, not part of saved package formats.
+    var landmarkID: String? = nil
     /// Index into the tile's prototype LOD table, or -1.
     var lodSlot: Int32 = -1
     /// Largest placement scale, converting prototype-unit error to metres.

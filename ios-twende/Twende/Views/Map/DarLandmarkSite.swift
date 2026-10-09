@@ -19,7 +19,7 @@ nonisolated struct DarLandmarkSite: Decodable, Identifiable {
     @MainActor static let all: [DarLandmarkSite] = {
         guard let url = Bundle.main.url(forResource: "dar_landmarks", withExtension: "json"),
               let data = try? Data(contentsOf: url), let catalog = try? JSONDecoder().decode(DarLandmarkCatalog.self, from: data) else { return [] }
-        return catalog.sites.filter { $0.ring.count >= 4 && $0.ring.allSatisfy { $0.count == 2 && $0.allSatisfy(\.isFinite) } }
+        return (catalog.sites + (MoroccoSquareData.bundled?.sites ?? [])).filter { $0.ring.count >= 4 && $0.ring.allSatisfy { $0.count == 2 && $0.allSatisfy(\.isFinite) } }
     }()
 
     @MainActor var geometry: Geometry {

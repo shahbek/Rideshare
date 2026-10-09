@@ -37,7 +37,8 @@ final class DarCityLandmarks {
         let scene = Self.scenes[site.id] ?? DarLandmarkGeometry.make(site)
         Self.scenes[site.id] = scene
         do {
-            let host = DioramaLandmarkLayer(origin: site.anchor.coordinate, scene: scene, ring: site.footprint?.rings.first ?? [])
+            let host = DioramaLandmarkLayer(origin: site.anchor.coordinate, scene: scene, ring: site.footprint?.rings.first ?? [],
+                landmarkID: site.kind.hasPrefix("morocco-") ? site.id : nil)
             host.viewport = viewport
             host.onInitializationFailed = { [weak self, weak map, weak host] in
                 Task { @MainActor [weak self, weak map, weak host] in

@@ -7,6 +7,7 @@ import simd
 /// Site geometry remains geographic; downloaded scenery and native surroundings are never regenerated.
 nonisolated final class DioramaLandmarkLayer: NSObject, CustomLayerHost, @unchecked Sendable {
     let isAirtel: Bool
+    let landmarkID: String?
     var viewport: DioramaViewport?
     var onInitializationFailed: (@Sendable () -> Void)?
     private var isReady: Bool = false
@@ -34,8 +35,9 @@ nonisolated final class DioramaLandmarkLayer: NSObject, CustomLayerHost, @unchec
     var diagnostic: String { renderer.diagnostic }
 
     @MainActor init(origin: CLLocationCoordinate2D, scene: SCNScene, ring: [SIMD2<Double>] = [],
-                    isAirtel: Bool = false, usesSeaDatum: Bool = false, bridgeAlignment: TanzaniteBridgeAlignment? = nil) {
+                    isAirtel: Bool = false, landmarkID: String? = nil, usesSeaDatum: Bool = false, bridgeAlignment: TanzaniteBridgeAlignment? = nil) {
         self.origin = origin; self.isAirtel = isAirtel; self.usesSeaDatum = usesSeaDatum
+        self.landmarkID = isAirtel ? "airtel" : landmarkID
         self.bridgeAlignment = bridgeAlignment
         let projection = DioramaProjection(origin: origin)
         floorAnchors = ring.map { xy in
@@ -62,14 +64,14 @@ nonisolated final class DioramaLandmarkLayer: NSObject, CustomLayerHost, @unchec
             var solid = raw.map { v in
                 BuildingRenderVertex(position: v.position, normal: v.normal,
                     color: code == -11 ? SIMD4(0.255, 0.494, 0.525, 1) : v.color,
-                    appearance: SIMD4(0.85, material, material == 12 ? 100 + v.position.z : 0, 0))
+                    appearance: SIMD4(0.85, material, material == 12 ? 100 + v.position.z : 0, code == -13 ? 7 : 0))
             }
             let p = solid.map { SIMD3($0.position.x, $0.position.y, $0.position.z) }
             let n = solid.reduce(SIMD3<Float>.zero) { $0 + SIMD3($1.normal.x, $1.normal.y, $1.normal.z) }
             if simd_dot(simd_cross(p[1] - p[0], p[2] - p[0]), n) < 0 { solid.swapAt(1, 2) }
             let category: DioramaCategory = code == -5 || code == -2 ? .vegetation : code == -6 ? .ground : .buildings
             append(solid, category: category, doubleSided: code == -5 || material == 6, translucent: code == -12)
-            if code == 4 || code == 2 || code == -11 {
+            if code == 4 || code == 2 || code == -11 || code == -13 {
                 let glow = solid.map { v in BuildingRenderVertex(position: v.position, normal: v.normal,
                     color: code == -11 ? SIMD4(1, 0.78, 0.46, 1) : v.color, appearance: SIMD4(0.85, 0, 0, 4)) }
                 append(glow, category: .windowGlow, doubleSided: true)
@@ -123,7 +125,7 @@ nonisolated final class DioramaLandmarkLayer: NSObject, CustomLayerHost, @unchec
         vertexBuffer = upload(vertices); indexBuffer = upload(indices)
         projected = DioramaProjectedShadow(device: device, color: colorPixelFormat, depth: depthStencilPixelFormat, size: 1024)
         print("[Landmark3D] shared renderer \(renderer.diagnostic); ground-shadow=\(projected == nil ? "unavailable" : "1024px mesh silhouette")")
-        if isAirtel, renderer.diagnostic.hasPrefix("ready"), let viewport { DioramaLandmarkPresence.shared.publish(host: self, viewport: viewport) }
+        if landmarkID != nil, renderer.isRendererReady, let viewport { DioramaLandmarkPresence.shared.publish(host: self, viewport: viewport) }
     }
 
     func render(_ parameters: CustomLayerRenderParameters, mtlCommandBuffer: MTLCommandBuffer, mtlRenderPassDescriptor: MTLRenderPassDescriptor) {

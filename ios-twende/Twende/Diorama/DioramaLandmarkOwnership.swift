@@ -2,133 +2,152 @@ import Foundation
 import CoreLocation
 import simd
 
-/// Transient geometry ownership. Original saved indices remain usable when the bespoke host is absent.
+/// Transient per-landmark ownership. Original downloaded indices remain the native fallback.
 nonisolated enum DioramaLandmarkOwnership {
     private struct Feature: Decodable { let geometry: Geometry }
     private struct Geometry: Decodable { let coordinates: [[[Double]]] }
-    private static let geographicRing: [[Double]] = {
-        guard let url = Bundle.main.url(forResource: "airtel_house", withExtension: "geojson"),
-              let bytes = try? Data(contentsOf: url), let feature = try? JSONDecoder().decode(Feature.self, from: bytes) else { return [] }
-        return feature.geometry.coordinates.first ?? []
+    private struct Catalog: Decodable { let sites: [Site] }
+    private struct Site: Decodable { let id: String; let ring: [[Double]] }
+    private static let outlines: [Site] = {
+        var result: [Site] = []
+        if let url = Bundle.main.url(forResource: "airtel_house", withExtension: "geojson"),
+           let bytes = try? Data(contentsOf: url), let feature = try? JSONDecoder().decode(Feature.self, from: bytes),
+           let ring = feature.geometry.coordinates.first { result.append(Site(id: "airtel", ring: ring)) }
+        if let url = Bundle.main.url(forResource: "morocco_square", withExtension: "json"),
+           let bytes = try? Data(contentsOf: url), let catalog = try? JSONDecoder().decode(Catalog.self, from: bytes) {
+            result.append(contentsOf: catalog.sites)
+        }
+        return result.filter { $0.ring.count >= 4 && $0.ring.allSatisfy { $0.count == 2 && $0.allSatisfy(\.isFinite) } }
     }()
+
+    private struct Mask {
+        let id: String
+        let ring: [DV2]
+        let low: DV2
+        let high: DV2
+        func touches(_ a: SIMD3<Float>, _ b: SIMD3<Float>) -> Bool {
+            Double(a.x) <= high.x && Double(b.x) >= low.x && Double(a.y) <= high.y && Double(b.y) >= low.y
+        }
+        func intersects(_ polygon: [DV2]) -> Bool {
+            guard !polygon.isEmpty, (polygon.map(\.x).min() ?? 0) <= high.x,
+                  (polygon.map(\.x).max() ?? 0) >= low.x, (polygon.map(\.y).min() ?? 0) <= high.y,
+                  (polygon.map(\.y).max() ?? 0) >= low.y else { return false }
+            if polygon.contains(where: { DioramaPolygon.contains(ring,$0) })
+                || ring.contains(where: { DioramaPolygon.contains(polygon,$0) }) { return true }
+            return polygon.indices.contains { i in ring.indices.contains { j in
+                DioramaPolygon.segmentsIntersect(polygon[i],polygon[(i+1)%polygon.count],ring[j],ring[(j+1)%ring.count])
+            } }
+        }
+    }
+
+    private static func masks(origin: CLLocationCoordinate2D) -> [Mask] {
+        let projection = DioramaProjection(origin: origin)
+        return outlines.map { site in
+            let source = site.ring.map { projection.local(longitude:$0[0],latitude:$0[1]) }
+            let clean = DioramaPolygon.clean(source,flags:Array(repeating:false,count:source.count)).points
+            let outline = DioramaPolygon.counterClockwise(clean)
+            let ring = DioramaPolygon.offset(outline,by:1.0) ?? outline
+            return Mask(id:site.id,ring:ring,low:DV2(ring.map(\.x).min() ?? 0,ring.map(\.y).min() ?? 0),
+                high:DV2(ring.map(\.x).max() ?? 0,ring.map(\.y).max() ?? 0))
+        }
+    }
 
     static func partition(vertices: [BuildingRenderVertex], indices: [UInt32], ranges: [DioramaRenderLayer.Range],
                           groups: [DioramaInstanceGroup], origin: CLLocationCoordinate2D)
         -> (indices: [UInt32], ranges: [DioramaRenderLayer.Range], groups: [DioramaInstanceGroup]) {
-        guard let split = partition(indexCount: indices.count, index: { indices[$0] }, position: { vertices[$0].position },
-                                    ranges: ranges, groups: groups, origin: origin) else { return (indices, ranges, groups) }
-        return (indices + split.appended, split.ranges, split.groups)
+        guard let split = partition(indexCount:indices.count,index:{ indices[$0] },position:{ vertices[$0].position },
+            ranges:ranges,groups:groups,origin:origin) else { return (indices,ranges,groups) }
+        return (indices+split.appended,split.ranges,split.groups)
     }
 
-    /// Whether `partition` could add a copied index list (for memory preflight).
     static func affects(ranges: [DioramaRenderLayer.Range], groups: [DioramaInstanceGroup], origin: CLLocationCoordinate2D) -> Bool {
-        let projection = DioramaProjection(origin: origin)
-        let ring = geographicRing.map { projection.local(longitude: $0[0], latitude: $0[1]) }
-        guard ring.count >= 3 else { return false }
-        let lo = DV2(ring.map(\.x).min() ?? 0, ring.map(\.y).min() ?? 0) - DV2(3, 3)
-        let hi = DV2(ring.map(\.x).max() ?? 0, ring.map(\.y).max() ?? 0) + DV2(3, 3)
-        func touches(_ a: SIMD3<Float>, _ b: SIMD3<Float>) -> Bool {
-            Double(a.x) <= hi.x && Double(b.x) >= lo.x && Double(a.y) <= hi.y && Double(b.y) >= lo.y
-        }
-        return ranges.contains { $0.category == .buildings && touches($0.minimum, $0.maximum) }
-            || groups.contains { $0.category == .buildings && touches($0.minimum, $0.maximum) }
+        let masks = masks(origin:origin)
+        return ranges.contains { range in range.category == .buildings && masks.contains { $0.touches(range.minimum,range.maximum) } }
+            || groups.contains { group in group.category == .buildings && masks.contains { $0.touches(group.minimum,group.maximum) } }
     }
 
-    /// Buffer-agnostic form: returns indices to append after the existing `indexCount`, or nil when untouched.
+    /// Splits only relevant finished-building triangles/placements, never terrain or road paint.
     static func partition(indexCount: Int, index: (Int) -> UInt32, position: (Int) -> SIMD4<Float>,
                           ranges: [DioramaRenderLayer.Range], groups: [DioramaInstanceGroup], origin: CLLocationCoordinate2D)
         -> (appended: [UInt32], ranges: [DioramaRenderLayer.Range], groups: [DioramaInstanceGroup])? {
-        let projection = DioramaProjection(origin: origin)
-        let ring = geographicRing.map { projection.local(longitude: $0[0], latitude: $0[1]) }
-        guard ring.count >= 3 else { return nil }
-        let outline = DioramaPolygon.counterClockwise(ring)
-        let mask = DioramaPolygon.offset(outline, by: 2.0) ?? outline
-        let lo = DV2(mask.map(\.x).min() ?? 0, mask.map(\.y).min() ?? 0)
-        let hi = DV2(mask.map(\.x).max() ?? 0, mask.map(\.y).max() ?? 0)
-        func touches(_ a: SIMD3<Float>, _ b: SIMD3<Float>) -> Bool {
-            Double(a.x) <= hi.x && Double(b.x) >= lo.x && Double(a.y) <= hi.y && Double(b.y) >= lo.y
-        }
-        func intersectsMask(_ polygon: [DV2]) -> Bool {
-            guard !polygon.isEmpty,
-                  (polygon.map(\.x).min() ?? 0) <= hi.x, (polygon.map(\.x).max() ?? 0) >= lo.x,
-                  (polygon.map(\.y).min() ?? 0) <= hi.y, (polygon.map(\.y).max() ?? 0) >= lo.y else { return false }
-            if polygon.contains(where: { DioramaPolygon.contains(mask, $0) })
-                || mask.contains(where: { DioramaPolygon.contains(polygon, $0) }) { return true }
-            return polygon.indices.contains { i in mask.indices.contains { j in
-                DioramaPolygon.segmentsIntersect(polygon[i], polygon[(i + 1) % polygon.count], mask[j], mask[(j + 1) % mask.count])
-            } }
-        }
-        guard ranges.contains(where: { $0.category == .buildings && touches($0.minimum, $0.maximum) })
-            || groups.contains(where: { $0.category == .buildings && touches($0.minimum, $0.maximum) }) else { return nil }
+        let masks = masks(origin:origin)
+        guard affects(ranges:ranges,groups:groups,origin:origin) else { return nil }
         var output: [UInt32] = [], result: [DioramaRenderLayer.Range] = []
         for range in ranges {
-            guard (range.category == .buildings || range.category == .windowGlow), touches(range.minimum, range.maximum) else { result.append(range); continue }
-            var owned: [UInt32] = [], ordinary: [UInt32] = []
-            for start in stride(from: range.start, to: range.start + range.count - 2, by: 3) {
-                let ids = [index(start), index(start + 1), index(start + 2)]
-                let pts = ids.map { id -> DV2 in let p = position(Int(id)); return DV2(Double(p.x), Double(p.y)) }
-                if intersectsMask(pts) { owned.append(contentsOf: ids) }
-                else { ordinary.append(contentsOf: ids) }
+            let relevant = masks.filter { $0.touches(range.minimum,range.maximum) }
+            guard (range.category == .buildings || range.category == .windowGlow), !relevant.isEmpty else { result.append(range); continue }
+            var batches: [String:[UInt32]] = [:]
+            for start in stride(from:range.start,to:range.start+range.count-2,by:3) {
+                let ids = [index(start),index(start+1),index(start+2)]
+                let triangle = ids.map { id -> DV2 in let p = position(Int(id)); return DV2(Double(p.x),Double(p.y)) }
+                let owner = relevant.first(where: { $0.intersects(triangle) })?.id ?? ""
+                batches[owner,default:[]].append(contentsOf:ids)
             }
-            for (batch, placeholder) in [(ordinary, false), (owned, true)] where !batch.isEmpty {
-                let copy = DioramaRenderLayer.Range(category: range.category, start: indexCount + output.count, count: batch.count,
-                    minimum: range.minimum, maximum: range.maximum, doubleSided: range.doubleSided, landmarkPlaceholder: placeholder)
-                result.append(copy); output.append(contentsOf: batch)
+            for owner in batches.keys.sorted() {
+                guard let batch = batches[owner], !batch.isEmpty else { continue }
+                result.append(.init(category:range.category,start:indexCount+output.count,count:batch.count,
+                    minimum:range.minimum,maximum:range.maximum,doubleSided:range.doubleSided,
+                    translucent:range.translucent,landmarkPlaceholder:!owner.isEmpty,landmarkID:owner.isEmpty ? nil : owner))
+                output.append(contentsOf:batch)
             }
         }
         var split: [DioramaInstanceGroup] = []
         for group in groups {
-            guard (group.category == .buildings || group.category == .windowGlow), touches(group.minimum, group.maximum) else { split.append(group); continue }
-            var prototypeLow = SIMD2<Float>(repeating: .greatestFiniteMagnitude), prototypeHigh = -prototypeLow
-            for i in group.fullStart..<(group.fullStart + group.fullCount) {
-                let p = position(Int(index(i)))
-                prototypeLow = simd_min(prototypeLow, SIMD2(p.x,p.y)); prototypeHigh = simd_max(prototypeHigh, SIMD2(p.x,p.y))
+            let relevant = masks.filter { $0.touches(group.minimum,group.maximum) }
+            guard (group.category == .buildings || group.category == .windowGlow), !relevant.isEmpty else { split.append(group); continue }
+            var low = SIMD2<Float>(repeating:.greatestFiniteMagnitude), high = -low
+            for i in group.fullStart..<(group.fullStart+group.fullCount) {
+                let p = position(Int(index(i))); low = simd_min(low,SIMD2(p.x,p.y)); high = simd_max(high,SIMD2(p.x,p.y))
             }
-            let ownedFlags = group.instances.map { instance -> Bool in
+            let owners: [String?] = group.instances.map { instance in
                 let c = Double(cos(instance.placement.w)), s = Double(sin(instance.placement.w))
-                let polygon = [(prototypeLow.x,prototypeLow.y), (prototypeHigh.x,prototypeLow.y),
-                    (prototypeHigh.x,prototypeHigh.y), (prototypeLow.x,prototypeHigh.y)].map { x, y -> DV2 in
-                    let px = Double(x * instance.scale.x), py = Double(y * instance.scale.y)
-                    return DV2(px * c - py * s + Double(instance.placement.x), px * s + py * c + Double(instance.placement.y))
+                let polygon = [(low.x,low.y),(high.x,low.y),(high.x,high.y),(low.x,high.y)].map { x,y -> DV2 in
+                    let px = Double(x*instance.scale.x), py = Double(y*instance.scale.y)
+                    return DV2(px*c-py*s+Double(instance.placement.x),px*s+py*c+Double(instance.placement.y))
                 }
-                return intersectsMask(polygon)
+                return relevant.first(where: { $0.intersects(polygon) })?.id
             }
             var first = 0
             while first < group.instances.count {
-                func owned(_ i: Int) -> Bool { ownedFlags[i] }
-                let flag = owned(first)
-                var end = first + 1
-                while end < group.instances.count && owned(end) == flag { end += 1 }
-                split.append(.init(category: group.category, fullStart: group.fullStart, fullCount: group.fullCount,
-                    lightStart: group.lightStart, lightCount: group.lightCount, doubleSided: group.doubleSided,
-                    instances: Array(group.instances[first..<end]), firstInstance: group.firstInstance + first,
-                    minimum: group.minimum, maximum: group.maximum, landmarkPlaceholder: flag))
+                let owner = owners[first]
+                var end = first+1
+                while end < group.instances.count && owners[end] == owner { end += 1 }
+                split.append(.init(category:group.category,fullStart:group.fullStart,fullCount:group.fullCount,
+                    lightStart:group.lightStart,lightCount:group.lightCount,doubleSided:group.doubleSided,
+                    instances:Array(group.instances[first..<end]),firstInstance:group.firstInstance+first,
+                    minimum:group.minimum,maximum:group.maximum,landmarkPlaceholder:owner != nil,landmarkID:owner,
+                    lodSlot:group.lodSlot,lodScale:group.lodScale))
                 first = end
             }
         }
-        return (output, result, split)
+        return (output,result,split)
     }
 }
 
-/// Scoped to the same map as saved scenery; weak entries cannot leave a hole after teardown/failure.
+/// Weak, initialized entries on the owning map: removing one landmark restores only its saved shell.
 nonisolated final class DioramaLandmarkPresence: @unchecked Sendable {
     static let shared = DioramaLandmarkPresence()
     private final class Entry {
         weak var host: DioramaLandmarkLayer?
         let viewport: ObjectIdentifier
-        init(host: DioramaLandmarkLayer, viewport: DioramaViewport) { self.host = host; self.viewport = ObjectIdentifier(viewport) }
+        let id: String
+        init(host: DioramaLandmarkLayer, viewport: DioramaViewport, id: String) {
+            self.host = host; self.viewport = ObjectIdentifier(viewport); self.id = id
+        }
     }
     private let lock = NSLock()
-    private var entries: [ObjectIdentifier: Entry] = [:]
+    private var entries: [ObjectIdentifier:Entry] = [:]
     func publish(host: DioramaLandmarkLayer, viewport: DioramaViewport) {
-        lock.lock(); entries[ObjectIdentifier(host)] = Entry(host: host, viewport: viewport); lock.unlock()
+        guard let id = host.landmarkID else { return }
+        lock.lock(); entries[ObjectIdentifier(host)] = Entry(host:host,viewport:viewport,id:id); lock.unlock()
     }
     func remove(host: DioramaLandmarkLayer) {
         lock.lock(); entries[ObjectIdentifier(host)] = nil; lock.unlock()
     }
-    func hasAirtel(viewport: DioramaViewport?) -> Bool {
-        guard let viewport else { return false }
+    func activeIDs(viewport: DioramaViewport?) -> Set<String> {
+        guard let viewport else { return [] }
         lock.lock(); defer { lock.unlock() }
-        return entries.values.contains { $0.host != nil && $0.viewport == ObjectIdentifier(viewport) }
+        return Set(entries.values.filter { $0.host != nil && $0.viewport == ObjectIdentifier(viewport) }.map(\.id))
     }
+    func hasAirtel(viewport: DioramaViewport?) -> Bool { activeIDs(viewport:viewport).contains("airtel") }
 }

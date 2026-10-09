@@ -1,0 +1,45 @@
+{
+  "attribution": "© OpenStreetMap contributors, ODbL",
+  "verified": "2026-10-09",
+  "geometrySource": "https://api.openstreetmap.org/api/0.6/map.json?bbox=39.262,-6.780,39.266,-6.776",
+  "architectureSource": "https://r2-pub.rork.com/attachments/ugw8p56mdm0ja96jtzywm.jpg",
+  "notes": "Tower and terminal outlines are mapped. Connecting mall envelope, tower-2 upper mass, heights and unseen details are render-guided estimates. Exchange identification also supplied by user. LED frontage and green terminal roof supplied by in-person user evidence. Campaign artwork and office furnishing are illustrative.",
+  "sites": [
+    {
+      "id": "morocco-square", "name": "Morocco Square", "kind": "morocco-square", "osmWay": 363732435,
+      "bearing": 96, "height": 80, "heightEvidence": "Render-guided estimate; project reports 20/17 office, 22 residential and 13 hotel storeys. OSM levels differ; not surveyed.",
+      "reference": "https://www.nhc.co.tz/morocco/gallery.php",
+      "photo": "https://r2-pub.rork.com/attachments/ugw8p56mdm0ja96jtzywm.jpg",
+      "orientationEvidence": "Named Exchange way 363732435 is the southern/left render tower; eastern broad office 524573616, northern residential 524096023, western hotel 524096028. Low mall envelope inferred between these mapped anchors.",
+      "ring": [[39.2630654,-6.7770058],[39.2634102,-6.7769770],[39.2634331,-6.7767949],[39.2633150,-6.7767470],[39.2633283,-6.7765976],[39.2635594,-6.7766186],[39.2636182,-6.7762597],[39.2631136,-6.7762139],[39.2630546,-6.7760371],[39.2626723,-6.7760132],[39.2624635,-6.7760592],[39.2624564,-6.7761706],[39.2629150,-6.7762111],[39.2628887,-6.7765457],[39.2629074,-6.7765917],[39.2628950,-6.7767700],[39.2630789,-6.7767625],[39.2630654,-6.7770058]]
+    },
+    {
+      "id": "morocco-terminal", "name": "Morocco DART terminal", "kind": "morocco-terminal", "osmWay": 334728277,
+      "bearing": 92.3, "height": 6.3, "heightEvidence": "Contemporary open-air frame authored within mapped platform. Green roof per user; vertical dimensions illustrative.",
+      "reference": "https://www.openstreetmap.org/way/334728277",
+      "photo": "https://r2-pub.rork.com/attachments/ugw8p56mdm0ja96jtzywm.jpg",
+      "orientationEvidence": "Mapped 146m covered DART bus platform in road median west of Airtel, southeast of Morocco Square; no relocation or invented rail station.",
+      "ring": [[39.2636777,-6.7776456],[39.2638198,-6.7776399],[39.2638732,-6.7789484],[39.2637310,-6.7789541],[39.2636777,-6.7776456]]
+    }
+  ],
+  "towers": [
+    {
+      "id": "exchange", "kind": "office", "osmWay": 363732435, "floors": 20, "height": 76.2,
+      "ring": [[39.2634331,-6.7767949],[39.2634102,-6.7769770],[39.2630654,-6.7770058],[39.2630789,-6.7767625],[39.2634331,-6.7767949]]
+    },
+    {
+      "id": "office-two", "kind": "office", "osmWay": 524573616, "floors": 17, "height": 68.2,
+      "ring": [[39.2631136,-6.7762139],[39.2636182,-6.7762597],[39.2635594,-6.7766186],[39.2633283,-6.7765976],[39.2633150,-6.7767470],[39.2630680,-6.7767252],[39.2631136,-6.7762139]],
+      "upperRing": [[39.2631136,-6.7762139],[39.2636182,-6.7762597],[39.2635750,-6.7765230],[39.2630900,-6.7764780],[39.2631136,-6.7762139]]
+    },
+    {
+      "id": "residential", "kind": "apartments", "osmWay": 524096023, "floors": 22, "height": 78.5,
+      "ring": [[39.2624635,-6.7760592],[39.2626686,-6.7760720],[39.2626723,-6.7760132],[39.2628545,-6.7760246],[39.2630546,-6.7760371],[39.2630438,-6.7762073],[39.2624564,-6.7761706],[39.2624635,-6.7760592]]
+    },
+    {
+      "id": "hotel", "kind": "hotel", "osmWay": 524096028, "floors": 13, "height": 48.6,
+      "ring": [[39.2630703,-6.7762232],[39.2630405,-6.7766020],[39.2629074,-6.7765917],[39.2629109,-6.7765474],[39.2628887,-6.7765457],[39.2629150,-6.7762111],[39.2630703,-6.7762232]]
+    }
+  ],
+  "atrium": [39.2631500,-6.7766300]
+}

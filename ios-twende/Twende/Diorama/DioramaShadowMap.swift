@@ -12,7 +12,7 @@ nonisolated final class DioramaShadowMap {
     private let corners: [SIMD3<Float>]
     private struct CacheKey: Equatable {
         let preset: DioramaTimeOfDay
-        let landmarkPresent: Bool
+        let landmarkPresent: Set<String>
         let categories: Set<DioramaCategory>
         let low: SIMD3<Float>?
         let high: SIMD3<Float>?
@@ -64,7 +64,7 @@ nonisolated final class DioramaShadowMap {
     func update(command: MTLCommandBuffer, vertices: MTLBuffer, indices: MTLBuffer, instances: MTLBuffer?,
                 ranges: [DioramaRenderLayer.Range], groups: [DioramaInstanceGroup],
                 focus: (SIMD3<Float>, SIMD3<Float>)?,
-                sun: SIMD3<Float>, preset: DioramaTimeOfDay, landmarkPresent: Bool = false,
+                sun: SIMD3<Float>, preset: DioramaTimeOfDay, landmarkPresent: Set<String> = [],
                 lod: DioramaLODSelector? = nil, timing: DioramaPassTimer.Frame? = nil) -> simd_float4x4? {
         let casters = ranges.filter { !$0.category.isEmissive && $0.category != .water && !$0.translucent }
         let castingGroups = groups.filter { !$0.category.isEmissive }

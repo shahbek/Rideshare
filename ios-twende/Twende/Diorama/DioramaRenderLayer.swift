@@ -24,6 +24,8 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost, @unchecke
         /// Landmark-only glazing, depth tested after opaque furniture with no depth writes.
         var translucent: Bool = false
         var landmarkPlaceholder: Bool = false
+        /// Transient owner only; never written into the offline archive.
+        var landmarkID: String? = nil
         /// Index into the tile's LOD table, or -1 when no simplified levels exist.
         var lodSlot: Int32 = -1
         /// Indices refer to the LOD index buffer instead of the tile's original index buffer.
@@ -251,7 +253,7 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost, @unchecke
     // Render-thread-only preparation cache. Water/reveal uniforms still update every frame.
     private var selectionVisible: Set<DioramaCategory>?
     private var selectionGlow: Bool = false
-    private var selectionAirtel: Bool = false
+    private var selectionLandmarks: Set<String> = []
     private var eligibleRanges: [Range] = []
     private var eligibleGroups: [DioramaInstanceGroup] = []
     private var eligibleCasters: [DioramaInstanceGroup] = []
@@ -591,13 +593,15 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost, @unchecke
             passTimer.finish(timing, command: mtlCommandBuffer, report: passReport)
         }
         let glowOn = timeOfDay.showsLights
-        let airtelPresent = DioramaLandmarkPresence.shared.hasAirtel(viewport: viewport)
-        if selectionVisible != visible || selectionGlow != glowOn || selectionAirtel != airtelPresent {
-            eligibleRanges = ranges.filter { $0.count > 0 && visible.contains($0.category) && (!$0.category.isEmissive || glowOn) && (!airtelPresent || !$0.landmarkPlaceholder) }
-            eligibleGroups = groups.filter { !$0.instances.isEmpty && visible.contains($0.category) && (!$0.category.isEmissive || glowOn) && (!airtelPresent || !$0.landmarkPlaceholder) }
+        let landmarks = DioramaLandmarkPresence.shared.activeIDs(viewport: viewport)
+        if selectionVisible != visible || selectionGlow != glowOn || selectionLandmarks != landmarks {
+            eligibleRanges = ranges.filter { $0.count > 0 && visible.contains($0.category) && (!$0.category.isEmissive || glowOn)
+                && (!$0.landmarkPlaceholder || !landmarks.contains($0.landmarkID ?? "airtel")) }
+            eligibleGroups = groups.filter { !$0.instances.isEmpty && visible.contains($0.category) && (!$0.category.isEmissive || glowOn)
+                && (!$0.landmarkPlaceholder || !landmarks.contains($0.landmarkID ?? "airtel")) }
             eligibleCasters = eligibleGroups.filter { !$0.category.isEmissive }
-            reflectionSignature = visible.map(\.rawValue).sorted().joined() + (airtelPresent ? "-airtel" : "-generic")
-            selectionVisible = visible; selectionGlow = glowOn; selectionAirtel = airtelPresent; selectionTransform = nil
+            reflectionSignature = visible.map(\.rawValue).sorted().joined() + landmarks.sorted().joined(separator: "/")
+            selectionVisible = visible; selectionGlow = glowOn; selectionLandmarks = landmarks; selectionTransform = nil
         }
         let drawn = eligibleRanges
         guard !drawn.isEmpty || !eligibleGroups.isEmpty else {
@@ -734,7 +738,7 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost, @unchecke
         let castingGroups = eligibleCasters
         if reveal.w < 0.5, lifecycleReveal.w < 0.5, unionState.x < 0.5, let shadowMap, let shadowMatrix = shadowMap.update(command: mtlCommandBuffer, vertices: vertexBuffer, indices: indexBuffer, instances: instanceBuffer,
             ranges: drawn, groups: castingGroups, focus: viewLow.x.isFinite && viewHigh.x > viewLow.x ? (viewLow, viewHigh) : nil,
-            sun: SIMD3(uniforms.sunDirection.x, uniforms.sunDirection.y, uniforms.sunDirection.z), preset: timeOfDay, landmarkPresent: airtelPresent,
+            sun: SIMD3(uniforms.sunDirection.x, uniforms.sunDirection.y, uniforms.sunDirection.z), preset: timeOfDay, landmarkPresent: landmarks,
             lod: lodBase, timing: timing) {
             uniforms.shadowMatrix = shadowMatrix
             uniforms.shadowParams = SIMD4(1, 1.0 / 2048.0, 0.00006, timeOfDay == .day ? 0.65 : 0.85)

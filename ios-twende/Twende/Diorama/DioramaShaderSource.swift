@@ -620,9 +620,8 @@ nonisolated enum DioramaShaderSource {
         if (!isFront) n = -n;
         float3 view = normalize(u.eye.xyz - in.worldPosition);
         if (in.appearance.y > 14.5 && in.appearance.y < 15.5) {
-            float fresnel = pow(1.0 - saturate(dot(n, view)), 4.0);
-            float3 pane = mix(in.color.rgb, u.skyColor.rgb, 0.25 + 0.55 * fresnel);
-            return dioramaRevealColor(pane, clamp(in.color.a + fresnel * 0.24, 0.08, 0.48), revealAlpha, u);
+            // Clear architectural glazing: no sky mix, Fresnel, specular or reflected scene.
+            return dioramaRevealColor(in.color.rgb, clamp(in.color.a, 0.025, 0.08), revealAlpha, u);
         }
         float3 albedo = in.color.rgb;
         float3 surfacePosition = in.worldPosition;

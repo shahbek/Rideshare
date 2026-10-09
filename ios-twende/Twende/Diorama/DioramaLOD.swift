@@ -66,7 +66,8 @@ nonisolated struct DioramaLODSelector: Sendable {
         guard range.lodSlot >= 0, Int(range.lodSlot) < table.rangeLevels.count,
               let level = pick(table.rangeLevels[Int(range.lodSlot)], allowed: allowedError(minimum: range.minimum, maximum: range.maximum)) else { return range }
         var lighter = DioramaRenderLayer.Range(category: range.category, start: level.start, count: level.count,
-            minimum: range.minimum, maximum: range.maximum, doubleSided: range.doubleSided, landmarkPlaceholder: range.landmarkPlaceholder)
+            minimum: range.minimum, maximum: range.maximum, doubleSided: range.doubleSided, translucent: range.translucent,
+            landmarkPlaceholder: range.landmarkPlaceholder, landmarkID: range.landmarkID)
         lighter.usesLODBuffer = true
         return lighter
     }

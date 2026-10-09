@@ -6,6 +6,8 @@ enum DarLandmarkGeometry {
     static func make(_ site: DarLandmarkSite) -> SCNScene {
         let scene = SCNScene()
         guard let footprint = site.footprint, let ring = footprint.rings.first else { return scene }
+        if site.kind == "morocco-square" { return MoroccoSquareGeometry.make(site) }
+        if site.kind == "morocco-terminal" { return MoroccoTerminalGeometry.make(site) }
         let local = ring.map { SIMD2(simd_dot($0, site.right), simd_dot($0, site.inward)) }
         let root = SCNNode(); root.name = site.id
         root.simdTransform = simd_float4x4(columns: (
