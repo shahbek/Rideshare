@@ -35,6 +35,14 @@ struct DioramaDownloadView: View {
             } else {
                 if download.isPrepared && download.basemapReady {
                     Button("View Masaki offline") { download.viewOffline() }.buttonStyle(.twendePrimary)
+                    if download.joined < download.total {
+                        Text("Terrain & road joins · \(download.joined) / \(download.total) repaired").font(TwendeFont.label)
+                        Text("Removes artificial edge valleys and reconnects road surfaces using saved map sources. Offline, resumable; originals are kept. This can take time and needs extra storage.")
+                            .font(TwendeFont.caption).foregroundStyle(TwendeColor.inkSecondary)
+                        Button(download.joined > 0 ? "Resume terrain & road repair" : "Repair terrain & roads") {
+                            Haptics.tap(); download.repairJoins()
+                        }.buttonStyle(.twendeSecondary)
+                    }
                     optimizeSection
                 } else {
                     Button(download.completed > 0 ? "Resume Masaki preparation" : "Download & prepare all Masaki") {

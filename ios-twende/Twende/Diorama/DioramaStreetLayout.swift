@@ -17,10 +17,10 @@ nonisolated struct DioramaStreetLayout: Sendable {
     let paintStations: [UInt64: (offset: Double, direction: Double)]
 
     init(data: DioramaTileData, config: DioramaConfig) {
-        let base = DioramaStreetSurface(data.roads.flatMap { DioramaStreetSurface.corridor($0, extra: 0) })
+        let base = DioramaStreetSurface(data.roads.flatMap { DioramaStreetSurface.corridor($0, extra: 0, rect: data.rect) })
         let fillets = base.cornerFillets(obstacles: data.buildings.map(\.ring))
         carriageway = DioramaStreetSurface(base.polygons + fillets)
-        let widened = data.roads.flatMap { DioramaStreetSurface.corridor($0, extra: $0.isPaved ? config.pavementWidth : 0.8) }
+        let widened = data.roads.flatMap { DioramaStreetSurface.corridor($0, extra: $0.isPaved ? config.pavementWidth : 0.8, rect: data.rect) }
         let outer = DioramaStreetSurface(widened)
         corridor = DioramaStreetSurface(widened + outer.cornerFillets(obstacles: data.buildings.map(\.ring)))
 

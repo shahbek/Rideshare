@@ -161,20 +161,40 @@ nonisolated struct DioramaStreetSurface: Sendable {
     }
 
     /// Capsules preserve centreline locations; curved joins are tessellated below 0.1 m chord error.
-    static func corridor(_ road: DioramaRoadFeature, extra: Double) -> [[DV2]] {
+    static func corridor(_ road: DioramaRoadFeature, extra: Double, rect: DioramaRect? = nil) -> [[DV2]] {
         var result: [[DV2]] = []
         let half = road.width / 2 + extra
-        for (a, b) in zip(road.line, road.line.dropFirst()) where a.distance(to: b) > 0.001 {
+        let line = rect.map { continuation(road.line, halfWidth: half, rect: $0) } ?? road.line
+        for (a, b) in zip(line, line.dropFirst()) where a.distance(to: b) > 0.001 {
             let n = (b - a).normalized.left * half
             result.append([a - n, b - n, b + n, a + n])
         }
-        for p in road.line {
+        for p in line {
             let count = max(24, Int(ceil(half * 5)))
             result.append((0..<count).map { k in
                 let angle = Double(k) / Double(count) * 2 * Double.pi
                 return p + DV2(cos(angle), sin(angle)) * half
             })
         }
+        return result
+    }
+
+    /// Move clipped caps beyond the paint envelope, including oblique crossings. Interior dead
+    /// ends retain their round cap. Boundary inference is necessary for legacy source extracts.
+    static func continuation(_ line: [DV2], halfWidth: Double, rect: DioramaRect) -> [DV2] {
+        guard line.count >= 2 else { return line }
+        var result = line
+        func extended(_ p: DV2, from q: DV2) -> DV2 {
+            let direction = (p - q).normalized
+            let edges: [(Double, DV2)] = [(abs(p.x - rect.minX), DV2(-1, 0)),
+                (abs(p.x - rect.maxX), DV2(1, 0)), (abs(p.y - rect.minY), DV2(0, -1)),
+                (abs(p.y - rect.maxY), DV2(0, 1))]
+            let crossing = edges.filter { $0.0 < 0.15 }.map { direction.dot($0.1) }.max() ?? 0
+            guard crossing > 0.00001 else { return p }
+            return p + direction * (halfWidth / crossing + halfWidth + 0.5)
+        }
+        result[0] = extended(line[0], from: line[1])
+        result[line.count - 1] = extended(line[line.count - 1], from: line[line.count - 2])
         return result
     }
 

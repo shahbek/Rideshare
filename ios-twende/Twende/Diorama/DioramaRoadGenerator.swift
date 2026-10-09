@@ -60,7 +60,8 @@ nonisolated struct DioramaRoadGenerator {
         roads.nearest(to: p, within: 20)?.road.isPaved ?? false
     }
 
-    private func paintSurfaces() {
+    /// Shared by HD and context: same union geometry, junction fillets and material precedence.
+    func paintSurfaces() {
         // Rasterize each union in ONE fill. Separately antialiasing boolean fragments exposes
         // the previous paint at every shared edge, especially through round road joins.
         for (surface, isCarriageway) in [(layout.corridor, false), (layout.carriageway, true)] {

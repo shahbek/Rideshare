@@ -333,10 +333,24 @@ actor DioramaOfflineStore {
         inFlight.removeAll(); readIdentities.removeAll(); readConsumers.removeAll()
         decoded.removeAll(); candidates.removeAll(); readFailures.removeAll(); directoryNames = nil
     }
+    /// Joined packages are additive replacements; original downloads remain a readable fallback.
+    func isJoined(_ tile: DioramaTileID, context: Bool) -> Bool {
+        validFiles(name: joinedKey(tile, context: context))
+    }
+    /// Publish the region switch only after every detail mode is present. A paused repair never
+    /// mixes elevated repaired tiles with the old valley-shaped neighbouring packages.
+    func activateJoins() throws {
+        guard Self.tiles.allSatisfy({ isJoined($0, context: false) && isJoined($0, context: true) }) else { throw Failure.package }
+        try Data("joined1".utf8).write(to: root.appendingPathComponent("joined1.ready"), options: .atomic)
+        invalidateReads()
+    }
+    private func joinedKey(_ tile: DioramaTileID, context: Bool) -> String {
+        DioramaDiskCache.key(tile: tile, config: .slipway, reduced: false) + "-joined1" + (context ? "-context1" : "-focus")
+    }
     func save(_ artifact: DioramaTileArtifacts, context: Bool) throws {
         invalidateReads()
         try checkSpace()
-        let name = key(artifact.tile, context: context)
+        let name = joinedKey(artifact.tile, context: context)
         let destination = root.appendingPathComponent(name)
         let staging = root.appendingPathComponent("stage-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: staging) }
@@ -346,16 +360,7 @@ actor DioramaOfflineStore {
         guard verifiedFiles(directory: staging, name: name) else { throw Failure.package }
         if FileManager.default.fileExists(atPath: destination.path) { try FileManager.default.removeItem(at: destination) }
         try FileManager.default.moveItem(at: staging, to: destination)
-        // Retire only superseded generated packages for this tile/detail after its replacement
-        // has been verified and published. Keep source downloads and every other tile intact.
-        let suffix = context ? "-context1" : "-focus"
-        let marker = "-\(artifact.tile.key)-"
-        if let entries = try? FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil) {
-            for old in entries where old.lastPathComponent != name && old.lastPathComponent.hasPrefix("v")
-                && old.lastPathComponent.contains(marker) && old.lastPathComponent.hasSuffix(suffix) {
-                try? FileManager.default.removeItem(at: old)
-            }
-        }
+        // Never delete the original downloaded v36 package or its r3/LOD sidecars.
     }
     func isVerified(_ tile: DioramaTileID, context: Bool) -> Bool {
         candidateNames(tile, context: context).contains { name in
@@ -410,7 +415,16 @@ actor DioramaOfflineStore {
                   let version = Int(prefix.dropFirst()) else { return false }
             return version <= DioramaConfig.slipway.generatorVersion
         }.sorted { $0.compare($1, options: .numeric) == .orderedDescending }
-        let names = [current] + older
+        let joined = joinedKey(tile, context: context)
+        let originals = [current] + older.filter { $0 != joined }
+        let directories = Set(directoryNames ?? [])
+        // A published catalogue contains package directories, not the local activation marker.
+        let completeCatalogue = Self.tiles.allSatisfy {
+            directories.contains(joinedKey($0, context: false)) && directories.contains(joinedKey($0, context: true))
+        }
+        let active = directories.contains("joined1.ready") || completeCatalogue
+        let hasOriginal = originals.contains { (directoryNames ?? []).contains($0) }
+        let names = active || !hasOriginal ? [joined] + originals : originals + [joined]
         candidates[request] = names
         return names
     }

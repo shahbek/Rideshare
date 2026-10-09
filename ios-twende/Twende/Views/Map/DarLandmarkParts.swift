@@ -64,7 +64,7 @@ enum DarLandmarkParts {
         return node
     }
 
-    static func arch(width: Double, height: Double, root: SCNNode, name: String) {
+    static func arch(width: Double, height: Double, root: SCNNode, name: String, illuminated: Bool = false) {
         let half = width / 2, spring = height * 0.6
         var ring = [SIMD2(-half, 0), SIMD2(half, 0), SIMD2(half, spring)]
         for i in 1...16 {
@@ -73,7 +73,7 @@ enum DarLandmarkParts {
             let z = spring + (height - spring) * (1 - pow(abs(2 * t - 1), 1.4))
             ring.append(SIMD2(x, z))
         }
-        root.addChildNode(BuildingFootprint(rings: [ring]).deck(at: 0.03, thickness: 0.035, material: dark, name: name))
+        root.addChildNode(BuildingFootprint(rings: [ring]).deck(at: 0.03, thickness: 0.035, material: illuminated ? LandmarkLightingGeometry.window : dark, name: name))
         var border = BuildingMesh()
         for i in 2..<(ring.count - 1) { beam(&border, p(ring[i], 0.09), p(ring[i + 1], 0.09), radius: 0.12) }
         for x in [-half, half] { beam(&border, SIMD3(x, 0, 0.09), SIMD3(x, spring, 0.09), radius: 0.13) }
@@ -98,7 +98,7 @@ enum DarLandmarkParts {
             beam(&details, SIMD3(0, 0, 0.13), SIMD3(0, radius * 0.66, 0.13), radius: 0.055)
             beam(&details, SIMD3(0, 0, 0.13), SIMD3(radius * 0.45, -radius * 0.2, 0.13), radius: 0.055)
         }
-        root.addChildNode(face.node(name: name, material: dark))
+        root.addChildNode(face.node(name: name, material: LandmarkLightingGeometry.window))
         root.addChildNode(rim.node(name: "stoneRoundel", material: trim))
         root.addChildNode(details.node(name: clock ? "clockHands" : "roseTracery", material: plaster))
     }

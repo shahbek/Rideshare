@@ -17,6 +17,7 @@ final class DioramaDownloadService {
     private(set) var isDownloadingBasemap: Bool = false
     private(set) var isPausing: Bool = false
     private(set) var optimized: Int = 0
+    private(set) var joined: Int = 0
     private(set) var isPublishing: Bool = false
     private(set) var publishMessage: String = ""
     var isFullyOptimized: Bool { optimized == total }
@@ -44,6 +45,12 @@ final class DioramaDownloadService {
             var count = 0
             for tile in DioramaOfflineStore.tiles where await DioramaOfflineStore.shared.isOptimized(tile, context: false) { count += 1 }
             optimized = count
+            var repaired = 0
+            for tile in DioramaOfflineStore.tiles {
+                if await DioramaOfflineStore.shared.isJoined(tile, context: false),
+                   await DioramaOfflineStore.shared.isJoined(tile, context: true) { repaired += 1 }
+            }
+            joined = repaired
             if !isPrepared && bytes > 0 && message == "Download and prepare Masaki before viewing." {
                 message = "Your saved scenery is kept across app updates. Resume only to finish missing tiles; completed tiles and saved sources are reused."
             }
@@ -205,6 +212,78 @@ final class DioramaDownloadService {
             } catch {
                 self.reportFailure("Optimization stopped: a saved tile could not be read. Originals are untouched.")
             }
+        }
+    }
+
+    /// Explicit offline migration. Reconstruct support, geometry and paint together rather than
+    /// lifting saved ground underneath unchanged buildings. No catalogue or source network calls.
+    func repairJoins() {
+        guard task == nil, isPrepared else { return }
+        guard UIApplication.shared.applicationState == .active,
+              !ProcessInfo.processInfo.isLowPowerModeEnabled,
+              ProcessInfo.processInfo.thermalState.rawValue < ProcessInfo.ThermalState.serious.rawValue else {
+            reportFailure("Repair needs the app open, Low Power Mode off and a cool device. Originals are unchanged."); return
+        }
+        isRunning = true; isPausing = false; failureMessage = nil; pauseReason = nil
+        message = "Repairing terrain and roads from saved sources. No downloads; original scenery stays saved."
+        policyTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                if UIApplication.shared.applicationState != .active || ProcessInfo.processInfo.isLowPowerModeEnabled
+                    || ProcessInfo.processInfo.thermalState.rawValue >= ProcessInfo.ThermalState.serious.rawValue {
+                    self.pause(reason: "Repair paused. Keep the app open, Low Power Mode off and the device cool.")
+                }
+            }
+        }
+        notify()
+        task = Task { [weak self] in
+            guard let self else { return }
+            defer {
+                self.policyTimer?.invalidate(); self.policyTimer = nil
+                self.isRunning = false; self.isPausing = false; self.task = nil
+                self.refresh(); self.notify(); DioramaState.shared.regenerateRequest += 1
+            }
+            do {
+                joined = 0
+                for (i, tile) in DioramaOfflineStore.tiles.enumerated() {
+                    try Task.checkCancellation()
+                    guard UIApplication.shared.applicationState == .active,
+                          !ProcessInfo.processInfo.isLowPowerModeEnabled,
+                          ProcessInfo.processInfo.thermalState.rawValue < ProcessInfo.ThermalState.serious.rawValue else { throw CancellationError() }
+                    stage = "Repairing tile \(i + 1) of \(total) · terrain + road unions"
+                    let job = Task.detached(priority: .utility) { try await Self.repair(tile) }
+                    try await withTaskCancellationHandler { try await job.value } onCancel: { job.cancel() }
+                    joined += 1
+                }
+                try await DioramaOfflineStore.shared.activateJoins()
+                try await optimizeAll()
+                message = "Terrain and roads repaired offline. Original downloads remain saved as fallback."
+            } catch is CancellationError {
+                message = "Repair paused. Completed repairs and all original scenery are kept; resume when ready."
+            } catch {
+                reportFailure("Repair stopped: a saved map/elevation source is missing, unreadable, or storage is low. Original scenery is kept. No download was attempted.")
+            }
+        }
+    }
+
+    nonisolated private static func repair(_ tile: DioramaTileID) async throws {
+        let store = DioramaOfflineStore.shared
+        let fullExists = await store.isJoined(tile, context: false)
+        let contextExists = await store.isJoined(tile, context: true)
+        if fullExists && contextExists { return }
+        try await store.checkSpace()
+        guard let data = await DioramaMasakiSource.load(tile: tile, config: .slipway, token: "", offline: true),
+              data.hasMapboxCoverage, data.sourceTerrain != nil else { throw DioramaOfflineStore.Failure.source }
+        try Task.checkCancellation()
+        if !contextExists {
+            let artifact = try await DioramaGenerationQueue.shared.generateContext(data, config: .slipway)
+            try await store.save(artifact, context: true)
+        }
+        if !fullExists {
+            DioramaTileGenerator.clearCache(for: tile, config: .slipway)
+            defer { DioramaTileGenerator.clearCache(for: tile, config: .slipway) }
+            let artifact = try await DioramaGenerationQueue.shared.generate(data, config: .slipway)
+            try await store.save(artifact, context: false)
         }
     }
 

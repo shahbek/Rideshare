@@ -130,8 +130,8 @@ nonisolated struct DioramaConfig: Sendable {
     /// Vertical scale of the bundled snapshot (1 = real metres). The basemap's own terrain is switched
     /// off while the diorama is shown, so this relief is the only landform on screen.
     var terrainRelief: Double = 0.75
-    /// Band inside the tile edge over which land eases down to the flat basemap.
-    var terrainEdgeEase: Double = 36
+    /// Tiles share a continuous elevation field; boundaries are not valleys.
+    var terrainEdgeEase: Double = 0
     /// Side of the painted ground image (pixels). 4096 over a ~600 m tile is about 15 cm per pixel.
     var groundImageSize: Int = 4096
     var reducedGroundImageSize: Int = 2048

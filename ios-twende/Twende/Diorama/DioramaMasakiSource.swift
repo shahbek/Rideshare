@@ -25,6 +25,11 @@ nonisolated enum DioramaMasakiSource {
             }
             data.shorelines = DioramaShoreline.classify(data: data, config: config, overrides: DioramaShorelineOverrides.load())
             data.shorelineLandMasks = DioramaShoreline.landMasks(data.shorelines, config: config)
+            // Use the same addressed elevation source as neighbours, not a different boundary datum.
+            if config.terrainEdgeEase == 0 {
+                guard let terrain = await elevation(tile: tile, rect: data.rect, config: config, token: token, offline: offline) else { return nil }
+                data.sourceTerrain = terrain
+            }
             return data
         }
         guard DioramaOfflineStore.tiles.contains(tile),
@@ -91,26 +96,32 @@ nonisolated enum DioramaMasakiSource {
         guard let url = components.url else { return nil }
         do {
             let bytes = try await DioramaSourceStore.shared.data(url: url, key: "terrain-\(z)-\(parentX)-\(parentY).png", offline: offline)
-            // Mapbox documents this exact Terrain-RGB response for all-ocean tiles as elevation 0.
-            if (try? JSONDecoder().decode([String: String].self, from: bytes)["message"]) == "Tile does not exist" {
-                return DioramaTerrain(rect: rect, columns: 2, rows: 2, values: [0, 0, 0, 0],
-                    relief: config.terrainRelief, edgeEase: config.terrainEdgeEase, midTideDatum: config.waterLevel)
+            guard let raster = DioramaElevationRaster(data: bytes) else { return nil }
+            // Share the two pixels on either side of a parent-PNG boundary. Independent clamp
+            // sampling gives adjacent children different edge heights even without the old ramp.
+            var neighbours: [String: DioramaElevationRaster] = [:]
+            let xs = tile.x % divisor == 0 ? [-1, 0] : tile.x % divisor == divisor - 1 ? [0, 1] : [0]
+            let ys = tile.y % divisor == 0 ? [-1, 0] : tile.y % divisor == divisor - 1 ? [0, 1] : [0]
+            for dx in xs {
+                for dy in ys where dx != 0 || dy != 0 {
+                    let px = parentX + dx, py = parentY + dy
+                    guard DioramaOfflineStore.tiles.contains(where: { $0.x / divisor == px && $0.y / divisor == py }) else { continue }
+                    guard var neighbourURL = URLComponents(string: "https://api.mapbox.com/v4/mapbox.terrain-rgb/\(z)/\(px)/\(py).pngraw") else { return nil }
+                    neighbourURL.queryItems = [URLQueryItem(name: "access_token", value: token)]
+                    guard let url = neighbourURL.url else { return nil }
+                    let bytes = try await DioramaSourceStore.shared.data(url: url, key: "terrain-\(z)-\(px)-\(py).png", offline: offline)
+                    guard let neighbour = DioramaElevationRaster(data: bytes), neighbour.width == raster.width,
+                          neighbour.height == raster.height else { return nil }
+                    neighbours["\(dx),\(dy)"] = neighbour
+                }
             }
-            guard let source = CGImageSourceCreateWithData(bytes as CFData, nil),
-                  let image = CGImageSourceCreateImageAtIndex(source, 0, nil),
-                  image.bitsPerComponent == 8, [24, 32].contains(image.bitsPerPixel),
-                  image.width <= 1024, image.height <= 1024,
-                  let raw = image.dataProvider?.data, let address = CFDataGetBytePtr(raw) else { return nil }
-            let channels = image.bitsPerPixel / 8
-            let little = image.bitmapInfo.contains(.byteOrder32Little)
-            let first = image.alphaInfo == .first || image.alphaInfo == .premultipliedFirst || image.alphaInfo == .noneSkipFirst
-            let red = channels == 3 ? 0 : little ? (first ? 2 : 3) : (first ? 1 : 0)
-            let green = channels == 3 ? 1 : little ? (first ? 1 : 2) : (first ? 2 : 1)
-            let blue = channels == 3 ? 2 : little ? (first ? 0 : 1) : (first ? 3 : 2)
-            guard CFDataGetLength(raw) >= image.bytesPerRow * image.height else { return nil }
             func height(_ x: Int, _ y: Int) -> Double {
-                let offset = min(max(y, 0), image.height - 1) * image.bytesPerRow + min(max(x, 0), image.width - 1) * channels
-                return -10_000 + Double(Int(address[offset + red]) * 65536 + Int(address[offset + green]) * 256 + Int(address[offset + blue])) * 0.1
+                let dx = x < 0 ? -1 : x >= raster.width ? 1 : 0
+                let dy = y < 0 ? -1 : y >= raster.height ? 1 : 0
+                if let neighbour = neighbours["\(dx),\(dy)"] {
+                    return neighbour.sample(x: x - dx * raster.width, y: y - dy * raster.height)
+                }
+                return raster.sample(x: x, y: y)
             }
             let size = 33
             var elevations: [Double] = []
@@ -119,7 +130,7 @@ nonisolated enum DioramaMasakiSource {
                 for column in 0..<size {
                     let u = (Double(tile.x % divisor) + Double(column) / Double(size - 1)) / Double(divisor)
                     let v = (Double(tile.y % divisor) + 1 - Double(row) / Double(size - 1)) / Double(divisor)
-                    let x = u * Double(image.width) - 0.5, y = v * Double(image.height) - 0.5
+                    let x = u * Double(raster.width) - 0.5, y = v * Double(raster.height) - 0.5
                     let ix = Int(floor(x)), iy = Int(floor(y)), fx = x - floor(x), fy = y - floor(y)
                     let a = height(ix, iy) * (1 - fx) + height(ix + 1, iy) * fx
                     let b = height(ix, iy + 1) * (1 - fx) + height(ix + 1, iy + 1) * fx

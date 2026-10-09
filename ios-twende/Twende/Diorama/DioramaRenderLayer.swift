@@ -21,6 +21,8 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost, @unchecke
         var maximum: SIMD3<Float> = SIMD3(repeating: .greatestFiniteMagnitude)
         /// Thin open surfaces (fronds, sails, canopies, sprites) drawn without back-face culling.
         var doubleSided: Bool = false
+        /// Landmark-only glazing, depth tested after opaque furniture with no depth writes.
+        var translucent: Bool = false
         var landmarkPlaceholder: Bool = false
         /// Index into the tile's LOD table, or -1 when no simplified levels exist.
         var lodSlot: Int32 = -1
@@ -770,8 +772,8 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost, @unchecke
             let aoSelector = lodSelector?.scaled(2)
             postRangeDraws = DioramaDrawPlan.ranges(DioramaDrawPlan.levels(mainRanges, selector: aoSelector))
             postInstanceDraws = DioramaDrawPlan.instances(drawnGroups, eye: eye, lodDistance: lodDistance, selector: aoSelector)
-            selectedOpaqueRanges = selectedRangeDraws.filter { $0.category != .water && $0.category != .propGlow }
-            postOpaqueRanges = postRangeDraws.filter { $0.category != .water && $0.category != .propGlow && !$0.category.isEmissive }
+            selectedOpaqueRanges = selectedRangeDraws.filter { $0.category != .water && $0.category != .propGlow && !$0.translucent }
+            postOpaqueRanges = postRangeDraws.filter { $0.category != .water && $0.category != .propGlow && !$0.category.isEmissive && !$0.translucent }
             postEmissionRanges = postRangeDraws.filter { $0.category.isEmissive }
             postOpaqueGroups = postInstanceDraws.filter { !$0.category.isEmissive }
             postEmissionGroups = postInstanceDraws.filter { $0.category.isEmissive }
@@ -861,6 +863,15 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost, @unchecke
         cull(true)
         for range in submittedRanges where range.category == .water {
             encoder.drawIndexedPrimitives(type: .triangle, indexCount: range.count, indexType: .uint32, indexBuffer: range.usesLODBuffer ? lodIndices : indexBuffer, indexBufferOffset: range.start * MemoryLayout<UInt32>.stride)
+        }
+        // Panoramic panes blend over the completed, depth-tested office; never occlude it
+        // through a transparent depth write or contribute opaque AO/shadow silhouettes.
+        for range in submittedRanges.filter({ $0.translucent }).sorted(by: {
+            simd_distance_squared(($0.minimum + $0.maximum) * 0.5, eye) > simd_distance_squared(($1.minimum + $1.maximum) * 0.5, eye)
+        }) {
+            cull(false)
+            encoder.drawIndexedPrimitives(type: .triangle, indexCount: range.count, indexType: .uint32,
+                indexBuffer: indexBuffer, indexBufferOffset: range.start * MemoryLayout<UInt32>.stride)
         }
         encoder.setRenderPipelineState(glowPipeline ?? pipeline)
         for range in submittedRanges where range.category == .propGlow {

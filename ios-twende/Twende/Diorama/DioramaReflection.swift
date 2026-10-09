@@ -88,7 +88,7 @@ nonisolated final class DioramaReflection {
         e.setRenderPipelineState(pipeline)
         let lodIndices = lod?.table.indexBuffer ?? indices
         let reflectedRanges = DioramaDrawPlan.ranges(DioramaDrawPlan.levels(ranges.filter {
-            $0.category != .water && $0.category != .propGlow && $0.category != .shorelineDebug
+            $0.category != .water && $0.category != .propGlow && $0.category != .shorelineDebug && !$0.translucent
                 && $0.maximum.z >= uniforms.water.x - 0.05 && $0.intersectsReveal(uniforms.reveal)
                 && $0.intersects(matrix, mirrorHeight: uniforms.water.x)
         }, selector: lod))

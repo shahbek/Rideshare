@@ -32,7 +32,7 @@ enum DarChurchGeometry {
             for bay in 0..<6 {
                 let y = naveFront.y + (naveBack.y - naveFront.y) * (Double(bay) + 0.5) / 6
                 let window = P.faceNode(at: SIMD2(x + side * 0.04, y), outward: SIMD2(side, 0), height: cathedral ? 10.0 : 7.9)
-                P.arch(width: 1.3, height: cathedral ? 4.2 : 2.4, root: window, name: "navePointedWindow")
+                P.arch(width: 1.3, height: cathedral ? 4.2 : 2.4, root: window, name: "navePointedWindow", illuminated: true)
                 root.addChildNode(window)
                 let buttress = P.rectangle(x: x - side * 0.15, y: y, width: 0.7, depth: 0.6)
                 P.volume(buttress, bottom: 0, top: eave + 0.2, material: P.trim, name: "naveButtress", root: root)
@@ -93,6 +93,7 @@ enum DarChurchGeometry {
         P.beam(&cross, P.p(towerCentre, site.height - 1.6), P.p(towerCentre, site.height), radius: 0.08)
         P.beam(&cross, P.p(towerCentre + SIMD2(-0.5, 0), site.height - 0.65), P.p(towerCentre + SIMD2(0.5, 0), site.height - 0.65), radius: 0.07)
         root.addChildNode(cross.node(name: "churchFinial", material: P.slate))
+        LandmarkLightingGeometry.church(ring: ring, root: root)
     }
 
     private static func cathedralFront(nave: [SIMD2<Double>], width: Double, root: SCNNode) {
@@ -117,7 +118,7 @@ enum DarChurchGeometry {
         for index in -3...3 {
             let x = centre.x + Double(index) * width / 9
             let recess = P.faceNode(at: SIMD2(x, centre.y - 0.04), outward: SIMD2(0, -1), height: 16.3)
-            P.arch(width: 0.42, height: 6.4 - Double(abs(index)) * 1.5, root: recess, name: "cathedralGableLancet")
+            P.arch(width: 0.42, height: 6.4 - Double(abs(index)) * 1.5, root: recess, name: "cathedralGableLancet", illuminated: true)
             root.addChildNode(recess)
         }
     }

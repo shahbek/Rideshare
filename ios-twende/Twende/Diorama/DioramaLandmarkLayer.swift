@@ -44,11 +44,12 @@ nonisolated final class DioramaLandmarkLayer: NSObject, CustomLayerHost, @unchec
         } + [GeoPoint(origin)]
         var packed: [BuildingRenderVertex] = [], cells: [String: (DioramaCategory, [UInt32], Bool)] = [:]
         let baked = BuildingRenderGeometry.vertices(from: scene)
-        func append(_ v: [BuildingRenderVertex], category: DioramaCategory, doubleSided: Bool) {
+        func append(_ v: [BuildingRenderVertex], category: DioramaCategory, doubleSided: Bool, translucent: Bool = false) {
             let base = UInt32(packed.count)
             packed.append(contentsOf: v)
             let p = (v[0].position + v[1].position + v[2].position) / 3
-            let key = "\(category.rawValue)/\(Int(floor(p.x / 60)))/\(Int(floor(p.y / 60)))/\(doubleSided)"
+            // Glass triangles retain separate ranges for back-to-front composition.
+            let key = "\(category.rawValue)/\(Int(floor(p.x / 60)))/\(Int(floor(p.y / 60)))/\(doubleSided)/\(translucent ? "glass-\(base)" : "solid")"
             if cells[key] == nil { cells[key] = (category, [], doubleSided) }
             cells[key]?.1.append(contentsOf: [base, base + 1, base + 2])
         }
@@ -57,18 +58,20 @@ nonisolated final class DioramaLandmarkLayer: NSObject, CustomLayerHost, @unchec
             let code = raw[0].appearance.w
             // Old billboard halos carried a different normal grammar; real bloom replaces them.
             if code == 3 { continue }
-            let material: Float = code == 1 || code == 2 ? 6 : code == -5 ? 10 : code == -2 ? 13 : code == -6 ? 4 : code == -7 ? 3 : code == -8 ? 11 : code == -9 || code == 4 ? 0 : 12
+            let material: Float = code == -12 ? 15 : code == 1 || code == 2 || code == -11 ? 6 : code == -5 ? 10 : code == -2 ? 13 : code == -6 ? 4 : code == -7 ? 3 : code == -8 ? 11 : code == -9 || code == 4 ? 0 : 12
             var solid = raw.map { v in
-                BuildingRenderVertex(position: v.position, normal: v.normal, color: v.color,
+                BuildingRenderVertex(position: v.position, normal: v.normal,
+                    color: code == -11 ? SIMD4(0.255, 0.494, 0.525, 1) : v.color,
                     appearance: SIMD4(0.85, material, material == 12 ? 100 + v.position.z : 0, 0))
             }
             let p = solid.map { SIMD3($0.position.x, $0.position.y, $0.position.z) }
             let n = solid.reduce(SIMD3<Float>.zero) { $0 + SIMD3($1.normal.x, $1.normal.y, $1.normal.z) }
             if simd_dot(simd_cross(p[1] - p[0], p[2] - p[0]), n) < 0 { solid.swapAt(1, 2) }
             let category: DioramaCategory = code == -5 || code == -2 ? .vegetation : code == -6 ? .ground : .buildings
-            append(solid, category: category, doubleSided: code == -5 || material == 6)
-            if code == 4 || code == 2 {
-                let glow = solid.map { v in BuildingRenderVertex(position: v.position, normal: v.normal, color: v.color, appearance: SIMD4(0.85, 0, 0, 4)) }
+            append(solid, category: category, doubleSided: code == -5 || material == 6, translucent: code == -12)
+            if code == 4 || code == 2 || code == -11 {
+                let glow = solid.map { v in BuildingRenderVertex(position: v.position, normal: v.normal,
+                    color: code == -11 ? SIMD4(1, 0.78, 0.46, 1) : v.color, appearance: SIMD4(0.85, 0, 0, 4)) }
                 append(glow, category: .windowGlow, doubleSided: true)
             }
         }
@@ -78,14 +81,21 @@ nonisolated final class DioramaLandmarkLayer: NSObject, CustomLayerHost, @unchec
             guard let (category, batch, doubleSided) = cells[key] else { continue }
             var lo = SIMD3<Float>(repeating: .greatestFiniteMagnitude), hi = -lo
             for id in batch { let p = packed[Int(id)].position; lo = simd_min(lo, SIMD3(p.x,p.y,p.z)); hi = simd_max(hi, SIMD3(p.x,p.y,p.z)) }
-            ranges.append(.init(category: category, start: indices.count, count: batch.count, minimum: lo, maximum: hi, doubleSided: doubleSided))
+            ranges.append(.init(category: category, start: indices.count, count: batch.count, minimum: lo, maximum: hi, doubleSided: doubleSided, translucent: key.contains("/glass-")))
             indices.append(contentsOf: batch)
             if !category.isEmissive { low = simd_min(low, lo); high = simd_max(high, hi) }
         }
         vertices = packed; self.indices = indices; minimum = low; maximum = high
         let rect = DioramaRect(minX: Double(low.x) - 2, minY: Double(low.y) - 2, maxX: Double(high.x) + 2, maxY: Double(high.y) + 2)
+        var lights: [DioramaLight] = []
+        scene.rootNode.enumerateChildNodes { node, _ in
+            guard node.name == "landmarkPointLight", let light = node.light else { return }
+            let p = node.simdWorldPosition
+            lights.append(.init(position: DV3(Double(p.x), Double(p.y), Double(p.z)),
+                color: SIMD3(1, 0.78, 0.46), radius: Double(light.attenuationEndDistance), intensity: Float(light.intensity) / 1000))
+        }
         renderer = DioramaRenderLayer(origin: origin, vertices: packed, indices: indices, ranges: ranges,
-            lightGrid: DioramaLightGrid.build([], rect: rect, cells: 1, perCell: 1), waterHeight: 0,
+            lightGrid: DioramaLightGrid.build(lights, rect: rect, cells: 8, perCell: 16), waterHeight: 0,
             groundImage: nil, groundRect: rect, visible: Set(DioramaCategory.allCases), timeOfDay: .day,
             animates: false, materialsPrepared: true)
         renderer.setTileCoverage(edges: .zero, role: 0, paired: false)

@@ -66,7 +66,7 @@ nonisolated final class DioramaShadowMap {
                 focus: (SIMD3<Float>, SIMD3<Float>)?,
                 sun: SIMD3<Float>, preset: DioramaTimeOfDay, landmarkPresent: Bool = false,
                 lod: DioramaLODSelector? = nil, timing: DioramaPassTimer.Frame? = nil) -> simd_float4x4? {
-        let casters = ranges.filter { !$0.category.isEmissive && $0.category != .water }
+        let casters = ranges.filter { !$0.category.isEmissive && $0.category != .water && !$0.translucent }
         let castingGroups = groups.filter { !$0.category.isEmissive }
         let snap: Float = 8
         let low = focus.map { floor($0.0 / snap) * snap }

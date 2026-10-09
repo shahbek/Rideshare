@@ -29,10 +29,14 @@ enum AirtelBuildingGeometry {
 
         // The continuous two-storey podium supports the upper curtain-wall volume.
         let podium = outline.map { $0 * 0.965 }
-        facade(ring: podium, bottom: 0.25, top: glassBase, rows: 2, bayWidth: 2.7,
+        facade(ring: podium, bottom: 0.25, top: glassBase, rows: 2, bayWidth: 4.5,
                 colors: ["#BFCBCB", "#C6D6D6"], root: root, name: "airtelPodium")
-        facade(ring: body, bottom: glassBase, top: glassTop, rows: 8, bayWidth: 2.2,
+        let officeFloor = glassTop - 4.4
+        facade(ring: body, bottom: glassBase, top: officeFloor, rows: 3, bayWidth: 4.5,
                 colors: ["#326A72", "#417E86", "#558C94"], root: root, name: "airtelCurtainWall")
+        facade(ring: body, bottom: officeFloor, top: glassTop, rows: 1, bayWidth: 7,
+                colors: ["#BFCBCB"], root: root, name: "airtelPanoramicOffice", panoramic: true)
+        AirtelOfficeGeometry.add(to: root, ring: body, floor: officeFloor, ceiling: glassTop)
         for floor in 1..<4 {
             let z = glassBase + Double(floor) * 4.4
             band(body, bottom: z - 0.42, top: z + 0.15, offset: 0.035, material: silver, root: root, name: "airtelSpandrel.\(floor)")
@@ -60,7 +64,7 @@ enum AirtelBuildingGeometry {
             let count = max(2, Int(length / 6))
             for i in 0..<count {
                 let xy = p + (q - p) * ((Double(i) + 0.5) / Double(count))
-                LandmarkMesh.beam(&supports, from: v(xy * 0.89, 28.3), to: v(xy * 1.04, 26.9), radius: 0.13, sides: 4)
+                LandmarkMesh.beam(&supports, from: v(xy * 0.89, 28.3), to: v(xy * 1.04, 26.9), radius: 0.24, sides: 8)
                 LandmarkMesh.beam(&columns, from: v(xy * 0.99, 0.3), to: v(xy * 0.99, 7.05), radius: 0.28, sides: 12)
             }
         }
@@ -101,8 +105,8 @@ enum AirtelBuildingGeometry {
         return result
     }
 
-    private static func facade(ring: [SIMD2<Double>], bottom: Double, top: Double, rows: Int, bayWidth: Double, colors: [String], root: SCNNode, name: String) {
-        var panes = colors.map { _ in BuildingMesh() }, mullions = BuildingMesh()
+    private static func facade(ring: [SIMD2<Double>], bottom: Double, top: Double, rows: Int, bayWidth: Double, colors: [String], root: SCNNode, name: String, panoramic: Bool = false) {
+        var panes = colors.map { _ in BuildingMesh() }, mullions = BuildingMesh(), lit = BuildingMesh()
         let normals = BuildingContour.outwardNormals(ring)
         for i in ring.indices {
             let j = (i + 1) % ring.count, a = ring[i], b = ring[j], d = b - a
@@ -119,19 +123,29 @@ enum AirtelBuildingGeometry {
                     let high = bottom + (top - bottom) * Double(row + 1) / Double(rows)
                     let colorIndex = (bay / 4 + row / 4 + i / 8) % colors.count
                     let ns = curved ? [v(n0, 0), v(n1, 0), v(n1, 0), v(n0, 0)] : Array(repeating: v(normal, 0), count: 4)
-                    panes[colorIndex].smoothQuad(v(p, low), v(q, low), v(q, high), v(p, high), normals: ns)
-                    let offset = normal * 0.045
-                    mullions.quad(v(p + offset, low), v(q + offset, low), v(q + offset, low + 0.10), v(p + offset, low + 0.10))
+                    if !panoramic && !curved && (bay + row * 3 + i) % 5 == 1 {
+                        lit.smoothQuad(v(p, low), v(q, low), v(q, high), v(p, high), normals: ns)
+                    } else {
+                        panes[colorIndex].smoothQuad(v(p, low), v(q, low), v(q, high), v(p, high), normals: ns)
+                    }
+                    if !curved {
+                        let offset = normal * 0.11
+                        LandmarkMesh.beam(&mullions, from: v(p + offset, low), to: v(q + offset, low), radius: 0.16, sides: 8)
+                    }
                 }
-                let along = simd_normalize(d) * min(0.10, simd_length(d) * 0.2)
-                let offset = normal * 0.055
-                mullions.quad(v(p + offset, bottom), v(p + along + offset, bottom), v(p + along + offset, top), v(p + offset, top))
+                if !curved {
+                    let offset = normal * 0.11
+                    LandmarkMesh.beam(&mullions, from: v(p + offset, bottom), to: v(p + offset, top), radius: 0.19, sides: 8)
+                }
             }
         }
         let group = SCNNode(); group.name = name
         for i in colors.indices {
-            group.addChildNode(panes[i].node(name: "curtainGlass", material: BuildingSurfaces.make("airtel.tealGlass", color: colors[i], roughness: 0.4, metalness: 0.08)))
+            let material = BuildingSurfaces.make(panoramic ? "landmark.panoramicGlass" : "airtel.tealGlass", color: colors[i], roughness: 0.4, metalness: 0.08)
+            if panoramic { material.transparency = 0.14 }
+            group.addChildNode(panes[i].node(name: "curtainGlass", material: material))
         }
+        group.addChildNode(lit.node(name: "occupiedOfficeWindows", material: LandmarkLightingGeometry.window))
         group.addChildNode(mullions.node(name: "airtelMullions", material: frame))
         root.addChildNode(group)
     }
@@ -164,11 +178,11 @@ enum AirtelBuildingGeometry {
         let feet = [centre + SIMD2(-0.65, -0.4), centre + SIMD2(0.65, -0.4), centre + SIMD2(0, 0.7)]
         for i in feet.indices {
             let next = feet[(i + 1) % feet.count]
-            LandmarkMesh.beam(&steel, from: v(feet[i], screenTop), to: v(feet[i], 42), radius: 0.065)
-            for level in 0..<7 {
-                let z = screenTop + Double(level) * 1.5
-                LandmarkMesh.beam(&steel, from: v(feet[i], z), to: v(next, z + 1.5), radius: 0.035, sides: 4)
-                LandmarkMesh.beam(&steel, from: v(feet[i], z), to: v(next, z), radius: 0.045, sides: 4)
+            LandmarkMesh.beam(&steel, from: v(feet[i], screenTop), to: v(feet[i], 42), radius: 0.18, sides: 8)
+            for level in 0..<3 {
+                let z = screenTop + Double(level) * 3.2
+                LandmarkMesh.beam(&steel, from: v(feet[i], z), to: v(next, z + 3.2), radius: 0.13, sides: 8)
+                LandmarkMesh.beam(&steel, from: v(feet[i], z), to: v(next, z), radius: 0.15, sides: 8)
             }
         }
         for z in [35.4, 38.5] {

@@ -113,7 +113,14 @@ final class DioramaTileManager {
             observers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated {
                     guard let self else { return }
-                    if name == UIApplication.willResignActiveNotification {
+                    if DioramaDownloadService.shared.isRunning {
+                        // Explicit local maintenance needs CPU mesh memory, not offscreen GPU
+                        // residents waiting indefinitely for retirement frames behind Settings.
+                        self.hdTiles.clear(); self.contextTiles.clear(); self.state.loadedTiles.removeAll()
+                        self.suppressBasemapTerrain(false)
+                        self.exitRequested = false; self.reloadRequested = false
+                        let completion = self.retractionCompletion; self.retractionCompletion = nil; completion?()
+                    } else if name == UIApplication.willResignActiveNotification {
                         self.hdTiles.clear(); self.contextTiles.clear(); self.suppressBasemapTerrain(false)
                         Task { await DioramaOfflineStore.shared.releaseDecodedMemory() }
                     } else if name == UIApplication.didReceiveMemoryWarningNotification {

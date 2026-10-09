@@ -134,7 +134,7 @@ nonisolated final class DioramaProjectedShadow {
     vertex float4 dioramaProjectedCasterVertex(uint id [[vertex_id]],
         const device DioramaInput *vertices [[buffer(0)]], constant float4x4 &light [[buffer(1)]]) {
         DioramaInput v = vertices[id];
-        if (v.appearance.w > 3.5 || (v.appearance.w > 0.5 && v.appearance.w < 1.5)) return float4(2,2,2,1);
+        if (v.appearance.y > 14.5 || v.appearance.w > 3.5 || (v.appearance.w > 0.5 && v.appearance.w < 1.5)) return float4(2,2,2,1);
         return light * v.position;
     }
     vertex DioramaShadowReceiver dioramaProjectedReceiverVertex(uint id [[vertex_id]],

@@ -24,7 +24,7 @@ nonisolated enum DioramaDrawPlan {
         output.reserveCapacity(input.count)
         for range in input where range.count > 0 {
             if let last = output.last, last.category == range.category, last.usesLODBuffer == range.usesLODBuffer,
-               last.doubleSided == range.doubleSided, last.start + last.count == range.start {
+               !last.translucent, !range.translucent, last.doubleSided == range.doubleSided, last.start + last.count == range.start {
                 var merged = DioramaRenderLayer.Range(category: last.category, start: last.start,
                     count: last.count + range.count, minimum: simd_min(last.minimum, range.minimum),
                     maximum: simd_max(last.maximum, range.maximum), doubleSided: last.doubleSided)

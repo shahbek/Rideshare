@@ -26,10 +26,10 @@ nonisolated struct DioramaGroundGenerator {
     func generateContext(into mesh: inout DioramaMesh, water waterMesh: inout DioramaMesh) {
         plate(into: &mesh)
         parks()
-        for road in data.roads {
-            painter.stroke(road.line, width: road.width + config.pavementWidth * 2, .pavement)
-            painter.stroke(road.line, width: road.width, road.isPaved ? .asphalt : .earth)
-        }
+        // Coarse and HD use the identical corridor/fillet unions and material ordering.
+        let layout = DioramaStreetLayout(data: data, config: config)
+        DioramaRoadGenerator(config: config, data: data, roads: roads, terrain: terrain,
+            layout: layout, compounds: [], painter: painter).paintSurfaces()
         for area in data.water {
             guard let outer = area.rings.first else { continue }
             let ring = DioramaPolygon.clipPolygon(outer, to: data.rect)
