@@ -92,7 +92,7 @@ final class AirtelBuildingLandmark {
     private func configureLighting(_ host: DioramaLandmarkLayer) {
         let state = DioramaState.shared
         let time = state.isEnabled && !state.isBasemapOnly ? state.timeOfDay
-            : DioramaTimeOfDay(rawValue: AppSettings.shared.mapStyle.lightPreset) ?? .day
+            : DioramaTimeOfDay.from(preset: AppSettings.shared.mapStyle.lightPreset)
         host.setLighting(time: time, reduced: ProcessInfo.processInfo.isLowPowerModeEnabled
             || ProcessInfo.processInfo.thermalState.rawValue >= ProcessInfo.ThermalState.serious.rawValue)
     }

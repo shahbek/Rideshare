@@ -51,7 +51,8 @@ final class AppSettings {
         storedTripNotifications = defaults.object(forKey: Keys.tripNotifications) as? Bool ?? true
         storedPromoNotifications = defaults.object(forKey: Keys.promoNotifications) as? Bool ?? false
         storedHasSeenZeroCommission = defaults.bool(forKey: Keys.hasSeenZeroCommission)
-        storedMapStyle = MapStyleOption(rawValue: defaults.string(forKey: Keys.mapStyle) ?? "") ?? .fallback
+        let savedStyle = MapStyleOption(rawValue: defaults.string(forKey: Keys.mapStyle) ?? "") ?? .fallback
+        storedMapStyle = savedStyle == .dawn ? .colourDay : savedStyle
         storedDriverEye = defaults.bool(forKey: Keys.driverEye)
     }
 

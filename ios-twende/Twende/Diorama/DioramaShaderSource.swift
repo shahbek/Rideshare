@@ -71,7 +71,6 @@ nonisolated struct DioramaPostUniforms {
 /// diorama, landmarks, fleet and the Mapbox basemap's 3D lights so every layer is lit by one sky.
 ///  - Day: strong warm sun against a cool blue sky fill, so shadows read as coloured (blue-green)
 ///    rather than grey; crisp cast shadows, vivid vibrance, gentle S-curve contrast, thin blue haze.
-///  - Dusk: low tangerine sun under a magenta-violet sky, long warm shadows, windows and lamps on.
 ///  - Night: moonlit cobalt with warm window/lamp pools (lamps stay outside the grade).
 nonisolated struct DioramaLightingPreset: Sendable {
     var sun: SIMD3<Float>
@@ -103,33 +102,21 @@ nonisolated struct DioramaLightingPreset: Sendable {
         case .day:
             return DioramaLightingPreset(
                 sun: simd_normalize(SIMD3<Float>(-0.46, -0.42, 0.78)),
-                sunColor: SIMD3<Float>(1.0, 0.93, 0.80) * 0.80,
-                sky: SIMD3<Float>(0.70, 0.83, 1.0), ground: SIMD3<Float>(0.72, 0.76, 0.46),
-                glow: 0, ambientStrength: 0.64, shadowStrength: 0.82, saturation: 1.45, foliageWrap: 0.26,
+                sunColor: SIMD3<Float>(1.0, 0.92, 0.78) * 0.92,
+                sky: SIMD3<Float>(0.70, 0.83, 1.0), ground: SIMD3<Float>(0.78, 0.74, 0.50),
+                glow: 0, ambientStrength: 0.58, shadowStrength: 0.86, saturation: 1.45, foliageWrap: 0.26,
                 tint: SIMD3<Float>(1.03, 1.0, 0.95), waterLift: 0.72,
-                haze: SIMD3<Float>(0.76, 0.87, 1.0), hazeAmount: 0.16,
-                contrast: 1.10, exposure: 1.04,
+                haze: SIMD3<Float>(0.76, 0.87, 1.0), hazeAmount: 0.14,
+                contrast: 1.15, exposure: 1.05,
                 nativeAmbient: SIMD3<Float>(0.74, 0.85, 1.0), nativeAmbientIntensity: 0.62,
                 nativeDirectional: SIMD3<Float>(1.0, 0.93, 0.80), nativeDirectionalIntensity: 0.66,
                 nativeShadowIntensity: 0.78)
-        case .dusk:
-            return DioramaLightingPreset(
-                sun: simd_normalize(SIMD3<Float>(-0.82, -0.42, 0.27)),
-                sunColor: SIMD3<Float>(1.0, 0.56, 0.30) * 0.82,
-                sky: SIMD3<Float>(0.56, 0.44, 0.86), ground: SIMD3<Float>(0.46, 0.30, 0.36),
-                glow: 0.95, ambientStrength: 0.62, shadowStrength: 0.76, saturation: 1.36, foliageWrap: 0.14,
-                tint: SIMD3<Float>(1.05, 0.97, 1.0), waterLift: 0.36,
-                haze: SIMD3<Float>(0.86, 0.56, 0.62), hazeAmount: 0.34,
-                contrast: 1.08, exposure: 1.02,
-                nativeAmbient: SIMD3<Float>(0.60, 0.50, 0.86), nativeAmbientIntensity: 0.56,
-                nativeDirectional: SIMD3<Float>(1.0, 0.58, 0.32), nativeDirectionalIntensity: 0.62,
-                nativeShadowIntensity: 0.70)
         case .night:
             return DioramaLightingPreset(
                 sun: simd_normalize(SIMD3<Float>(0.30, 0.45, 0.84)),
-                sunColor: SIMD3<Float>(0.55, 0.68, 1.0) * 0.26,
+                sunColor: SIMD3<Float>(0.55, 0.68, 1.0) * 0.30,
                 sky: SIMD3<Float>(0.22, 0.30, 0.60), ground: SIMD3<Float>(0.10, 0.12, 0.24),
-                glow: 1.35, ambientStrength: 0.95, shadowStrength: 0.50, saturation: 1.0, foliageWrap: 0.0,
+                glow: 1.45, ambientStrength: 0.92, shadowStrength: 0.55, saturation: 1.05, foliageWrap: 0.0,
                 tint: SIMD3<Float>(0.90, 0.96, 1.12), waterLift: 0.16,
                 haze: SIMD3<Float>(0.08, 0.12, 0.26), hazeAmount: 0.40,
                 contrast: 1.06, exposure: 1.0,
@@ -654,6 +641,20 @@ nonisolated enum DioramaShaderSource {
         return max(d.x, d.y);
     }
 
+    /// Cheap water reflection: the view ray mirrored in a still surface looks up the sky gradient
+    /// (horizon haze to zenith); no reflection pass, texture or noise.
+    float3 dioramaSkyReflection(float3 view, constant DioramaUniforms &u) {
+        float up = saturate(view.z);
+        float3 horizon = mix(u.skyColor.rgb, u.hazeTone.rgb, 0.55);
+        return mix(horizon, u.skyColor.rgb * 0.92, smoothstep(0.05, 0.75, up));
+    }
+    /// The sun mirrored in still water: a tight core plus a soft halo, scaled by sun strength.
+    float3 dioramaSunReflection(float3 view, constant DioramaUniforms &u) {
+        float3 r = float3(-view.x, -view.y, view.z);
+        float d = saturate(dot(r, u.sunDirection.xyz));
+        return u.sunColor.rgb * (pow(d, 900.0) * 1.6 + pow(d, 60.0) * 0.12);
+    }
+
     struct DioramaFacadeSample {
         float3 albedo;
         float3 normal;
@@ -824,7 +825,7 @@ nonisolated enum DioramaShaderSource {
                 float seed = dot(floor((p.xy - t2 * u) * 0.25), float2(1.0, 57.0));
                 float chance = fract(sin(dot(float2(bay * 7.0 + storeyLevel * 13.0, seed), float2(12.9898, 78.233))) * 43758.5453);
                 float on = step(chance, isDoor ? 0.9 : 0.3);
-                s.emissive = float3(1.0, 0.74, 0.42) * (glow * 0.85 * on * paneMask);
+                s.emissive = float3(1.0, 0.62, 0.22) * (glow * 0.95 * on * paneMask);
             }
         }
         // Below about a pixel per opening the pattern fades to the facade's mean tone (no shimmer).
@@ -833,7 +834,7 @@ nonisolated enum DioramaShaderSource {
         float3 mean = mix(wallTone, glassTint * 1.2, (solid ? 0.0 : openShare) * 0.75);
         s.albedo = mix(mean, detailed, detail);
         s.glass = mix(openShare * 0.6, paneMask, detail);
-        if (glow > 0.01) s.emissive = mix(float3(1.0, 0.74, 0.42) * (glow * 0.85 * 0.3 * openShare), s.emissive, detail);
+        if (glow > 0.01) s.emissive = mix(float3(1.0, 0.62, 0.22) * (glow * 0.95 * 0.3 * openShare), s.emissive, detail);
         return s;
     }
 
@@ -993,6 +994,17 @@ nonisolated enum DioramaShaderSource {
                 float stripe = smoothstep(-0.18, 0.18, sin(phase * 3.14159265)) * 2.0 - 1.0;
                 grass *= 1.0 + stripe * 0.075 * stripeAA * mown;
             }
+            // Dry-season burn: broad patches of straw and sun-baked olive drift through the turf
+            // (two noise octaves), strongest away from mown, watered lawns.
+            float dryField = dioramaNoise(vegetationPosition * 0.011 + float2(-4.3, 2.9)) * 0.65
+                           + dioramaNoise(vegetationPosition * 0.047 + float2(7.7, 1.3)) * 0.35;
+            float parch = smoothstep(0.42, 0.62, dryField) * (1.0 - 0.8 * mown) * (1.0 - soilFraction);
+            float burnt = smoothstep(0.56, 0.76, dryField) * (1.0 - 0.8 * mown) * (1.0 - soilFraction);
+            float3 olive = float3(150.0, 152.0, 60.0) / 255.0;
+            float3 straw = mix(float3(204.0, 170.0, 92.0), float3(168.0, 132.0, 66.0),
+                               dioramaNoise(vegetationPosition * 0.09 + float2(3.1, -6.4))) / 255.0;
+            grass = mix(grass, olive, parch * 0.55);
+            grass = mix(grass, straw, burnt * 0.82);
             float3 ground = mix(grass, float3(184.0, 140.0, 88.0) / 255.0, soilFraction);
             float sandShare = sandArea / naturalArea;
             if (sandShare > 0.0001) {
@@ -1012,6 +1024,27 @@ nonisolated enum DioramaShaderSource {
             albedo = mix(albedo, asphalt, coolAsphalt * finish.z);
         } else if (tex > 3.5 && tex < 4.5) {
             albedo *= 0.98 + 0.04 * (dioramaNoise(wp * 0.6) - 0.5);
+        }
+
+        if (paintedGround) {
+            // Uneven ground, shaded like the rounded building edges: a low hummock field bends the
+            // normal (no geometry), so grass, earth and sand catch the sun on one side of each
+            // lump. Paving and asphalt take a much gentler version; detail fades past ~0.6 m/px.
+            float bumpFade = 1.0 - smoothstep(0.1, 0.6, footprint);
+            float relief = (naturalArea > 0.0001 ? 1.0 : 0.0) * (1.0 - naturalCoverage * 0.5)
+                         + finish.z * 0.22 + ((tex > 1.5 && tex < 2.5) || (tex > 3.5 && tex < 4.5) ? 0.3 : 0.0);
+            relief = saturate(relief) * bumpFade;
+            if (relief > 0.001) {
+                const float e = 0.3;
+                float2 bp = vegetationPosition * 0.42 + float2(5.3, -2.1);
+                float h0 = dioramaNoise(bp);
+                float2 slope = float2(dioramaNoise(bp + float2(e, 0.0)) - h0, dioramaNoise(bp + float2(0.0, e)) - h0) / e * 0.42 * 0.34;
+                float2 bq = vegetationPosition * 1.6 + float2(-3.7, 8.4);
+                float g0 = dioramaNoise(bq);
+                slope += float2(dioramaNoise(bq + float2(e, 0.0)) - g0, dioramaNoise(bq + float2(0.0, e)) - g0) / e * 1.6 * 0.05;
+                detailNormal = normalize(detailNormal + float3(-slope * relief, 0.0));
+                albedo *= 1.0 + (h0 - 0.5) * 0.10 * relief;
+            }
         }
 
         if (tex > 9.5 && tex < 10.5) {
@@ -1053,6 +1086,13 @@ nonisolated enum DioramaShaderSource {
                 float2 down = normalize(surfaceNormal.xy + float2(0.0001, 0.0));
                 float2 roofUV = float2(dot(vegetationPosition, float2(-down.y, down.x)), dot(vegetationPosition, down) / max(slopeZ, 0.35));
                 albedo *= 0.89 + 0.18 * dioramaNoise(roofUV * 0.12 + float2(3.1, 9.2));
+                if (albedo.r > albedo.g * 1.3) {
+                    // Clay tile courses (shader, not modelled battens): each 33 cm course is lit at its
+                    // lower lip and shaded under the course above; fades out below a pixel.
+                    float c = roofUV.y / 0.33;
+                    float resolved = 1.0 - smoothstep(0.25, 0.7, fwidth(c));
+                    albedo *= mix(1.0, 0.84 + 0.2 * fract(c), resolved);
+                }
             }
         }
         if (plasterSurface) {
@@ -1181,7 +1221,13 @@ nonisolated enum DioramaShaderSource {
         float lit = smoothstep(0.02, 0.98, sun) * mix(1.0, visibility, u.look.y);
         float3 shadowTint = u.skyColor.rgb * float3(0.62, 0.55, 0.66);
         float3 direct = mix(shadowTint, u.sunColor.rgb * 1.25, lit);
-        float3 light = (direct * 0.78 + ambient * (0.30 * u.look.x / 0.64)) * ao * facade.occlusion;
+        // Sunlit ground bounces warm light onto walls turned away from the sun (fake one-bounce GI);
+        // tall walls open to more sky as they rise.
+        float wallness = 1.0 - abs(litN.z);
+        float away = saturate(0.35 - dot(litN.xy, u.sunDirection.xy));
+        float3 bounce = u.sunColor.rgb * u.groundColor.rgb * (wallness * away * 0.34);
+        float skyOpen = in.appearance.z > 50.0 && code < 0.5 ? smoothstep(6.0, 60.0, dioramaWallHeight(in.appearance.z)) * 0.08 : 0.0;
+        float3 light = (direct * 0.80 + ambient * (0.30 * u.look.x / 0.64) * (1.0 + skyOpen) + bounce) * ao * facade.occlusion;
         float3 pointLight = glow > 0.01 ? dioramaSodium(dioramaPointLights(litPos, litN, u, lights, lightTable, lightIndices)) : float3(0.0);
         // City glow: the orange wash of night satellite imagery comes from thousands of overlapping
         // sodium pools along every street, not from individual fixtures. An even street density
@@ -1212,7 +1258,7 @@ nonisolated enum DioramaShaderSource {
             float uplight = exp(-h / 6.5) * (0.45 + 0.55 * street) * scallop;
             float body = smoothstep(7.0, 26.0, h) * (0.55 + 0.45 * smoothstep(26.0, 90.0, h));
             float3 sodium = float3(1.0, 0.45, 0.10);
-            float3 warmWhite = float3(1.0, 0.66, 0.32);
+            float3 warmWhite = float3(1.0, 0.60, 0.24);
             facadeGlow = (sodium * uplight * 0.85 + warmWhite * body * 0.42) * glow * (0.75 + 0.25 * ao);
         }
         float3 lampLight = pointLight * glow * (0.6 + 0.4 * ao) + cityGlow + facadeGlow;
@@ -1225,40 +1271,30 @@ nonisolated enum DioramaShaderSource {
             float glint = pow(saturate(dot(facade.normal, normalize(view + u.sunDirection.xyz))), 60.0) * visibility;
             color = mix(color, u.skyColor.rgb * 0.82, facade.glass * fresnel) + u.sunColor.rgb * glint * facade.glass * 0.35;
         }
-        float time = u.params.y;
-
         if (tex > 4.5 && tex < 5.5) {
-            // Pool water: flat turquoise, a soft sky sheen at grazing angles and one slow sun glint.
-            float shimmer = sin(dot(vegetationPosition, float2(1.7, 1.1)) + time * 1.3) * sin(dot(vegetationPosition, float2(-0.9, 1.9)) - time * 0.9);
-            float3 poolNormal = normalize(float3(shimmer * 0.06, shimmer * 0.04, 1.0));
-            float fresnel = 0.08 + 0.3 * pow(1.0 - saturate(dot(poolNormal, view)), 4.0);
-            color = albedo * light * (0.94 + 0.08 * shimmer);
-            color = mix(color, u.skyColor.rgb * 0.85, fresnel);
-            color += u.sunColor.rgb * pow(saturate(dot(poolNormal, normalize(view + u.sunDirection.xyz))), 64.0) * 0.2;
+            // Pool water: still turquoise with the same cheap analytic reflection as the sea.
+            color = albedo * light;
+            color = mix(color, dioramaSkyReflection(view, u), 0.03 + 0.42 * pow(1.0 - saturate(view.z), 5.0));
+            color += dioramaSunReflection(view, u) * 0.6;
             return dioramaRevealColor(color, 1.0, revealAlpha, u);
         }
 
         if (code > 0.5 && code < 1.5) {
-            // Stylised water (no reflection pass, no noise fields): a flat deep-to-shallow gradient by
-            // the baked distance to the real shoreline, two soft contour bands near the coast, a
-            // gentle analytic swell that only tilts the normal for the sky sheen and sun glint, and a
-            // breathing foam line at the shore. Lamps and the city glow tint it at night.
+            // Still stylised water (no waves, no reflection pass): a flat deep-to-shallow gradient by
+            // the baked distance to the real shoreline, a soft contour band near the coast, a fixed
+            // shore foam line and a cheap analytic reflection of the sky gradient and the sun.
             float shore = max(0.0, in.appearance.z);
             float shallow = 1.0 - smoothstep(0.0, max(1.0, u.shoreline.x), shore);
             float3 body = mix(u.waterDeep.rgb, u.waterShallow.rgb, shallow * shallow);
             float bandAA = max(0.15, fwidth(shore));
             float bands = smoothstep(6.0 - bandAA, 6.0 + bandAA, shore) * (1.0 - smoothstep(14.0 - bandAA, 14.0 + bandAA, shore));
             body = mix(body, u.waterShallow.rgb, bands * 0.18 * (1.0 - u.shoreline.z));
-            float2 q = vegetationPosition;
-            float2 slope = float2(cos(dot(q, float2(0.21, 0.13)) + time * 0.9), cos(dot(q, float2(-0.11, 0.24)) - time * 0.7)) * 0.08;
-            float3 waveNormal = normalize(float3(-slope, 1.0));
             color = body * (ambient * 0.35 + float3(u.tint.w) + u.sunColor.rgb * 0.32);
-            float fresnelSky = 0.06 + 0.3 * pow(1.0 - saturate(dot(waveNormal, view)), 4.0);
-            color = mix(color, u.skyColor.rgb * 0.85, fresnelSky);
-            color += u.sunColor.rgb * pow(saturate(dot(waveNormal, normalize(view + u.sunDirection.xyz))), 48.0) * 0.3;
-            float breath = sin(time * 1.1 + dot(q, float2(0.041, -0.029))) * 0.5 + 0.5;
-            float washWidth = max(0.3, u.shoreline.y) * (0.6 + 1.6 * breath);
+            float fresnelSky = 0.04 + 0.5 * pow(1.0 - saturate(view.z), 5.0);
+            color = mix(color, dioramaSkyReflection(view, u), fresnelSky);
+            color += dioramaSunReflection(view, u);
             float shoreAA = max(0.12, min(1.0, fwidth(shore)));
+            float washWidth = max(0.3, u.shoreline.y) * 1.2;
             float foam = (1.0 - smoothstep(washWidth - shoreAA, washWidth + shoreAA, shore)) * 0.6 * (1.0 - u.shoreline.z);
             color = mix(color, float3(0.86, 0.93, 0.92), foam);
             color += pointLight * glow * 0.15 + cityGlow * 0.4;
@@ -1304,6 +1340,9 @@ nonisolated enum DioramaShaderSource {
         float3 curved = color * color * (3.0 - 2.0 * min(color, float3(1.0)));
         color = max(float3(0.0), mix(color, mix(color, curved, 0.5), saturate(u.style.x - 1.0) * 4.0));
         color *= u.tint.rgb * max(u.style.y, 0.5);
+        // Filmic shoulder above 0.8: a brighter sun keeps detail in white walls instead of clipping.
+        float3 over = max(color - 0.8, float3(0.0));
+        color = color - over + over / (1.0 + over / 0.35);
         float d = length(u.eye.xyz - worldPosition);
         float haze = 1.0 - exp(-d * u.post.w);
         return mix(color, u.hazeTone.rgb, haze * u.hazeTone.w);
@@ -1342,7 +1381,7 @@ nonisolated enum DioramaShaderSource {
         float glow = u.params.x;
         float3 c = in.color.rgb;
         float a = 1.0;
-        float energy = 1.7;
+        float energy = 1.9;
         if (code > 4.5 && code < 5.5) {
             float r = length(in.normal.xy);
             if (r > 1.0) discard_fragment();
@@ -1361,7 +1400,7 @@ nonisolated enum DioramaShaderSource {
         // HDR radiance survives the blur; a soft knee keeps dim surfaces from haloing at all.
         float3 radiance = c * glow * a * energy;
         float peak = max(radiance.r, max(radiance.g, radiance.b));
-        radiance *= saturate((peak - 0.35) / max(peak, 1e-4) * 1.6);
+        radiance *= saturate((peak - 0.28) / max(peak, 1e-4) * 1.6);
         out.emissive = float4(radiance * dioramaRevealCoverage(in.worldPosition, u), 1.0);
         return out;
     }

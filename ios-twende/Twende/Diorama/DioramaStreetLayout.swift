@@ -12,18 +12,15 @@ nonisolated struct DioramaStreetLayout: Sendable {
     }
     let carriageway: DioramaStreetSurface
     let corridor: DioramaStreetSurface
+    /// OSM ways that continue one another, joined into single polylines (marking runs use these).
+    let chains: [DioramaRoadFeature]
     let approaches: [Approach]
     let junctions: [(point: DV2, radius: Double)]
     let paintStations: [UInt64: (offset: Double, direction: Double)]
 
     init(data: DioramaTileData, config: DioramaConfig) {
         let chains = DioramaStreetSurface.chained(data.roads)
-        let base = DioramaStreetSurface(chains.flatMap { DioramaStreetSurface.corridor($0, extra: 0, rect: data.rect) })
-        let fillets = base.cornerFillets(obstacles: data.buildings.map(\.ring))
-        carriageway = DioramaStreetSurface(base.polygons + fillets)
-        let widened = chains.flatMap { DioramaStreetSurface.corridor($0, extra: $0.isPaved ? config.pavementWidth : 0.8, rect: data.rect) }
-        let outer = DioramaStreetSurface(widened)
-        corridor = DioramaStreetSurface(widened + outer.cornerFillets(obstacles: data.buildings.map(\.ring)))
+        self.chains = chains
 
         // Intersections include interior vertices and T joins, not only OSM way endpoints.
         var nodes: [DV2] = []
@@ -56,6 +53,21 @@ nonisolated struct DioramaStreetLayout: Sendable {
                 if let hit, data.rect.expanded(by: -8).contains(hit), !nodes.contains(where: { $0.distance(to: hit) < 1.2 }) { nodes.append(hit) }
             }
         }
+
+        // Surfaces: every chain is a plain strip that stops exactly at its OSM end (no square cap
+        // poking through the far side of the road it joins); each junction is filled by one convex
+        // patch through the arms' mouths, so asphalt, pavement and the kerbs that trace the union's
+        // outline meet in straight, closed edges. Re-entrant corners then get their small fillets.
+        let obstacles = data.buildings.map(\.ring)
+        let joinNodes = nodes + Self.chainEnds(chains, near: data.rect)
+        let base = DioramaStreetSurface(chains.flatMap { DioramaStreetSurface.corridor($0, extra: 0, rect: data.rect, caps: false) }
+            + Self.junctionPatches(chains, nodes: joinNodes, extra: { _ in 0 }))
+        carriageway = DioramaStreetSurface(base.polygons + base.cornerFillets(obstacles: obstacles))
+        let pavement: (DioramaRoadFeature) -> Double = { $0.isPaved ? config.pavementWidth : 0.8 }
+        let widened = chains.flatMap { DioramaStreetSurface.corridor($0, extra: pavement($0), rect: data.rect, caps: false) }
+            + Self.junctionPatches(chains, nodes: joinNodes, extra: pavement)
+        let outer = DioramaStreetSurface(widened)
+        corridor = DioramaStreetSurface(widened + outer.cornerFillets(obstacles: obstacles))
         var approaches: [Approach] = []
         var junctions: [(DV2, Double)] = []
         for node in nodes {
@@ -97,6 +109,81 @@ nonisolated struct DioramaStreetLayout: Sendable {
         }
         self.approaches = approaches
         self.junctions = junctions
+    }
+
+    /// Chain ends that touch another chain (a way joining at an angle or with another width), so
+    /// those joints get a patch too even when no segment crossing was found.
+    private static func chainEnds(_ chains: [DioramaRoadFeature], near rect: DioramaRect) -> [DV2] {
+        var result: [DV2] = []
+        for chain in chains where chain.line.count >= 2 {
+            for end in [chain.line[0], chain.line[chain.line.count - 1]] where rect.expanded(by: -2).contains(end) {
+                let touches = chains.contains { other in
+                    other.id != chain.id && zip(other.line, other.line.dropFirst()).contains { DioramaPolygon.distanceToSegment(end, $0.0, $0.1) < 0.7 }
+                }
+                if touches, !result.contains(where: { $0.distance(to: end) < 1.2 }) { result.append(end) }
+            }
+        }
+        return result
+    }
+
+    /// One convex junction patch per node where two or more chains meet: the hull of every arm's
+    /// mouth (its two edge points, a little past the widest crossing road) and the node. Nodes on a
+    /// roundabout ring are skipped so the patch never cuts into the central island.
+    static func junctionPatches(_ chains: [DioramaRoadFeature], nodes: [DV2], extra: (DioramaRoadFeature) -> Double) -> [[DV2]] {
+        var patches: [[DV2]] = []
+        var seen: [DV2] = []
+        for node in nodes where !seen.contains(where: { $0.distance(to: node) < 1.2 }) {
+            seen.append(node)
+            var arms: [(chain: Int, station: Double, sign: Double, half: Double, length: Double)] = []
+            var onRing = false
+            for (index, chain) in chains.enumerated() where chain.line.count >= 2 {
+                var walked = 0.0
+                var station: Double?
+                for (a, b) in zip(chain.line, chain.line.dropFirst()) {
+                    if DioramaPolygon.distanceToSegment(node, a, b) < 0.7 {
+                        station = walked + a.distance(to: DioramaPolygon.closestPointOnSegment(node, a, b))
+                        break
+                    }
+                    walked += a.distance(to: b)
+                }
+                guard let station else { continue }
+                if chain.line[0].distance(to: chain.line[chain.line.count - 1]) < 0.05 { onRing = true; break }
+                let length = DioramaPolygon.length(chain.line)
+                let half = chain.width / 2 + extra(chain)
+                if station > 0.5 { arms.append((index, station, -1, half, length)) }
+                if length - station > 0.5 { arms.append((index, station, 1, half, length)) }
+            }
+            guard !onRing, arms.count >= 2, Set(arms.map(\.chain)).count >= 2 else { continue }
+            var corners: [DV2] = [node]
+            for (k, arm) in arms.enumerated() {
+                let crossing = arms.enumerated().filter { $0.offset != k && $0.element.chain != arm.chain }.map(\.element.half).max() ?? arm.half
+                let room = arm.sign > 0 ? arm.length - arm.station : arm.station
+                let reach = min(crossing + 0.4, room)
+                guard let s = DioramaPolygon.sample(chains[arm.chain].line, at: arm.station + arm.sign * reach) else { continue }
+                let side = s.direction.left * arm.half
+                corners += [s.point + side, s.point - side]
+            }
+            let hull = Self.convexHull(corners)
+            if hull.count >= 3 { patches.append(hull) }
+        }
+        return patches
+    }
+
+    /// Andrew's monotone chain, counter-clockwise.
+    static func convexHull(_ points: [DV2]) -> [DV2] {
+        let sorted = points.sorted { $0.x != $1.x ? $0.x < $1.x : $0.y < $1.y }
+        guard sorted.count >= 3 else { return sorted }
+        func turn(_ o: DV2, _ a: DV2, _ b: DV2) -> Double { (a - o).cross(b - o) }
+        var lower: [DV2] = [], upper: [DV2] = []
+        for p in sorted {
+            while lower.count >= 2, turn(lower[lower.count - 2], lower[lower.count - 1], p) <= 1e-9 { lower.removeLast() }
+            lower.append(p)
+        }
+        for p in sorted.reversed() {
+            while upper.count >= 2, turn(upper[upper.count - 2], upper[upper.count - 1], p) <= 1e-9 { upper.removeLast() }
+            upper.append(p)
+        }
+        return Array(lower.dropLast() + upper.dropLast())
     }
 
     func paintIsClear(_ p: DV2) -> Bool {

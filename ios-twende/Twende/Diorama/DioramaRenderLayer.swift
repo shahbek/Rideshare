@@ -953,7 +953,7 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost, @unchecke
         }
         let labelIDs: Set<UInt64>
         if debug.labels, visible.contains(.buildings), !wireframe {
-            labelIDs = labelRenderer?.draw(encoder: encoder, matrix: matrix, width: texture.width, height: texture.height, zoom: parameters.zoom, uniforms: uniforms) ?? []
+            labelIDs = labelRenderer?.draw(encoder: encoder, frame: ObjectIdentifier(mtlCommandBuffer), matrix: matrix, width: texture.width, height: texture.height, zoom: parameters.zoom, uniforms: uniforms) ?? []
         } else { labelIDs = [] }
         publishLabels(labelIDs)
         encoder.endEncoding()

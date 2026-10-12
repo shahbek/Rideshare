@@ -16,7 +16,7 @@ final class DioramaState {
         }
     }
     static let renderSettingsChanged = Notification.Name("zuri.diorama.renderSettingsChanged")
-    var timeOfDay: DioramaTimeOfDay = DioramaTimeOfDay(rawValue: UserDefaults.standard.string(forKey: "zuri.diorama.timeOfDay") ?? "") ?? .day {
+    var timeOfDay: DioramaTimeOfDay = DioramaTimeOfDay.from(preset: UserDefaults.standard.string(forKey: "zuri.diorama.timeOfDay") ?? "day") {
         didSet {
             guard timeOfDay != oldValue else { return }
             UserDefaults.standard.set(timeOfDay.rawValue, forKey: "zuri.diorama.timeOfDay")

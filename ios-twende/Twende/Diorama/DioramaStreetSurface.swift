@@ -177,8 +177,12 @@ nonisolated struct DioramaStreetSurface: Sendable {
             let end = caps && i == line.count - 2 ? b + d * half : b
             result.append([start - n, end - n, end + n, start + n])
         }
-        for i in 1..<(line.count - 1) {
-            let p = line[i], d1 = (p - line[i - 1]).normalized, d2 = (line[i + 1] - p).normalized
+        // A closed ring (roundabout) also bends at its seam.
+        let closed = line.count >= 4 && line[0].distance(to: line[line.count - 1]) < 0.05
+        for i in 1..<(line.count - (closed ? 0 : 1)) {
+            let p = line[i == line.count - 1 ? 0 : i]
+            let before = line[i - 1], after = i == line.count - 1 ? line[1] : line[i + 1]
+            let d1 = (p - before).normalized, d2 = (after - p).normalized
             let turn = d1.cross(d2)
             guard abs(turn) > 1e-4 || d1.dot(d2) < 0 else { continue }
             // Outer side of the bend: right of a left turn, left of a right turn.

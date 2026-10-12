@@ -5,44 +5,40 @@ import simd
 enum PSPFTowerGeometry {
     static func build(_ site: DarLandmarkSite, ring original: [SIMD2<Double>], root: SCNNode) {
         typealias P = DarLandmarkParts
-        let ring = BuildingContour.rounded(original, tangentDistance: 2.0, segments: 6)
+        typealias H = HarbourArchitectureParts
+        let ring = H.ccw(BuildingContour.rounded(original, tangentDistance: 2.0, segments: 3))
         let lowX = ring.map(\.x).min() ?? -20, highX = ring.map(\.x).max() ?? 20
         let width = highX - lowX
         let roof: Double = 140.5
         let mirror = site.id == "pspf-nw"
-        var glass = BuildingMesh(), glassAlternate = BuildingMesh(), mullions = BuildingMesh(), gold = BuildingMesh(), ribs = BuildingMesh(), lattice = BuildingMesh(), fins = BuildingMesh(), lit = BuildingMesh()
-        let normals = BuildingContour.outwardNormals(ring)
+        // Glass is the city's curtain shader facade (two shader storeys per modelled floor band);
+        // the deep floor bands and mullions stay geometry as open ledges and fins.
+        H.facadeSkin(ring, bottom: 0, top: roof, storey: roof / 36, style: .curtain, color: "#326A72",
+                     root: root, name: "curtainGlass", lit: true, litBay: 5.2)
+        var mullions = BuildingMesh(), gold = BuildingMesh(), ribs = BuildingMesh(), lattice = BuildingMesh(), fins = BuildingMesh()
+        for floor in 1...18 { H.ledge(&mullions, ring: ring, z: Double(floor) * roof / 18 - 0.56, height: 0.56, reach: 0.5) }
         for i in ring.indices {
             let j = (i + 1) % ring.count, a = ring[i], b = ring[j], delta = b - a
-            let length = simd_length(delta), direction = simd_normalize(delta), outward = SIMD2(direction.y, -direction.x)
+            let length = simd_length(delta)
+            guard length > 0.01 else { continue }
+            let direction = delta / length, outward = SIMD2(direction.y, -direction.x)
             let bays = max(1, Int(ceil(length / 5.2)))
             for bay in 0..<bays {
                 let t0 = Double(bay) / Double(bays), t1 = Double(bay + 1) / Double(bays)
                 let p = a + delta * t0, q = a + delta * t1
-                let n0 = simd_normalize(normals[i] * (1 - t0) + normals[j] * t0)
-                let n1 = simd_normalize(normals[i] * (1 - t1) + normals[j] * t1)
-                let ns = [P.p(n0, 0), P.p(n1, 0), P.p(n1, 0), P.p(n0, 0)]
-                for floor in 0..<18 {
-                    let bottom = Double(floor) * roof / 18, top = Double(floor + 1) * roof / 18
-                    if (bay + floor * 3 + i) % 7 == 1 { lit.smoothQuad(P.p(p, bottom), P.p(q, bottom), P.p(q, top), P.p(p, top), normals: ns) }
-                    else if (bay + i) % 3 == 0 { glassAlternate.smoothQuad(P.p(p, bottom), P.p(q, bottom), P.p(q, top), P.p(p, top), normals: ns) }
-                    else { glass.smoothQuad(P.p(p, bottom), P.p(q, bottom), P.p(q, top), P.p(p, top), normals: ns) }
-                    let n = outward * 0.045
-                    if length > 1.2 { P.beam(&mullions, P.p(p + outward * 0.22, top), P.p(q + outward * 0.22, top), radius: 0.28) }
-                    let fraction = ((p.x + q.x) / 2 - lowX) / width
-                    let inGoldHalf = mirror ? fraction > 0.53 : fraction < 0.47
-                    if floor < 12 && floor % 2 == 1 && inGoldHalf {
-                        gold.quad(P.p(p + n * 2, top - 0.85), P.p(q + n * 2, top - 0.85), P.p(q + n * 2, top), P.p(p + n * 2, top))
-                    }
-                }
-                let n = outward * 0.22
-                if length > 1.2 { P.beam(&mullions, P.p(p + n, 0), P.p(p + n, roof), radius: 0.32) }
-                if bay % 2 == 0 {
-                    if length > 1.2 { P.beam(&ribs, P.p(p + n * 2, 97), P.p(p + n * 2, roof), radius: 0.40) }
-                }
+                let n = outward * 0.045
                 let fraction = ((p.x + q.x) / 2 - lowX) / width
+                let inGoldHalf = mirror ? fraction > 0.53 : fraction < 0.47
+                for floor in 0..<12 where floor % 2 == 1 && inGoldHalf {
+                    let top = Double(floor + 1) * roof / 18
+                    gold.quad(P.p(p + n * 12, top - 0.85), P.p(q + n * 12, top - 0.85), P.p(q + n * 12, top), P.p(p + n * 12, top))
+                }
+                if length > 1.2 { H.fin(&mullions, at: p, outward: outward, bottom: 0, top: roof, width: 0.5, depth: 0.42) }
+                if bay % 2 == 0, length > 1.2 {
+                    H.fin(&ribs, at: p, outward: outward, bottom: 97, top: roof, width: 0.7, depth: 0.8)
+                }
                 if abs(fraction - (mirror ? 0.55 : 0.45)) < 0.045 {
-                    gold.quad(P.p(p + n * 3, 0.2), P.p(q + n * 3, 0.2), P.p(q + n * 3, 98), P.p(p + n * 3, 98))
+                    gold.quad(P.p(p + n * 13, 0.2), P.p(q + n * 13, 0.2), P.p(q + n * 13, 98), P.p(p + n * 13, 98))
                 }
             }
             let count = max(1, Int(ceil(length / 4.0)))
@@ -63,9 +59,6 @@ enum PSPFTowerGeometry {
                 fins.quad(P.p(a * 0.96, 137), P.p(b * 0.96, 137), P.p(b * 0.96, site.height), P.p(a * 0.96, site.height))
             }
         }
-        root.addChildNode(glass.node(name: "curtainGlass", material: BuildingSurfaces.make("pspf.tealGlass", color: "#326A72", roughness: 0.4, metalness: 0.08)))
-        root.addChildNode(glassAlternate.node(name: "curtainGlass", material: BuildingSurfaces.make("pspf.tealGlass", color: "#417E86", roughness: 0.4, metalness: 0.08)))
-        root.addChildNode(lit.node(name: "occupiedTowerWindows", material: LandmarkLightingGeometry.window))
         root.addChildNode(mullions.node(name: "pspfMullions", material: P.silver))
         root.addChildNode(ribs.node(name: "pspfUpperRibs", material: P.silver))
         root.addChildNode(gold.node(name: "pspfAsymmetricGoldBands", material: P.gold))

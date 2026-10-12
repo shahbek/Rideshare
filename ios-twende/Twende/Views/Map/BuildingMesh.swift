@@ -108,6 +108,24 @@ struct BuildingMesh {
         }
     }
 
+    /// Shader-facade wall quad from `a` to `b` (outward to the right of travel). The texture coordinate
+    /// carries the along-wall fraction (u) and the corner flags (v); `BuildingRenderGeometry` turns them
+    /// into the same facade encoding the city's buildings use, so openings are drawn by the shader.
+    mutating func facadeQuad(_ a: SIMD2<Double>, _ b: SIMD2<Double>, bottom: Double, top: Double,
+                             normals na: SIMD2<Double>, _ nb: SIMD2<Double>, flags: Int) {
+        guard top > bottom, simd_distance(a, b) > 0.05 else { return }
+        let v = Double(flags)
+        let corners: [(SIMD2<Double>, Double, SIMD2<Double>, Double)] = [(a, bottom, na, 0), (b, bottom, nb, 1), (b, top, nb, 1), (a, top, na, 0)]
+        for indices in [[0, 1, 2], [0, 2, 3]] {
+            for i in indices {
+                let (p, z, n, f) = corners[i]
+                positions.append(SCNVector3(Float(p.x), Float(p.y), Float(z)))
+                normals.append(SCNVector3(Float(n.x), Float(n.y), 0))
+                textureCoordinates.append(CGPoint(x: f, y: v))
+            }
+        }
+    }
+
     /// Reuses the Slipway kit's closed chamfered surfaces without changing landmark pigment.
     mutating func append(_ mesh: DioramaMesh) {
         for id in mesh.indices {

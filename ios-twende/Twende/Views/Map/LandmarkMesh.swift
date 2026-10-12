@@ -7,7 +7,7 @@ enum LandmarkMesh {
     static func volume(_ ring: [SIMD2<Double>], bottom: Double, top: Double,
                        material: SCNMaterial, name: String) -> SCNNode {
         let radius = min(DioramaConfig.slipway.cornerRadius, max(0.08, (top - bottom) * 0.35))
-        let softened = BuildingContour.rounded(ring, tangentDistance: radius, segments: 6)
+        let softened = BuildingContour.rounded(ring, tangentDistance: radius, segments: 3)
         let outline = DioramaPolygon.counterClockwise(softened.map { DV2($0.x, $0.y) })
         let bevel = min(DioramaConfig.slipway.roofBevel, (top - bottom) * 0.35)
         var shell = DioramaMesh()
@@ -21,6 +21,24 @@ enum LandmarkMesh {
         shell.polygon(outline, z: bottom, .whitewash, facingUp: false)
         var mesh = BuildingMesh(); mesh.append(shell)
         return mesh.node(name: name, material: material)
+    }
+
+    /// Open tube for landmark trim, lattices and rails: no end caps (they are buried in what the beam
+    /// meets or below a pixel), four sides under 20 cm radius and six above; smooth normals keep it round.
+    static func leanBeam(_ mesh: inout BuildingMesh, from start: SIMD3<Double>, to end: SIMD3<Double>, radius: Double) {
+        let direction = end - start
+        guard simd_length(direction) > 0.001, radius > 0 else { return }
+        let sides = radius < 0.2 ? 4 : 6
+        let axis = simd_normalize(direction)
+        let helper = abs(axis.z) < 0.9 ? SIMD3<Double>(0, 0, 1) : SIMD3<Double>(1, 0, 0)
+        let u = simd_normalize(simd_cross(axis, helper)), v = simd_cross(axis, u)
+        // Rotated half a side so a four-sided rail shows a face (not an edge) to the sky.
+        let phase = .pi / Double(sides)
+        for i in 0..<sides {
+            let a = phase + Double(i) * 2 * .pi / Double(sides), b = phase + Double(i + 1) * 2 * .pi / Double(sides)
+            let n0 = u * cos(a) + v * sin(a), n1 = u * cos(b) + v * sin(b)
+            mesh.smoothQuad(start + n0 * radius, start + n1 * radius, end + n1 * radius, end + n0 * radius, normals: [n0, n1, n1, n0])
+        }
     }
 
     static func beam(_ mesh: inout BuildingMesh, from start: SIMD3<Double>, to end: SIMD3<Double>, radius: Double, sides: Int = 6) {

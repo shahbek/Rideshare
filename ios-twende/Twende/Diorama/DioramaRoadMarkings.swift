@@ -9,15 +9,32 @@ nonisolated struct DioramaRoadMarkings {
     let layout: DioramaStreetLayout
     let painter: DioramaGroundPainter
 
+    /// Markings run along whole chains (ways that continue one another), so centre dashes and
+    /// yellow edge lines pass through way splits as one continuous mitred line instead of two
+    /// butt-ended pieces that gap or overlap at every split. They stop at junction mouths.
     func paint() {
-        for road in data.roads where road.isPaved && road.width >= 5.5 { markings(road) }
+        var firstPoint: [UInt64: DV2] = [:]
+        for road in data.roads where road.line.count >= 2 { firstPoint[road.id] = road.line[0] }
+        for chain in layout.chains where chain.isPaved && chain.width >= 5.5 {
+            // The chain keeps its first way's id; dash phase is measured from that way's start.
+            var shift = 0.0, walked = 0.0
+            if let start = firstPoint[chain.id] {
+                for (a, b) in zip(chain.line, chain.line.dropFirst()) {
+                    if a.distance(to: start) < 0.01 { shift = walked; break }
+                    walked += a.distance(to: b)
+                }
+            }
+            markings(chain, shift: shift)
+        }
         junctionPaint()
     }
 
-    private func markings(_ road: DioramaRoadFeature) {
+    private func markings(_ road: DioramaRoadFeature, shift: Double) {
         let length = DioramaPolygon.length(road.line)
         let period = config.dashLength + config.dashGap
-        let station = layout.paintStations[road.id] ?? (offset: 0, direction: 1)
+        let raw = layout.paintStations[road.id] ?? (offset: 0, direction: 1)
+        let station = (offset: raw.offset - (raw.direction >= 0 ? shift : -shift), direction: raw.direction)
+        let closed = road.line.count >= 4 && road.line[0].distance(to: road.line[road.line.count - 1]) < 0.05
         var run: [(point: DV2, distance: Double, direction: DV2)] = []
         func flush() {
             defer { run.removeAll() }
@@ -25,7 +42,10 @@ nonisolated struct DioramaRoadMarkings {
             let phase = station.direction >= 0 ? station.offset + run[0].distance : station.offset - run[run.count - 1].distance
             let points = station.direction >= 0 ? run.map(\.point) : Array(run.map(\.point).reversed())
             let wrapped = (phase.truncatingRemainder(dividingBy: period) + period).truncatingRemainder(dividingBy: period)
-            painter.stroke(points, width: 0.32, .marking, dashes: [config.dashLength, config.dashGap], phase: wrapped, cap: .butt)
+            // Roundabouts are one-way rings: no centre dashes, edge lines only.
+            if !closed {
+                painter.stroke(points, width: 0.32, .marking, dashes: [config.dashLength, config.dashGap], phase: wrapped, cap: .butt)
+            }
             if road.width >= 6 {
                 for side in [-1.0, 1.0] {
                     let offset = (road.width / 2 - 0.38) * side

@@ -84,14 +84,15 @@ nonisolated enum DioramaCategory: String, CaseIterable, Codable, Sendable {
 }
 
 nonisolated enum DioramaTimeOfDay: String, CaseIterable, Identifiable, Sendable {
-    case day, dusk, night
+    case day, night
     var id: String { rawValue }
+    /// Map-style light presets collapse onto the two diorama looks: dusk and night are night.
+    static func from(preset: String) -> DioramaTimeOfDay { preset == "night" || preset == "dusk" ? .night : .day }
     /// Mapbox Standard `lightPreset` value.
     var lightPreset: String { rawValue }
     var emissiveStrength: Double {
         switch self {
         case .day: 0
-        case .dusk: 0.85
         case .night: 1
         }
     }
@@ -100,7 +101,6 @@ nonisolated enum DioramaTimeOfDay: String, CaseIterable, Identifiable, Sendable 
     var shaderIndex: Float {
         switch self {
         case .day: 0
-        case .dusk: 1
         case .night: 2
         }
     }
@@ -138,7 +138,7 @@ nonisolated struct DioramaConfig: Sendable {
     /// parallax reveals instead of modelled recesses. Replaces 7-16 quads per window per floor.
     static let shaderFacades = true
     /// Bump to invalidate every cached tile.
-    var generatorVersion: Int = 42
+    var generatorVersion: Int = 43
     /// Reuse full-detail architectural primitives without changing their tessellation.
     var instancesArchitecture: Bool = true
     /// Drape the plate/ground overlays over the bundled height snapshot used by roads and foundations.
@@ -202,7 +202,7 @@ nonisolated struct DioramaConfig: Sendable {
     // MARK: Post-processing
     var ambientOcclusionStrength: Float = 0.8
     var ambientOcclusionRadius: Float = 1.6
-    var bloomStrength: Float = 0.4
+    var bloomStrength: Float = 0.55
     /// Fraction of the final colour pulled towards the warm-violet grade.
     var gradeStrength: Float = 0.035
     /// Haze per metre of distance from the eye (exponential).

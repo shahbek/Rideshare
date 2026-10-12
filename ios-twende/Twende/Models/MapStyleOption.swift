@@ -70,4 +70,6 @@ nonisolated enum MapStyleOption: String, CaseIterable, Identifiable, Codable, Se
     }
 
     static let fallback: MapStyleOption = .monochromeDay
+    /// Styles offered in Settings. Dawn is retired; a saved dawn choice opens as Colour day.
+    static let selectable: [MapStyleOption] = allCases.filter { $0 != .dawn }
 }

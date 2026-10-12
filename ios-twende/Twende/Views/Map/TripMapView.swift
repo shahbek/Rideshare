@@ -416,7 +416,7 @@ extension TripMapView {
             guard let map = mapView?.mapboxMap else { return }
             let state = DioramaState.shared
             let time: DioramaTimeOfDay = state.isEnabled && !state.isBasemapOnly ? state.timeOfDay
-                : DioramaTimeOfDay(rawValue: AppSettings.shared.mapStyle.lightPreset) ?? .dusk
+                : DioramaTimeOfDay.from(preset: AppSettings.shared.mapStyle.lightPreset)
             zuriLabels.setNight(time != .day)
             guard force || appliedNativeLights != time else { return }
             let preset = DioramaLightingPreset.preset(for: time)
@@ -1118,7 +1118,7 @@ extension TripMapView {
             }
             let state = DioramaState.shared
             let usesDiorama = state.isEnabled && !state.isBasemapOnly
-            let nativeTime = DioramaTimeOfDay(rawValue: AppSettings.shared.mapStyle.lightPreset) ?? .dusk
+            let nativeTime = DioramaTimeOfDay.from(preset: AppSettings.shared.mapStyle.lightPreset)
             if fleet.update(items, time: nativeTime, usesDiorama: usesDiorama, viewportSize: mapView.bounds.size) {
                 mapView.mapboxMap.triggerRepaint()
             }

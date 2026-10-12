@@ -7,12 +7,12 @@ enum BandariTowerGeometry {
         typealias P = DarLandmarkParts
         typealias H = HarbourArchitectureParts
         let bounds = H.bounds(raw), centre = SIMD2((bounds.x+bounds.z)/2,(bounds.y+bounds.w)/2)
-        let podium = H.compactContour(BuildingContour.rounded(raw,tangentDistance:0.8,segments:6))
+        let podium = H.compactContour(BuildingContour.rounded(raw,tangentDistance:0.8,segments:3))
         let towerRaw = raw.map {
             centre+SIMD2(($0.x-centre.x)*0.52+(bounds.z-bounds.x)*0.14,($0.y-centre.y)*0.75)
         }
         guard H.fits(towerRaw,inside:raw,clearance:0.45) else { return }
-        let tower = H.compactContour(BuildingContour.rounded(towerRaw,tangentDistance:1.2,segments:6))
+        let tower = H.compactContour(BuildingContour.rounded(towerRaw,tangentDistance:1.2,segments:3))
         let b = H.bounds(tower), w = b.z-b.x, d = b.w-b.y, y = (b.y+b.w)/2
         let podiumTop = 20.5, eave = site.height-19.5
         let coreX = b.x+w*0.35, coreWidth = w*0.23
@@ -52,18 +52,18 @@ enum BandariTowerGeometry {
         let stairCentre = SIMD2(coreLeft-1.5,b.y+3.0)
         let stairRadius = min(2.6,d*0.11)
         var stair = BuildingMesh(), caps = BuildingMesh(), rails = BuildingMesh()
-        stair.revolve(centre:stairCentre,profile:[SIMD2(stairRadius,podiumTop+6),SIMD2(stairRadius,eave+3.38)],segments:18)
+        stair.revolve(centre:stairCentre,profile:[SIMD2(stairRadius,podiumTop+6),SIMD2(stairRadius,eave+3.38)],segments:12)
         caps.revolve(centre:stairCentre,profile:[SIMD2(0,podiumTop),SIMD2(stairRadius,podiumTop),
-            SIMD2(stairRadius,podiumTop+6),SIMD2(0,podiumTop+6)],segments:18)
-        for step in 0..<18 {
-            let a = Double(step)*Double.pi/9, b = Double(step+1)*Double.pi/9
+            SIMD2(stairRadius,podiumTop+6),SIMD2(0,podiumTop+6)],segments:12)
+        for step in 0..<12 {
+            let a = Double(step)*Double.pi/6, b = Double(step+1)*Double.pi/6
             caps.triangle(P.p(stairCentre,eave+3.38),
                 SIMD3(stairCentre.x+stairRadius*cos(a),stairCentre.y+stairRadius*sin(a),eave+3.38),
                 SIMD3(stairCentre.x+stairRadius*cos(b),stairCentre.y+stairRadius*sin(b),eave+3.38))
         }
         for z in [eave-1.0,eave+2.2] {
             caps.revolve(centre:stairCentre,profile:[SIMD2(stairRadius,z),SIMD2(stairRadius+0.3,z+0.12),
-                SIMD2(stairRadius+0.3,z+1.05),SIMD2(stairRadius,z+1.18),SIMD2(stairRadius,z)],segments:18)
+                SIMD2(stairRadius+0.3,z+1.05),SIMD2(stairRadius,z+1.18),SIMD2(stairRadius,z)],segments:12)
         }
         for x in [stairCentre.x-stairRadius*0.68,stairCentre.x+stairRadius*0.68] {
             sweep(&rails,path:[SIMD3(x,stairCentre.y-stairRadius*0.78,podiumTop+6),
@@ -78,42 +78,29 @@ enum BandariTowerGeometry {
         roundels(podium,largeX:coreLeft-19,sailFace:sailFace,root:root)
     }
 
-    /// Coplanar pigment cells and flat seam strips replace separately capped metal mullions and individual box windows.
-    private static func paintedGlazing(_ ring: [SIMD2<Double>], bottom: Double, top: Double, rows: Int,
+    /// Glazing is the city's curtain shader facade (one quad per edge, panes, mullions and night
+    /// windows in the fragment shader); the dark floor seams stay as flat strips 3 cm proud.
+    private static func paintedGlazing(_ input: [SIMD2<Double>], bottom: Double, top: Double, rows: Int,
                                        bayWidth: Double, occupied: Bool, root: SCNNode) {
         typealias P = DarLandmarkParts
         typealias H = HarbourArchitectureParts
-        let normals = BuildingContour.outwardNormals(ring), storey = (top-bottom)/Double(rows)
-        var panes = BuildingMesh(), light = BuildingMesh(), seams = BuildingMesh(), lit = BuildingMesh()
+        let ring = H.ccw(input)
+        let (storey, count) = H.facadeStorey(span: top-bottom, rows: rows)
+        H.facadeSkin(ring, bottom: bottom, top: top, storey: storey, style: .curtain, color: "#326A72",
+                     root: root, name: "curtainGlass", lit: occupied, litBay: bayWidth)
+        let normals = BuildingContour.outwardNormals(ring), step = (top-bottom)/Double(count)
+        var seams = BuildingMesh()
         for i in ring.indices {
-            let a = ring[i], b = ring[(i+1)%ring.count], delta = b-a, length = simd_length(delta)
-            guard length > 0.01 else { continue }
-            let bays = max(1,Int(ceil(length/bayWidth)))
-            for row in 0..<rows {
-                let low = bottom+Double(row)*storey, high = low+storey-0.065
-                for bay in 0..<bays {
-                    let t = Double(bay)/Double(bays), u = Double(bay+1)/Double(bays)
-                    let p = a+delta*t, q = a+delta*u
-                    let na = simd_normalize(normals[i]*(1-t)+normals[(i+1)%ring.count]*t)
-                    let nb = simd_normalize(normals[i]*(1-u)+normals[(i+1)%ring.count]*u)
-                    let ns = [P.p(na,0),P.p(nb,0),P.p(nb,0),P.p(na,0)]
-                    if occupied && length > 8 && (row*3+bay+i)%23 == 4 {
-                        lit.smoothQuad(P.p(p,low),P.p(q,low),P.p(q,high),P.p(p,high),normals:ns)
-                    } else if (bay+row+i)%4 == 0 {
-                        light.smoothQuad(P.p(p,low),P.p(q,low),P.p(q,high),P.p(p,high),normals:ns)
-                    } else {
-                        panes.smoothQuad(P.p(p,low),P.p(q,low),P.p(q,high),P.p(p,high),normals:ns)
-                    }
-                }
-                seams.smoothQuad(P.p(a,high),P.p(b,high),P.p(b,low+storey),P.p(a,low+storey),
-                                 normals:[P.p(normals[i],0),P.p(normals[(i+1)%ring.count],0),
-                                          P.p(normals[(i+1)%ring.count],0),P.p(normals[i],0)])
+            let j = (i+1)%ring.count
+            guard simd_distance(ring[i],ring[j]) > 0.01 else { continue }
+            let a = ring[i]+normals[i]*0.03, b = ring[j]+normals[j]*0.03
+            for row in 1...count {
+                let z = bottom+Double(row)*step
+                seams.smoothQuad(P.p(a,z-0.065),P.p(b,z-0.065),P.p(b,z),P.p(a,z),
+                                 normals:[P.p(normals[i],0),P.p(normals[j],0),P.p(normals[j],0),P.p(normals[i],0)])
             }
         }
-        root.addChildNode(panes.node(name:"curtainGlass",material:H.glass))
-        root.addChildNode(light.node(name:"curtainGlass",material:H.lightGlass))
         root.addChildNode(seams.node(name:"bandariPaintedGlazingSeams",material:H.louvre))
-        root.addChildNode(lit.node(name:"occupiedHarbourWindows",material:LandmarkLightingGeometry.window))
         root.addChildNode(BuildingFootprint(rings:[ring]).deck(at:top-0.25,thickness:0.25,material:P.plaster,name:"bandariClosedRoofDeck"))
     }
 

@@ -22,28 +22,20 @@ enum DarLandmarkParts {
     }
 
     static func beam(_ mesh: inout BuildingMesh, _ a: SIMD3<Double>, _ b: SIMD3<Double>, radius: Double = 0.12) {
-        LandmarkMesh.beam(&mesh, from: a, to: b, radius: radius, sides: 6)
+        LandmarkMesh.leanBeam(&mesh, from: a, to: b, radius: radius)
     }
 
     static func gable(_ ring: [SIMD2<Double>], eave: Double, ridge: Double, root: SCNNode, name: String) {
         guard ring.count == 4 else { return }
         let front = (ring[0] + ring[1]) / 2, back = (ring[2] + ring[3]) / 2
-        var roof = BuildingMesh(), ends = BuildingMesh(), courses = BuildingMesh()
+        // Tile courses are drawn by the roof shader (clay roofs), not modelled as battens.
+        var roof = BuildingMesh(), ends = BuildingMesh()
         roof.quad(p(ring[0], eave), p(front, ridge), p(back, ridge), p(ring[3], eave))
         roof.quad(p(front, ridge), p(ring[1], eave), p(ring[2], eave), p(back, ridge))
         ends.triangle(p(ring[0], eave), p(ring[1], eave), p(front, ridge))
         ends.triangle(p(ring[2], eave), p(ring[3], eave), p(back, ridge))
-        for step in 1..<16 {
-            let t = Double(step) / 16
-            for side in [0, 1] {
-                let edgeFront = ring[side], edgeBack = ring[side == 0 ? 3 : 2]
-                let z = eave + (ridge - eave) * t + 0.025
-                beam(&courses, p(edgeFront + (front - edgeFront) * t, z), p(edgeBack + (back - edgeBack) * t, z), radius: 0.028)
-            }
-        }
         root.addChildNode(roof.node(name: name, material: clay))
         root.addChildNode(ends.node(name: "gableMasonry", material: plaster))
-        root.addChildNode(courses.node(name: "roofTileCourses", material: clay))
     }
 
     static func pyramid(_ ring: [SIMD2<Double>], base: Double, top: Double, material: SCNMaterial, root: SCNNode, name: String) {
@@ -67,8 +59,8 @@ enum DarLandmarkParts {
     static func arch(width: Double, height: Double, root: SCNNode, name: String, illuminated: Bool = false) {
         let half = width / 2, spring = height * 0.6
         var ring = [SIMD2(-half, 0), SIMD2(half, 0), SIMD2(half, spring)]
-        for i in 1...16 {
-            let t = Double(i) / 16
+        for i in 1...10 {
+            let t = Double(i) / 10
             let x = half * (1 - 2 * t)
             let z = spring + (height - spring) * (1 - pow(abs(2 * t - 1), 1.4))
             ring.append(SIMD2(x, z))
@@ -82,8 +74,8 @@ enum DarLandmarkParts {
 
     static func disc(radius: Double, root: SCNNode, name: String, clock: Bool) {
         var face = BuildingMesh(), rim = BuildingMesh(), details = BuildingMesh()
-        for i in 0..<48 {
-            let a = Double(i) * .pi / 24, b = Double(i + 1) * .pi / 24
+        for i in 0..<24 {
+            let a = Double(i) * .pi / 12, b = Double(i + 1) * .pi / 12
             let p = SIMD3(cos(a) * radius, sin(a) * radius, 0.06), q = SIMD3(cos(b) * radius, sin(b) * radius, 0.06)
             face.triangle(SIMD3(0, 0, 0.06), p, q)
             beam(&rim, p, q, radius: 0.10)

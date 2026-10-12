@@ -32,12 +32,18 @@ enum JohariRotanaGeometry {
         typealias P = DarLandmarkParts
         typealias H = HarbourArchitectureParts
         guard raw.count >= 3 else { return }
-        let ring = BuildingContour.rounded(raw,tangentDistance:0.8,segments:6)
+        let ring = BuildingContour.rounded(raw,tangentDistance:0.8,segments:3)
         let bounds = H.bounds(ring)
         let centre = SIMD2((bounds.x+bounds.z)/2,(bounds.y+bounds.w)/2)
         let recessed = ring.map { centre+($0-centre)*0.987 }
         P.volume(recessed,bottom:0.2,top:podiumTop-0.6,material:H.louvre,name:"johariRecessedParkingPodium",root:root)
-        var bands = BuildingMesh(), fins = BuildingMesh(), slats = BuildingMesh()
+        // Parking louvres: the shader's ribbon facade (dark bands, slim mullions) a few cm proud of
+        // the recessed body, instead of three modelled slats per level and edge.
+        let louvreSkin = ring.map { centre+($0-centre)*0.9895 }
+        let (louvreStorey, _) = H.facadeStorey(span:podiumTop-0.8,rows:7)
+        H.facadeSkin(H.compactContour(louvreSkin,error:0.05),bottom:0.2,top:podiumTop-0.6,storey:louvreStorey,style:.ribbon,
+                     color:"#30494E",root:root,name:"johariParkingLouvres")
+        var bands = BuildingMesh(), fins = BuildingMesh()
         for level in 0...7 {
             H.ribbon(&bands,ring:ring,z:0.3+Double(level)*(podiumTop-0.9)/7,height:1.45,reach:0.18)
         }
@@ -49,14 +55,7 @@ enum JohariRotanaGeometry {
             let bays = max(1,Int(ceil(length/12)))
             for bay in 0...bays {
                 let p = a+d*(Double(bay)/Double(bays))-n*0.20
-                LandmarkMesh.beam(&fins,from:P.p(p,0.4),to:P.p(p,podiumTop),radius:0.34,sides:8)
-            }
-            for level in 0..<7 {
-                let z = 1.8+Double(level)*(podiumTop-0.9)/7
-                for step in 0..<3 {
-                    let low = z+Double(step)*0.32
-                    LandmarkMesh.beam(&slats,from:P.p(a-n*0.15,low),to:P.p(q-n*0.15,low),radius:0.045,sides:4)
-                }
+                LandmarkMesh.leanBeam(&fins,from:P.p(p,0.4),to:P.p(p,podiumTop),radius:0.34)
             }
         }
         // Glass stair/lift bays interrupt the open parking ribbons on both long elevations.
@@ -71,7 +70,6 @@ enum JohariRotanaGeometry {
         }
         root.addChildNode(bands.node(name:"johariContinuousParkingRibbons",material:P.plaster))
         root.addChildNode(fins.node(name:"johariPodiumPiers",material:P.plaster))
-        root.addChildNode(slats.node(name:"johariParkingLouvres",material:H.louvre))
         root.addChildNode(surrounds.node(name:"johariGoldPodiumBays",material:P.gold))
         root.addChildNode(bays.node(name:"curtainGlass",material:H.glass))
     }
@@ -107,8 +105,8 @@ enum JohariRotanaGeometry {
         var rail = BuildingMesh()
         for i in equipment.indices {
             let a = equipment[i], b = equipment[(i+1)%equipment.count]
-            LandmarkMesh.beam(&rail,from:P.p(a,top+1.5),to:P.p(b,top+1.5),radius:0.08,sides:6)
-            LandmarkMesh.beam(&rail,from:P.p(a,top+0.6),to:P.p(a,top+1.5),radius:0.08,sides:6)
+            LandmarkMesh.leanBeam(&rail,from:P.p(a,top+1.5),to:P.p(b,top+1.5),radius:0.08)
+            LandmarkMesh.leanBeam(&rail,from:P.p(a,top+0.6),to:P.p(a,top+1.5),radius:0.08)
         }
         root.addChildNode(rail.node(name:"johariCentralPlantGuardrail",material:P.silver))
     }
@@ -118,8 +116,9 @@ enum JohariRotanaGeometry {
         typealias H = HarbourArchitectureParts
         let b = H.bounds(rectangle), x = (b.x+b.z)/2, y = (b.y+b.w)/2, w = b.z-b.x, d = b.w-b.y
         let eave = top-18
-        let ring = BuildingContour.rounded(rectangle,tangentDistance:0.55,segments:6)
-        let upper = BuildingContour.rounded(P.rectangle(x:x,y:y,width:w*0.96,depth:d*0.86),tangentDistance:0.45,segments:6)
+        // Square plans: the facade shader rounds the corners, no contour segments needed.
+        let ring = rectangle
+        let upper = P.rectangle(x:x,y:y,width:w*0.96,depth:d*0.86)
         H.curtain(ring,bottom:podiumTop,top:shoulder,rows:19,bayWidth:3.4,root:root,creamSills:true,paneMaterial:glazing,alternateMaterial:lightGlazing)
         H.curtain(upper,bottom:shoulder,top:eave,rows:7,bayWidth:3.4,root:root,creamSills:true,paneMaterial:glazing,alternateMaterial:lightGlazing)
         var cream = BuildingMesh(), accents = BuildingMesh(), buttresses = BuildingMesh()
@@ -146,9 +145,9 @@ enum JohariRotanaGeometry {
             let base = SIMD3(outerX,y+d*fraction,podiumTop)
             let bend = SIMD3(outerX,y+d*fraction,shoulder+8.0)
             let inset = SIMD3(x+(outerX-x)*0.94,y+d*fraction*0.86,shoulder+12.0)
-            LandmarkMesh.beam(&buttresses,from:base,to:bend,radius:0.24,sides:6)
-            LandmarkMesh.beam(&buttresses,from:bend,to:inset,radius:0.24,sides:6)
-            LandmarkMesh.beam(&buttresses,from:inset,to:SIMD3(inset.x,inset.y,eave),radius:0.24,sides:6)
+            LandmarkMesh.leanBeam(&buttresses,from:base,to:bend,radius:0.24)
+            LandmarkMesh.leanBeam(&buttresses,from:bend,to:inset,radius:0.24)
+            LandmarkMesh.leanBeam(&buttresses,from:inset,to:SIMD3(inset.x,inset.y,eave),radius:0.24)
         }
         root.addChildNode(cream.node(name:"johariCreamFacadeGrid",material:P.plaster))
         root.addChildNode(accents.node(name:"johariOrangeOuterPiers",material:orange))
@@ -160,10 +159,10 @@ enum JohariRotanaGeometry {
         for i in cap.indices {
             let a = P.p(cap[i],eave+0.75), q = P.p(cap[(i+1)%cap.count],eave+0.75)
             slopes.triangle(a,q,peak)
-            LandmarkMesh.beam(&seams,from:a,to:peak,radius:0.10,sides:6)
+            LandmarkMesh.leanBeam(&seams,from:a,to:peak,radius:0.10)
             for step in 1..<3 {
                 let edge = a+(q-a)*(Double(step)/3)
-                LandmarkMesh.beam(&seams,from:edge,to:peak,radius:0.055,sides:6)
+                LandmarkMesh.leanBeam(&seams,from:edge,to:peak,radius:0.055)
             }
         }
         root.addChildNode(slopes.node(name:"johariPalePyramidalRoof",material:P.plaster))
@@ -175,28 +174,28 @@ enum JohariRotanaGeometry {
             let z = base+(cageTop-base)*Double(level)/4, next = base+(cageTop-base)*Double(level+1)/4
             for leg in cage.indices {
                 let p = cage[leg], q = cage[(leg+1)%cage.count]
-                LandmarkMesh.beam(&spire,from:P.p(p,z),to:P.p(p,next),radius:0.09,sides:6)
-                LandmarkMesh.beam(&spire,from:P.p(p,z),to:P.p(q,z),radius:0.065,sides:6)
-                LandmarkMesh.beam(&spire,from:P.p(p,z),to:P.p(q,next),radius:0.055,sides:6)
+                LandmarkMesh.leanBeam(&spire,from:P.p(p,z),to:P.p(p,next),radius:0.09)
+                LandmarkMesh.leanBeam(&spire,from:P.p(p,z),to:P.p(q,z),radius:0.065)
+                LandmarkMesh.leanBeam(&spire,from:P.p(p,z),to:P.p(q,next),radius:0.055)
             }
         }
-        for p in cage { LandmarkMesh.beam(&spire,from:P.p(p,cageTop),to:SIMD3(x,y,top),radius:0.065,sides:6) }
+        for p in cage { LandmarkMesh.leanBeam(&spire,from:P.p(p,cageTop),to:SIMD3(x,y,top),radius:0.065) }
         root.addChildNode(spire.node(name:"johariLatticeSpire\(index)",material:P.silver))
     }
 
     private static func rearTerrace(_ raw: [SIMD2<Double>], root: SCNNode) {
         typealias P = DarLandmarkParts
         typealias H = HarbourArchitectureParts
-        let ring = BuildingContour.rounded(raw,tangentDistance:0.65,segments:6), b = H.bounds(raw)
+        let ring = BuildingContour.rounded(raw,tangentDistance:0.65,segments:3), b = H.bounds(raw)
         let w = b.z-b.x, d = b.w-b.y
         // Southwest/inland basin is photo located, not inferred from the tower centre or nearest POI.
-        let pool = BuildingContour.rounded(P.rectangle(x:b.x+w*0.29,y:b.y+d*0.51,width:w*0.29,depth:d*0.40),tangentDistance:0.45,segments:6)
+        let pool = BuildingContour.rounded(P.rectangle(x:b.x+w*0.29,y:b.y+d*0.51,width:w*0.29,depth:d*0.40),tangentDistance:0.45,segments:3)
         guard H.fits(pool,inside:ring,clearance:2.0) else { return }
         let copingOuter = P.rectangle(x:b.x+w*0.29,y:b.y+d*0.51,width:w*0.29+1.1,depth:d*0.40+1.1)
         guard H.fits(copingOuter,inside:ring,clearance:1.0) else { return }
         let paving = BuildingSurfaces.make("landmark.sitePaving",color:"#D9CDB7",roughness:0.95)
         root.addChildNode(BuildingFootprint(rings:[ring,Array(pool.reversed())]).deck(at:podiumTop-0.45,thickness:0.45,material:paving,name:"johariRearTerraceAroundPool"))
-        let outer = BuildingContour.rounded(copingOuter,tangentDistance:0.5,segments:6)
+        let outer = BuildingContour.rounded(copingOuter,tangentDistance:0.5,segments:3)
         root.addChildNode(BuildingFootprint(rings:[outer,Array(pool.reversed())]).deck(at:podiumTop,thickness:0.20,material:P.plaster,name:"johariPoolCoping"))
         let water = BuildingSurfaces.make("landmark.poolWater",color:"#3CC4C0",roughness:0.25)
         root.addChildNode(BuildingFootprint(rings:[pool]).deck(at:podiumTop-0.18,thickness:0.035,material:water,name:"johariRooftopPoolWater"))
@@ -204,7 +203,7 @@ enum JohariRotanaGeometry {
         H.ribbon(&parapet,ring:ring,z:podiumTop,height:1.1,reach:0.15)
         for i in ring.indices {
             let a = ring[i], q = ring[(i+1)%ring.count]
-            if simd_length(q-a)>4 { LandmarkMesh.beam(&rails,from:P.p(a,podiumTop+1.25),to:P.p(q,podiumTop+1.25),radius:0.095,sides:6) }
+            if simd_length(q-a)>4 { LandmarkMesh.leanBeam(&rails,from:P.p(a,podiumTop+1.25),to:P.p(q,podiumTop+1.25),radius:0.095) }
         }
         // Loungers face the pool; the northeast part remains service/restaurant terrace, not another basin.
         for row in 0..<6 {

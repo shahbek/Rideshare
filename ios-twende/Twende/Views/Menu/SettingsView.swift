@@ -53,7 +53,7 @@ struct SettingsView: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(.top, 4)
                     .padding(.bottom, 8)
-                ForEach(Array(MapStyleOption.allCases.enumerated()), id: \.element.id) { index, style in
+                ForEach(Array(MapStyleOption.selectable.enumerated()), id: \.element.id) { index, style in
                     if index > 0 {
                         RowDivider(leading: 56)
                     }
