@@ -197,8 +197,18 @@ final class DioramaPieceBaker {
         try JSONEncoder().encode(current).write(to: Self.reportURL, options: .atomic)
         report = current
         let totalBytes = pieces.reduce(0) { $0 + $1.bytes }
-        message = "Baked \(pieces.count) pieces (\(ByteCountFormatter.string(fromByteCount: Int64(totalBytes), countStyle: .file))) in \(Int(bakeSeconds)) s. Uploading…"
-        try await publish(current)
+        let baked = "Baked \(pieces.count) pieces (\(ByteCountFormatter.string(fromByteCount: Int64(totalBytes), countStyle: .file))) in \(Int(bakeSeconds)) s."
+        message = baked + " Uploading…"
+        // The fresh pieces draw on this phone right away, upload or not.
+        DioramaPieceStreamer.shared.reloadLocalBake()
+        do {
+            try await publish(current)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            print("[Pieces] upload failed: \(error)")
+            message = baked + " Upload failed: \((error as? LocalizedError)?.errorDescription ?? "\(error)"). The baked scene draws on this phone now (zoom into the harbour); tap Upload to retry."
+        }
     }
 
     /// Uploads a baked set to the `harbour-z2` catalogue and marks the report published.
@@ -222,9 +232,8 @@ final class DioramaPieceBaker {
             try JSONEncoder().encode(current).write(to: Self.reportURL, options: .atomic)
             report = current
             message = "Published \(count) stylised scene pieces (\(ByteCountFormatter.string(fromByteCount: Int64(totalBytes), countStyle: .file))). They go into the app with the next build."
-            DioramaPieceStreamer.shared.refreshCatalog(force: true)
         } catch DioramaPrebakedScenery.Failure.rejected(let reason) where reason.contains("already_published") {
-            message = "A harbour piece set is already published. Replacing it needs the scenery publish key: enter it under Publisher tools, then tap Upload again. The baked pieces stay on this phone."
+            message = "A stylised harbour set is already published. Replacing it needs the scenery publish key: enter it under Publisher tools, then tap Upload again. The baked pieces stay on this phone and draw here."
         } catch DioramaPrebakedScenery.Failure.rejected(let reason) where reason.contains("seed_in_progress") {
             message = "Another phone is uploading to the harbour piece set right now. Wait 3 minutes, then tap Upload again; nothing needs rebaking."
         } catch DioramaPrebakedScenery.Failure.rejected(let reason) where reason.contains("seed_expired") || reason.contains("stale_or_invalid") {

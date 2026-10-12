@@ -41,8 +41,9 @@ function seedDirectoryAllowed(region: string, d: string): boolean {
   const tiles = SEED_TILES[region];
   if (!tiles) return false;
   if (region === "harbour-z2") {
-    // piece-<z>-<x>-<y>-<c|m|f>-<col>-<row>: one coarse, four medium and up to 100 fine pieces per tile.
-    return tiles.some((t) => new RegExp(`^piece-${t}-[cmf]-[0-9]{1,2}-[0-9]{1,2}$`).test(d));
+    // piece-<z>-<x>-<y>-<c|m|f|s>-<col>-<row>: one coarse, four medium, up to 100 fine pieces, or one
+    // whole-tile stylised scene piece per tile.
+    return tiles.some((t) => new RegExp(`^piece-${t}-[cmfs]-[0-9]{1,2}-[0-9]{1,2}$`).test(d));
   }
   if (!(d.startsWith("v") || d.startsWith("visual-") || d.startsWith("lod-") || d.startsWith("zpk-v"))) return false;
   return tiles.some((t) => d.includes(`-${t}-`) || d.endsWith(`-${t}`));

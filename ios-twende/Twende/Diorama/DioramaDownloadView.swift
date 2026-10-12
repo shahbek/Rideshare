@@ -140,13 +140,15 @@ struct DioramaDownloadView: View {
         let baker = DioramaPieceBaker.shared
         let pieces = DioramaPieceStreamer.shared
         VStack(alignment: .leading, spacing: 6) {
-            Text(pieces.isBundled ? "Finished harbour · built into the app" : "Streaming pieces · nothing built while viewing").font(TwendeFont.label)
-            Text(pieces.isBundled
+            Text(pieces.isLocalBake ? "Finished harbour · baked on this phone" : pieces.isBundled ? "Finished harbour · built into the app" : "Streaming pieces · nothing built while viewing").font(TwendeFont.label)
+            Text(pieces.isLocalBake
+                 ? "This phone draws the scene it baked: zoom into the harbour past 15.5 to look at it. Upload it so it can go into the next app update."
+                 : pieces.isBundled
                  ? "The harbour ships inside the app and is read from the phone, never downloaded. Bake and upload a new version here; it goes into the next app update."
                  : "Bake once on this phone, upload, and every phone streams only the pieces under its camera.")
                 .font(TwendeFont.caption).foregroundStyle(TwendeColor.inkSecondary)
             if pieces.isPublished {
-                Text("\(pieces.isBundled ? "In this app" : "Published set") · revision \(pieces.catalogRevision) · \(pieces.catalogFiles) pieces · \(mb(pieces.catalogBytes))")
+                Text("\(pieces.isLocalBake ? "Drawing this phone's bake" : pieces.isBundled ? "In this app" : "Published set") · revision \(pieces.catalogRevision) · \(pieces.catalogFiles) pieces · \(mb(pieces.catalogBytes))")
                     .font(TwendeFont.caption.weight(.semibold)).monospacedDigit()
                 ForEach(pieces.catalogSummary, id: \.ring) { entry in
                     Text("\(entry.count) \(entry.ring.displayName) · \(mb(entry.bytes)) total · largest \(mb(entry.largest))")

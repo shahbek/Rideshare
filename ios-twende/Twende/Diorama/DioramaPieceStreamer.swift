@@ -35,8 +35,10 @@ final class DioramaPieceStreamer {
     // MARK: Catalogue
 
     private(set) var catalogRevision: Int = 0
-    /// The finished set is inside the app bundle; no network is used for the harbour.
+    /// The finished set is inside the app bundle (or baked on this phone); no network is used for the harbour.
     private(set) var isBundled: Bool = false
+    /// The set being drawn is the one this phone baked (Settings → Bake), not the app's bundled set.
+    private(set) var isLocalBake: Bool = false
     private(set) var isPublished: Bool = false
     private(set) var catalogChecked: Bool = false
     private(set) var catalogFiles: Int = 0
@@ -126,6 +128,37 @@ final class DioramaPieceStreamer {
         return (catalog, files)
     }
 
+    /// Marker digest of pieces baked on this phone (never uploaded under this name).
+    nonisolated private static let localBakeDigest = "local-bake"
+
+    /// The set this phone baked itself (`DioramaPieceBaker`), so a fresh bake can be looked at
+    /// before it is uploaded or built into the app. Only pieces whose file is really present with
+    /// the measured size count.
+    nonisolated private static func loadLocalBake() -> (catalog: DioramaPrebakedScenery.Catalog, files: [ID: DioramaPrebakedScenery.File])? {
+        let root = DioramaPieceBaker.root
+        guard let data = try? Data(contentsOf: root.appendingPathComponent("bake.json")),
+              let report = try? JSONDecoder().decode(DioramaPieceBaker.Report.self, from: data) else { return nil }
+        var files: [ID: DioramaPrebakedScenery.File] = [:]
+        for piece in report.pieces {
+            let file = DioramaPrebakedScenery.File(d: piece.directory, f: DioramaStreamPiece.fileName, b: piece.bytes, s: localBakeDigest)
+            guard let id = ID(directory: piece.directory), DioramaRegion.harbour.tiles.contains(id.tile), pieceURL(file) != nil else { continue }
+            files[id] = file
+        }
+        guard !files.isEmpty else { return nil }
+        let catalog = DioramaPrebakedScenery.Catalog(revision: report.revision, publishedAt: report.bakedAt, files: Array(files.values))
+        return (catalog, files)
+    }
+
+    /// The piece file on this phone: the local bake, or inside the app; only when its size matches.
+    nonisolated private static func pieceURL(_ file: DioramaPrebakedScenery.File?) -> URL? {
+        guard let file else { return nil }
+        if file.s == localBakeDigest {
+            let url = DioramaPieceBaker.root.appendingPathComponent(file.d).appendingPathComponent(file.f)
+            return (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) == file.b ? url : nil
+        }
+        return bundledURL(file)
+    }
+
     /// The piece file inside the app, only when its size matches the manifest.
     nonisolated private static func bundledURL(_ file: DioramaPrebakedScenery.File?) -> URL? {
         guard let file, let url = Bundle.main.url(forResource: file.d, withExtension: "bin")
@@ -145,7 +178,7 @@ final class DioramaPieceStreamer {
         warmTask = Task.detached(priority: .utility) { [weak self] in
             var decoded: [(ID, DioramaStreamPiece.Decoded)] = []
             for (id, file) in jobs {
-                guard !Task.isCancelled, let url = Self.bundledURL(file),
+                guard !Task.isCancelled, let url = Self.pieceURL(file),
                       let data = try? Data(contentsOf: url, options: .mappedIfSafe),
                       let piece = try? DioramaStreamPiece.decode(data, expected: id, device: device) else { continue }
                 decoded.append((id, piece))
@@ -155,7 +188,7 @@ final class DioramaPieceStreamer {
                 guard let self else { return }
                 for (id, piece) in ready where self.residents[id] == nil { self.warm[id] = piece }
                 self.warmTask = nil
-                print("[Pieces] warmed \(ready.count) whole-tile pieces from the app bundle in \(String(format: "%.2f", Date().timeIntervalSince(started))) s (no network)")
+                print("[Pieces] warmed \(ready.count) whole-tile pieces from \(self.isLocalBake ? "this phone's bake" : "the app bundle") in \(String(format: "%.2f", Date().timeIntervalSince(started))) s (no network)")
                 self.ensureWorkers()
             }
         }
@@ -195,15 +228,19 @@ final class DioramaPieceStreamer {
 
     func refreshCatalog(force: Bool = false) {
         if isBundled { return }
-        if !catalogChecked, let bundled = Self.loadBundledSet() {
-            available = bundled.files
-            catalogRevision = bundled.catalog.revision
-            catalogFiles = bundled.files.count
-            catalogBytes = bundled.files.values.reduce(Int64(0)) { $0 + Int64($1.b) }
-            isPublished = true; isBundled = true; catalogChecked = true; catalogFetched = Date()
-            print("[Pieces] bundled set rev \(catalogRevision): \(catalogFiles) pieces, \(catalogBytes) bytes, no network needed")
-            onChanged?()
-            return
+        if !catalogChecked {
+            let local = Self.loadLocalBake()
+            if let set = local ?? Self.loadBundledSet() {
+                available = set.files
+                catalogRevision = set.catalog.revision
+                catalogFiles = set.files.count
+                catalogBytes = set.files.values.reduce(Int64(0)) { $0 + Int64($1.b) }
+                isLocalBake = local != nil
+                isPublished = true; isBundled = true; catalogChecked = true; catalogFetched = Date()
+                print("[Pieces] \(isLocalBake ? "this phone's baked set" : "bundled set rev \(catalogRevision)"): \(catalogFiles) pieces, \(catalogBytes) bytes, no network needed")
+                onChanged?()
+                return
+            }
         }
         if !force, catalogChecked, Date().timeIntervalSince(catalogFetched) < 600 { return }
         guard catalogTask == nil else { return }
@@ -390,6 +427,21 @@ final class DioramaPieceStreamer {
         cacheBytes = 0
     }
 
+    /// After a bake on this phone (or when its pieces are deleted): drop everything resident, forget
+    /// the catalogue and read the set again, so the fresh pieces draw on the next look at the harbour.
+    func reloadLocalBake() {
+        clear()
+        warmTask?.cancel(); warmTask = nil
+        warm.removeAll()
+        failed.removeAll(); failureReasons.removeAll()
+        available = [:]
+        catalogChecked = false; isBundled = false; isLocalBake = false; isPublished = false
+        catalogRevision = 0; catalogFiles = 0; catalogBytes = 0
+        firstDrawLogged = false; firstRequestAt = nil
+        warmUp()
+        onChanged?()
+    }
+
     // MARK: Reconciliation
 
     private func hostID(_ id: ID) -> String { "zuri-piece-\(id.directory)" }
@@ -535,10 +587,11 @@ final class DioramaPieceStreamer {
         }
     }
 
-    /// App bundle first, then the disk cache; otherwise one verified download that is then cached.
+    /// This phone's bake or the app bundle first, then the disk cache; otherwise one verified
+    /// download that is then cached.
     private func fetch(_ id: ID, file: DioramaPrebakedScenery.File) async throws -> (Data, String) {
-        if let bundled = Self.bundledURL(file), let data = try? Data(contentsOf: bundled, options: .mappedIfSafe), data.count == file.b {
-            return (data, "from app bundle")
+        if let local = Self.pieceURL(file), let data = try? Data(contentsOf: local, options: .mappedIfSafe), data.count == file.b {
+            return (data, file.s == Self.localBakeDigest ? "from this phone's bake" : "from app bundle")
         }
         let url = Self.cacheURL(file)
         if let data = try? Data(contentsOf: url, options: .mappedIfSafe), data.count == file.b {
@@ -601,7 +654,7 @@ final class DioramaPieceStreamer {
     }
     /// Readable without the network: inside the app or in the disk cache.
     nonisolated private static func isLocal(_ file: DioramaPrebakedScenery.File?) -> Bool {
-        bundledURL(file) != nil || isCached(file)
+        pieceURL(file) != nil || isCached(file)
     }
     nonisolated private static func measureCache() -> Int64 {
         let entries = (try? FileManager.default.contentsOfDirectory(at: cacheRoot, includingPropertiesForKeys: [.fileSizeKey])) ?? []

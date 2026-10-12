@@ -111,11 +111,23 @@ export class SceneryCatalog extends DurableObject {
     this.ctx.storage.sql.exec("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)", key, value);
   }
 
+  /** A live catalogue locks keyless uploads, except that a set of the superseded ring format
+   *  (coarse/medium/fine pieces, no whole-tile `-s-` scene piece) may be replaced once by a scene
+   *  set; once a scene set is live the catalogue is locked for good. */
+  private seedLocked(): boolean {
+    const live = this.meta("live");
+    if (live === 0) return false;
+    const rows = this.ctx.storage.sql.exec<{ dir: string }>("SELECT dir FROM files WHERE generation = ?", live).toArray();
+    const pieces = rows.filter((r) => r.dir.startsWith("piece-"));
+    if (pieces.length === 0) return true;
+    return pieces.some((r) => /-s-[0-9]+-[0-9]+$/.test(r.dir));
+  }
+
   /** Seed uploads: one keyless contributor may fill an empty catalogue, holding a 45-minute token. */
   private seedError(url: URL, g: number): Response | null {
     const token = url.searchParams.get("seed");
     if (token === null) return null;
-    if (this.meta("live") !== 0) return Response.json({ error: "already_published" }, { status: 409 });
+    if (this.seedLocked()) return Response.json({ error: "already_published" }, { status: 409 });
     if (token !== this.metaText("seedToken") || Date.now() > this.meta("seedExpiry") || g !== this.meta("upload")) {
       return Response.json({ error: "seed_expired" }, { status: 409 });
     }
@@ -151,7 +163,7 @@ export class SceneryCatalog extends DurableObject {
       const seeding = url.searchParams.get("seed") === "new";
       let token = "";
       if (seeding) {
-        if (this.meta("live") !== 0) return Response.json({ error: "already_published" }, { status: 409 });
+        if (this.seedLocked()) return Response.json({ error: "already_published" }, { status: 409 });
         const idle = Date.now() - Math.max(this.meta("seedActivity"), this.meta("seedStarted"));
         if (this.metaText("seedToken") && Date.now() < this.meta("seedExpiry") && idle < 3 * 60 * 1000) {
           return Response.json({ error: "seed_in_progress" }, { status: 409 });
@@ -208,7 +220,7 @@ export class SceneryCatalog extends DurableObject {
       const body = await request.json<{ g: number; count: number }>();
       if (url.searchParams.has("seed")) {
         const token = url.searchParams.get("seed");
-        if (this.meta("live") !== 0 || token !== this.metaText("seedToken") || Date.now() > this.meta("seedExpiry")) {
+        if (this.seedLocked() || token !== this.metaText("seedToken") || Date.now() > this.meta("seedExpiry")) {
           return Response.json({ error: "seed_expired" }, { status: 409 });
         }
       }
