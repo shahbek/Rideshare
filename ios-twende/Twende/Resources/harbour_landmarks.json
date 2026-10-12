@@ -1,0 +1,39 @@
+{
+  "attribution": "© OpenStreetMap contributors, ODbL",
+  "verified": "2026-10-09",
+  "geometrySource": "https://api.openstreetmap.org/api/0.6/map.json?bbox=39.282,-6.825,39.294,-6.812",
+  "notes": "Procedural architecture, not imported generated meshes. Johari's harbour-facing tall block is matched to 635183901 and inland pool podium to 688369868 by supplied rear aerial, completed hotel photos and inspected satellite imagery; conflicting OSM names/level allocations are not used as architectural authority. Site envelope follows both mapped outlines with the narrow joining gap filled as photo-led connected structure. Pool basin dimensions/height, hidden elevations and TPA upper setback are photo estimates, not survey data.",
+  "sites": [
+    {
+      "id": "harbour-mnf", "name": "Johari Rotana / MNF Square", "kind": "johari-rotana", "osmWay": 635183901,
+      "bearing": 136, "height": 145,
+      "heightEvidence": "CTBUH architectural height 145m / 31 floors / completed 2019. Podium roof 25m and detail levels are photo-estimated; OSM assigns conflicting 9/28 levels to separate outlines.",
+      "reference": "https://www.skyscrapercenter.com/building/mwalimu-nyerere-foundation-square/36545",
+      "photo": "https://r2-pub.rork.com/attachments/mzyavtfcaz7vpjiz8vcsm.jpeg",
+      "rearPoolPhoto": "https://r2-pub.rork.com/attachments/be1xobx9tbqv2kbwf2pfv.jpeg",
+      "architectureEvidence": "Latest completed aerial supersedes concept proportions/finishes: connected orange central body and outer piers, cream facade grids, grey-green glazing, stepped upper side fins, shoulder crossbar and pale paired roofs with slender lattice spires. Vertical divisions/hidden elevations remain photo estimates.",
+      "orientationEvidence": "Mapped long facade axis approximately46 degrees; harbour-facing normal136 degrees, rear inland316 degrees. Satellite tiles19/272099/319360 and19/272099/319359 corroborate paired pyramidal crowns and southwest pool on inland podium. Entrance bearing not surveyed.",
+      "ring": [[39.2867964,-6.8201222],[39.2869363,-6.8202682],[39.2871393,-6.8200764],[39.2871573,-6.8200952],[39.2872215,-6.8200346],[39.2872021,-6.8200144],[39.2874089,-6.8198191],[39.2872704,-6.8196745],[39.2872370,-6.8196344],[39.2870780,-6.8194655],[39.2866252,-6.8198541],[39.2866143,-6.8198961],[39.2866149,-6.8199153],[39.2866170,-6.8199361],[39.2866229,-6.8199529],[39.2866296,-6.8199695],[39.2866406,-6.8199844],[39.2866643,-6.8200127],[39.2866924,-6.8200379],[39.2867228,-6.8200642],[39.2867616,-6.8200781],[39.2867938,-6.8200812],[39.2868298,-6.8200646],[39.2867964,-6.8201222]]
+    },
+    {
+      "id": "harbour-tpa", "name": "TPA / Bandari Tower", "kind": "bandari-tower", "osmWay": 368888931,
+      "bearing": 114.4951591, "height": 162,
+      "heightEvidence": "Estim main contractor reports162m and40 floors; other database157m and OSM34 levels differ. Use162m architectural envelope, reference-led storey rhythms, not surveyed elevations.",
+      "reference": "https://estimconstruction.co.tz/portfolio/tpa/",
+      "photo": "https://r2-pub.rork.com/attachments/6skeyu6jsr96oi1gv6bj3.jpg",
+      "architectureEvidence": "Latest close reference: open squared ridge and asymmetric descending arch, broad gold spine with adjacent narrow round stair, tall concave white sail cheeks joined to low barrel podium roof, tapered lower facade ribbons, broad cream structural base beams/paired frames and low gold front fascia. Glazing is simplified to wider pigment bays/17 illustrative tower bands and flat seams. Hidden/vertical dimensions are estimates, not survey data.",
+      "orientationEvidence": "OSM long-axis24.495degrees; broad harbour elevation normal114.495degrees. Reference and contractor photos identify TPA/Bandari, not TRA. Upper mass setbacks/crown, sail and roundels follow latest supplied close reference6skeyu6jsr96oi1gv6bj3.jpg; unseen rear illustrative.",
+      "ring": [[39.286347,-6.8219114],[39.2863892,-6.8218324],[39.2864804,-6.8217032],[39.2865582,-6.8216300],[39.2866414,-6.8215581],[39.2866843,-6.8215234],[39.2867239,-6.8215188],[39.2867346,-6.8215274],[39.2867547,-6.8215341],[39.2867674,-6.8215507],[39.2867715,-6.8215787],[39.2867641,-6.8216386],[39.2867534,-6.8217585],[39.2867359,-6.8218444],[39.2866478,-6.8220459],[39.2863900,-6.8226069],[39.2863591,-6.8225879],[39.2863409,-6.8226227],[39.2863230,-6.8226478],[39.2862958,-6.8226696],[39.2862752,-6.8226809],[39.2862646,-6.8226806],[39.2862307,-6.8226938],[39.2861992,-6.8226959],[39.2861286,-6.8226604],[39.2860864,-6.8225774],[39.2860904,-6.8225403],[39.2860636,-6.8225290],[39.286347,-6.8219114]]
+    }
+  ],
+  "parts": [
+    {
+      "id": "johari-tall-block", "osmWay": 635183901, "role": "photo-matched tall twin-crown block; ignore conflicting OSM nine-level assignment",
+      "ring": [[39.2867964,-6.8201222],[39.2869363,-6.8202682],[39.2871393,-6.8200764],[39.2871573,-6.8200952],[39.2872215,-6.8200346],[39.2872021,-6.8200144],[39.2874089,-6.8198191],[39.2872704,-6.8196745],[39.2867964,-6.8201222]]
+    },
+    {
+      "id": "johari-pool-podium", "osmWay": 688369868, "role": "photo-matched inland podium and southwest rooftop pool; ignore conflicting OSM28-level assignment",
+      "ring": [[39.2868298,-6.8200646],[39.2867938,-6.8200812],[39.2867616,-6.8200781],[39.2867228,-6.8200642],[39.2866924,-6.8200379],[39.2866643,-6.8200127],[39.2866406,-6.8199844],[39.2866296,-6.8199695],[39.2866229,-6.8199529],[39.2866170,-6.8199361],[39.2866149,-6.8199153],[39.2866143,-6.8198961],[39.2866252,-6.8198541],[39.2870780,-6.8194655],[39.2872370,-6.8196344],[39.2868298,-6.8200646]]
+    }
+  ]
+}

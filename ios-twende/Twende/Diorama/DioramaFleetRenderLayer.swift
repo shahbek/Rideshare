@@ -241,7 +241,10 @@ nonisolated final class DioramaFleetRenderLayer: NSObject, CustomLayerHost {
                 projectedShadows[pose.id] = DioramaProjectedShadow(device: device, color: formats.x, depth: formats.y, size: 256)
             }
             let receiver: [SIMD4<Float>]
-            if let cached = receivers[pose.id], cached.model == model, cached.host == hostID, cached.bounds == shadowBounds, cached.surfaceRevision == surfaceRevision {
+            // 25 ground queries per vehicle per motion tick; reuse them until the vehicle has moved
+            // 15 cm or turned/rescaled visibly. The cached points are model-local, so they stay attached.
+            if let cached = receivers[pose.id], cached.host == hostID, cached.surfaceRevision == surfaceRevision,
+               simd_distance(cached.bounds, shadowBounds) < 0.05, Self.receiverReusable(cached.model, model) {
                 receiver = cached.points
             } else {
                 let geographic = DioramaProjection(origin: origin), inverse = simd_inverse(model)
@@ -300,6 +303,17 @@ nonisolated final class DioramaFleetRenderLayer: NSObject, CustomLayerHost {
             encoder.drawIndexedPrimitives(type: .triangle, indexCount: geometry.count, indexType: .uint32, indexBuffer: geometry.indices, indexBufferOffset: 0)
         }
         encoder.endEncoding()
+    }
+
+    private static func receiverReusable(_ a: simd_float4x4, _ b: simd_float4x4) -> Bool {
+        let ta = SIMD3(a[3].x, a[3].y, a[3].z), tb = SIMD3(b[3].x, b[3].y, b[3].z)
+        guard simd_distance(ta, tb) < 0.15 else { return false }
+        for c in 0..<3 {
+            let x = SIMD3(a[c].x, a[c].y, a[c].z), y = SIMD3(b[c].x, b[c].y, b[c].z)
+            let lx = simd_length(x), ly = simd_length(y)
+            guard lx > 0, ly > 0, abs(lx - ly) < lx * 0.02, simd_dot(x / lx, y / ly) > 0.9998 else { return false }
+        }
+        return true
     }
 
     private static func readableScale(matrix: simd_float4x4, geometry: Geometry,

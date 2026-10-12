@@ -182,8 +182,10 @@ enum AirtelBuildingGeometry {
         if let rearEdge { addRoofSign(to: root, ring: rooftop, edge: rearEdge, name: "airtelRearSign") }
         let services = addRoofServices(to: root, ring: rooftop, centre: centre, along: along, inward: inward)
         let roofPolygon = rooftop.map { DV2($0.x, $0.y) }
-        let mastSites = [centre + along * 4 + inward * 1.5, centre + along * 9 + inward * 1.5,
-                         centre + along * 1 + inward * 4, centre - along * 3 + inward * 4]
+        let nearMastBase: SIMD2<Double> = centre + inward * 1.5
+        let farMastBase: SIMD2<Double> = centre + inward * 4.0
+        let mastSites: [SIMD2<Double>] = [nearMastBase + along * 4.0, nearMastBase + along * 9.0,
+                                        farMastBase + along, farMastBase - along * 3.0]
         let mastSite = mastSites.first { site in
             let feet = [site + SIMD2(-0.65, -0.4), site + SIMD2(0.65, -0.4), site + SIMD2(0, 0.7)]
             return feet.allSatisfy { foot in

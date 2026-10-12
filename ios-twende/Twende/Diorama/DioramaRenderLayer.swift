@@ -119,13 +119,47 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost, @unchecke
     private let groundRect: DioramaRect
     private let materialFrame: SIMD4<Float>
     private var groundTexture: MTLTexture?
+    private var airportGroundDetail: DioramaResidentTile?
+    private var airportGroundDetailRect: DioramaRect?
+    private var airportGroundPaint: DioramaResidentTile?
+    private let hasAnalyticAirportGround: Bool
+    /// Compact tile: vector hard finishes over a low-resolution natural raster.
+    private let hasVectorFinishes: Bool
+
+    var storedMeshBytes: Int {
+        if let resident { return resident.gpuBytes + resident.cpuBytes }
+        return vertices.count * MemoryLayout<BuildingRenderVertex>.stride * 2 + indices.count * 4
+            + instances.count * MemoryLayout<DioramaInstanceData>.stride * 2
+    }
+
+    var usesAnalyticAirportGround: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return airportGroundPaint != nil || hasAnalyticAirportGround
+    }
+
+    /// Checked surface ownership, sharing the existing paint fragment pass and buffer layout.
+    func setAirportGroundPaint(_ paint: DioramaResidentTile?) {
+        lock.lock(); airportGroundPaint = paint; drawRevision &+= 1; selectionTransform = nil; lock.unlock()
+    }
+
+    /// One checked HD paint page replaces pigment in the existing ground fragment; no overlay surface/pass.
+    func setAirportGroundDetail(_ page: DioramaResidentTile?, rect: DioramaRect?) {
+        lock.lock()
+        airportGroundDetail = page; airportGroundDetailRect = rect
+        drawRevision &+= 1; selectionTransform = nil
+        lock.unlock()
+    }
     private var surfaceTexture: MTLTexture?
+    /// Shared tiling roof/wall material array (texture 7).
+    private var buildingMaterials: MTLTexture?
     private var paintBuffer: MTLBuffer?
     private var paintTableBuffer: MTLBuffer?
     private var paintIndexBuffer: MTLBuffer?
     private var reflectionPass: DioramaReflection?
     /// Whether the water animates (false when Reduce Motion is on: waves then freeze mid-roll).
     private let contextOnly: Bool
+    /// Stylised bake: lighting lives in the vertex colours and ground image; the fragment only samples.
+    private let stylised: Bool
     private let animates: Bool
     private var waterMotionEnabled: Bool = true
     private var waterPhase: Float = 1.7
@@ -134,6 +168,7 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost, @unchecke
     private var loggedCameraFallback: Bool = false
     private var vertexBuffer: MTLBuffer?
     private var indexBuffer: MTLBuffer?
+    private var geometryChunks: DioramaGeometryChunks?
     private var lightBuffer: MTLBuffer?
     private var lightTableBuffer: MTLBuffer?
     private var lightIndexBuffer: MTLBuffer?
@@ -149,6 +184,13 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost, @unchecke
     private var depthState: MTLDepthStencilState?
     private var noWriteDepthState: MTLDepthStencilState?
     private var blankReflection: MTLTexture?
+    /// Pre-baked low-frequency ground grade fields (broad moisture, lawn patches, asphalt weathering)
+    /// over this renderer's ground rectangle. Fragments whose pixel covers more than one baked texel
+    /// sample it; closer fragments evaluate the same fields live, so close-up ground is unchanged.
+    private var gradeField: MTLTexture?
+    private var gradeBakePipeline: MTLRenderPipelineState?
+    private var gradeBaked: Bool = false
+    nonisolated static func gradeFieldSize(context: Bool) -> Int { context ? 384 : 768 }
     private var shadowMap: DioramaShadowMap?
     private var postProcess: DioramaPostProcess?
     private let postSettings: (ao: Float, aoRadius: Float, bloom: Float, grade: Float, haze: Float)
@@ -270,6 +312,13 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost, @unchecke
     private var selectedRangeDraws: [Range] = []
     private var selectedInstanceDraws: [DioramaDrawPlan.Instance] = []
     private var selectedOpaqueRanges: [Range] = []
+    private var selectedWaterRanges: [Range] = []
+    private var selectedGlassRanges: [Range] = []
+    private var selectedGlowRanges: [Range] = []
+    private var selectedOpaqueGroups: [DioramaDrawPlan.Instance] = []
+    private var selectedGlowGroups: [DioramaDrawPlan.Instance] = []
+    private var selectedFocalPixels: Float?
+    private var selectedDrawableSize: SIMD2<Int>?
     private var postOpaqueRanges: [Range] = []
     private var postEmissionRanges: [Range] = []
     private var postOpaqueGroups: [DioramaDrawPlan.Instance] = []
@@ -277,6 +326,12 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost, @unchecke
     private var postRangeDraws: [Range] = []
     private var postInstanceDraws: [DioramaDrawPlan.Instance] = []
     private var reflectionSignature: String = ""
+    /// Camera at which the cached AO/bloom outputs were rendered, and the plan revision they used.
+    private var effectTransform: simd_double4x4?
+    /// Heights the last culling plan's drift is measured on; the camera transform of the previous frame.
+    private var planPlanes: SIMD2<Double>?
+    private var lastFrameTransform: simd_double4x4?
+    private var effectRevision: UInt64 = 0
 
     private func publishLabels(_ ids: Set<UInt64>) {
         lock.lock()
@@ -296,26 +351,28 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost, @unchecke
     }
 
     convenience init(origin: CLLocationCoordinate2D, vertices: [BuildingRenderVertex], indices: [UInt32], ranges: [Range], groups: [DioramaInstanceGroup] = [], instances: [DioramaInstanceData] = [], lightGrid: DioramaLightGrid, waterHeight: Double, groundImage: DioramaGroundImage?, groundRect: DioramaRect, visible: Set<DioramaCategory>, timeOfDay: DioramaTimeOfDay, animates: Bool, config: DioramaConfig = .slipway, labels: [DioramaBuildingLabel] = [], displayScale: Float = 3, contextOnly: Bool = false, materialsPrepared: Bool = false,
-         materialCounts: SIMD2<Int> = .zero, preparedPoolBounds: Range? = nil) {
+         materialCounts: SIMD2<Int> = .zero, preparedPoolBounds: Range? = nil, isLandmarkModel: Bool = false) {
         self.init(origin: origin, vertices: vertices, indices: indices, ranges: ranges, groups: groups, instances: instances,
             lightGrid: lightGrid, waterHeight: waterHeight, groundImage: groundImage, groundRect: groundRect, visible: visible,
             timeOfDay: timeOfDay, animates: animates, config: config, labels: labels, displayScale: displayScale,
             contextOnly: contextOnly, materialsPrepared: materialsPrepared, materialCounts: materialCounts,
-            preparedPoolBounds: preparedPoolBounds, resident: nil)
+            preparedPoolBounds: preparedPoolBounds, resident: nil, isLandmarkModel: isLandmarkModel)
     }
 
     /// Saved tile already decoded into shared Metal storage (ownership/material tags applied).
     convenience init(resident tile: DioramaResidentTile, groundRect: DioramaRect, visible: Set<DioramaCategory>, timeOfDay: DioramaTimeOfDay,
-                     config: DioramaConfig, labels: [DioramaBuildingLabel], displayScale: Float, contextOnly: Bool) {
-        self.init(origin: tile.tile.centre, vertices: [], indices: [], ranges: tile.ranges, groups: tile.groups, instances: [],
+                     config: DioramaConfig, labels: [DioramaBuildingLabel], displayScale: Float, contextOnly: Bool, origin: CLLocationCoordinate2D? = nil,
+                     stylised: Bool = false) {
+        self.init(origin: origin ?? tile.tile.centre, vertices: [], indices: [], ranges: tile.ranges, groups: tile.groups, instances: [],
             lightGrid: tile.lightGrid, waterHeight: tile.waterHeight, groundImage: nil, groundRect: groundRect, visible: visible,
             timeOfDay: timeOfDay, animates: true, config: config, labels: labels, displayScale: displayScale,
             contextOnly: contextOnly, materialsPrepared: true, materialCounts: tile.materialCounts,
-            preparedPoolBounds: tile.poolBounds, resident: tile)
+            preparedPoolBounds: tile.poolBounds, resident: tile, isLandmarkModel: false, stylised: stylised)
     }
 
     private init(origin: CLLocationCoordinate2D, vertices: [BuildingRenderVertex], indices: [UInt32], ranges: [Range], groups: [DioramaInstanceGroup], instances: [DioramaInstanceData], lightGrid: DioramaLightGrid, waterHeight: Double, groundImage: DioramaGroundImage?, groundRect: DioramaRect, visible: Set<DioramaCategory>, timeOfDay: DioramaTimeOfDay, animates: Bool, config: DioramaConfig, labels: [DioramaBuildingLabel], displayScale: Float, contextOnly: Bool, materialsPrepared: Bool,
-         materialCounts: SIMD2<Int>, preparedPoolBounds: Range?, resident: DioramaResidentTile?) {
+         materialCounts: SIMD2<Int>, preparedPoolBounds: Range?, resident: DioramaResidentTile?, isLandmarkModel: Bool, stylised: Bool = false) {
+        self.stylised = stylised
         var low = SIMD3<Float>(repeating: .greatestFiniteMagnitude)
         var high = SIMD3<Float>(repeating: -.greatestFiniteMagnitude)
         for range in ranges where range.minimum.x > -.greatestFiniteMagnitude && range.minimum.x.isFinite && range.maximum.x.isFinite {
@@ -334,7 +391,9 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost, @unchecke
         self.displayScale = displayScale
         self.vertices = vertices
         self.resident = resident
-        let ownership = resident != nil ? (indices: indices, ranges: ranges, groups: groups)
+        // Ownership hides ordinary scenery shells beneath a designed landmark. Applying it to the landmark's
+        // own model made every bespoke POI suppress itself once its host became present.
+        let ownership = resident != nil || isLandmarkModel ? (indices: indices, ranges: ranges, groups: groups)
             : DioramaLandmarkOwnership.partition(vertices: vertices, indices: indices, ranges: ranges, groups: groups, origin: origin)
         self.indices = ownership.indices
         self.ranges = ownership.ranges
@@ -353,6 +412,15 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost, @unchecke
         poolBounds = materialsPrepared ? preparedPoolBounds
             : (poolLow.x <= poolHigh.x ? Range(category: .water, start: 0, count: 0, minimum: poolLow, maximum: poolHigh) : nil)
         self.groundImage = groundImage
+        if let resident {
+            let count = resident.paintBuffer.length / MemoryLayout<DioramaPaintTriangle>.stride
+            let values = resident.paintBuffer.contents().assumingMemoryBound(to: DioramaPaintTriangle.self)
+            hasAnalyticAirportGround = (0..<count).contains { values[$0].color.w < 0 && values[$0].color.w > DioramaGroundPainter.hybridThreshold }
+            hasVectorFinishes = (0..<count).contains { values[$0].color.w < DioramaGroundPainter.hybridThreshold }
+        } else {
+            hasAnalyticAirportGround = groundImage?.paint.triangles.contains { $0.color.w < 0 && $0.color.w > DioramaGroundPainter.hybridThreshold } ?? false
+            hasVectorFinishes = groundImage?.paint.triangles.contains { $0.color.w < DioramaGroundPainter.hybridThreshold } ?? false
+        }
         self.groundRect = groundRect
         let referenceLatitude = -6.75
         let reference = DioramaProjection(origin: CLLocationCoordinate2D(latitude: referenceLatitude, longitude: 39.28))
@@ -413,6 +481,7 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost, @unchecke
         lock.lock()
         rendererReady = false; completedReveal = nil; completedLifecycleReveal = nil; completedUnion = nil
         lock.unlock()
+        selectionTransform = nil; selectionVisible = nil
         let uploadStarted = CACurrentMediaTime()
         let hasGeometry = resident.map { $0.vertexCount > 0 && $0.indexCount > 0 && $0.device === metalDevice }
             ?? (!vertices.isEmpty && !indices.isEmpty)
@@ -420,7 +489,7 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost, @unchecke
               let library = DioramaShaderSource.library(for: metalDevice),
               let vertex = library.makeFunction(name: "dioramaVertex"),
               let instancedVertex = library.makeFunction(name: "dioramaInstancedVertex"),
-              let fragment = library.makeFunction(name: "dioramaFragment"),
+              let fragment = library.makeFunction(name: stylised ? "dioramaStylisedFragment" : "dioramaFragment"),
               let colorFormat = MTLPixelFormat(rawValue: colorPixelFormat),
               let depthFormat = MTLPixelFormat(rawValue: depthStencilPixelFormat) else {
             setDiagnostic(resident.map { $0.device !== metalDevice } == true ? "failed: scenery decoded on a different Metal device" : "missing geometry or shader resources")
@@ -461,6 +530,22 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost, @unchecke
             }
             depthState = metalDevice.makeDepthStencilState(descriptor: depth)
             noWriteDepthState = metalDevice.makeDepthStencilState(descriptor: noWrite)
+            // Optional: a failure here only means every ground fragment keeps computing its grade live.
+            // Stylised scenes never read the grade field: nothing is computed per ground fragment.
+            if !stylised, let fullscreen = library.makeFunction(name: "dioramaFullscreenVertex"),
+               let bake = library.makeFunction(name: "dioramaGradeBakeFragment") {
+                let d = MTLRenderPipelineDescriptor()
+                d.label = "Diorama ground grade bake"
+                d.vertexFunction = fullscreen; d.fragmentFunction = bake
+                d.colorAttachments[0].pixelFormat = .rgba16Float
+                gradeBakePipeline = try? DioramaPipelineCache.shared.state(device: metalDevice, descriptor: d)
+                let size = Self.gradeFieldSize(context: contextOnly)
+                let t = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba16Float, width: size, height: size, mipmapped: false)
+                t.usage = [.renderTarget, .shaderRead]; t.storageMode = .private
+                gradeField = gradeBakePipeline == nil ? nil : metalDevice.makeTexture(descriptor: t)
+                gradeField?.label = "Diorama ground grade field"
+                gradeBaked = false
+            }
 
             func upload<T>(_ items: [T], fallback: T) -> MTLBuffer? {
                 // Metal rejects zero-length buffers, so always upload at least one slot.
@@ -470,7 +555,9 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost, @unchecke
                     return metalDevice.makeBuffer(bytes: address, length: data.count * MemoryLayout<T>.stride, options: .storageModeShared)
                 }
             }
+            geometryChunks = DioramaGeometryChunks(device: metalDevice, context: contextOnly)
             surfaceTexture = DioramaSurfaceTexture.texture(device: metalDevice)
+            buildingMaterials = DioramaBuildingMaterials.texture(device: metalDevice)
             lightBuffer = upload(lightGrid.lights, fallback: DioramaShaderLight(position: .zero, color: .zero))
             lightTableBuffer = upload(lightGrid.table, fallback: SIMD2<UInt32>(0, 0))
             lightIndexBuffer = upload(lightGrid.indices, fallback: UInt32(0))
@@ -564,7 +651,7 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost, @unchecke
     }
 
     func render(_ parameters: CustomLayerRenderParameters, mtlCommandBuffer: MTLCommandBuffer, mtlRenderPassDescriptor: MTLRenderPassDescriptor) {
-        guard let pipeline, let vertexBuffer, let indexBuffer, let lightBuffer, let lightTableBuffer, let lightIndexBuffer,
+        guard let pipeline, let vertexBuffer, let indexBuffer, let geometryChunks, let lightBuffer, let lightTableBuffer, let lightIndexBuffer,
               let depthState, let noWriteDepthState, let paintBuffer, let paintTableBuffer, let paintIndexBuffer,
               let texture = mtlRenderPassDescriptor.colorAttachments[0].texture,
               parameters.projectionMatrix.count == 16 else {
@@ -584,7 +671,14 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost, @unchecke
         let unionState = self.unionState
         let unionShape = self.unionShape
         let waterMotionEnabled = self.waterMotionEnabled
+        let airportDetail = self.airportGroundDetail
+        let airportDetailRect = self.airportGroundDetailRect
+        let airportPaint = self.airportGroundPaint
         lock.unlock()
+        let analyticAirport = airportPaint != nil || hasAnalyticAirportGround
+        let scenePaint = airportPaint?.paintBuffer ?? paintBuffer
+        let scenePaintTable = airportPaint?.paintTableBuffer ?? paintTableBuffer
+        let scenePaintIndices = airportPaint?.paintIndexBuffer ?? paintIndexBuffer
         DioramaGPUPreparation.shared.captureSize(width: texture.width, height: texture.height)
         let encodeStarted = CACurrentMediaTime()
         let passReport = onPassReport
@@ -645,17 +739,35 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost, @unchecke
             }
             return
         }
-        let selectionChanged = selectionTransform != transform
+        let selectionReset = selectionTransform == nil
+        let cameraMoved = lastFrameTransform != transform
+        lastFrameTransform = transform
+        // Culling and LOD planning are reused while the camera has drifted under 24 px since the plan.
+        // The plan culls against a frustum 15% wider on each side (≥ 80 px on a phone), so nothing that
+        // enters the view within that drift was rejected; extra batches past the edge are GPU-clipped.
+        let selectionChanged = selectionReset || selectionTransform.map { cached in
+            guard cached != transform else { return false }
+            guard let planes = planPlanes else { return true }
+            return DioramaEffectDrift.pixels(from: cached, to: transform, width: texture.width, height: texture.height, planes: planes) >= 24
+        } ?? true
         if selectionChanged {
-            cameraRanges = drawn.filter { $0.intersects(matrix) }
+            var padded = matrix
+            for c in 0..<4 { padded[c].x /= 1.15; padded[c].y /= 1.15 }
+            cameraRanges = drawn.filter { $0.intersects(padded) }
             cameraGroups = eligibleGroups.filter { group in
-                Range(category: group.category, start: 0, count: 0, minimum: group.minimum, maximum: group.maximum).intersects(matrix)
+                Range(category: group.category, start: 0, count: 0, minimum: group.minimum, maximum: group.maximum).intersects(padded)
             }
             selectionTransform = transform
         }
-        let planChanged = selectionChanged || selectedReveal != reveal || selectedLifecycle != lifecycleReveal
+        let fov = Float(max(1, min(120, parameters.fieldOfView))) * .pi / 180
+        let focal = Float(texture.height) * 0.5 / tan(fov * 0.5)
+        let drawableSize = SIMD2(texture.width, texture.height)
+        // Everything except pure camera motion: these always refresh cached effects.
+        let inputsChanged = selectionReset || selectedFocalPixels != focal || selectedDrawableSize != drawableSize
+            || selectedReveal != reveal || selectedLifecycle != lifecycleReveal
             || selectedEdges != tileEdges || selectedTileState != tileState
             || selectedUnion != unionState || selectedFocusEdges != focusEdges
+        let planChanged = selectionChanged || inputsChanged
         if planChanged {
             let selectionMask = tileState.y > 1.5 ? SIMD4<Float>.zero : reveal
             selectedRanges = cameraRanges.filter { $0.intersectsReveal(selectionMask) && $0.intersectsReveal(lifecycleReveal) }
@@ -668,6 +780,7 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost, @unchecke
             selectedEdges = tileEdges
             selectedTileState = tileState
             selectedUnion = unionState; selectedFocusEdges = focusEdges
+            selectedFocalPixels = focal; selectedDrawableSize = drawableSize
             drawRevision &+= 1
         }
         let mainRanges = selectedRanges
@@ -708,22 +821,51 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost, @unchecke
         uniforms.waterDeep = waterDeepTint
         uniforms.waterShallow = waterShallowTint
         uniforms.groundImage = SIMD4<Float>(Float(groundRect.minX), Float(groundRect.minY), Float(1 / max(groundRect.width, 1)), Float(1 / max(groundRect.height, 1)))
+        if airportDetail?.groundTexture != nil, let r = airportDetailRect {
+            uniforms.airportDetailBounds = SIMD4(Float(r.minX), Float(r.minY), Float(r.maxX), Float(r.maxY))
+            uniforms.airportDetailImage = SIMD4(Float(r.minX), Float(r.minY), Float(1 / r.width), Float(1 / r.height))
+        }
         uniforms.materialFrame = materialFrame
+        uniforms.materialFrame.w = analyticAirport ? 1 : (hasVectorFinishes ? 2 : 0)
         uniforms.lightGrid = SIMD4<Float>(lightGrid.minX, lightGrid.minY, lightGrid.cellSize, Float(lightGrid.cells))
+        // The baked fields depend only on the fixed ground rectangle and material frame: encode once.
+        if !gradeBaked, let gradeField, let gradeBakePipeline, groundRect.width > 0, groundRect.height > 0 {
+            let pass = MTLRenderPassDescriptor()
+            pass.colorAttachments[0].texture = gradeField
+            pass.colorAttachments[0].loadAction = .dontCare
+            pass.colorAttachments[0].storeAction = .store
+            if let e = mtlCommandBuffer.makeRenderCommandEncoder(descriptor: pass) {
+                e.label = "Diorama ground grade bake"
+                e.setRenderPipelineState(gradeBakePipeline)
+                var bakeUniforms = uniforms
+                e.setFragmentBytes(&bakeUniforms, length: MemoryLayout<DioramaShaderUniforms>.stride, index: 0)
+                e.setFragmentBuffer(scenePaint, offset: 0, index: 1)
+                e.setFragmentBuffer(scenePaintTable, offset: 0, index: 2)
+                e.setFragmentBuffer(scenePaintIndices, offset: 0, index: 3)
+                e.setFragmentTexture(groundTexture ?? blankReflection, index: 0)
+                e.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
+                e.endEncoding()
+                gradeBaked = true
+                mtlCommandBuffer.addCompletedHandler { [weak self] command in
+                    guard command.status != .completed else { return }
+                    DispatchQueue.main.async { self?.gradeBaked = false }
+                }
+            }
+        }
+        let gradeTexture: MTLTexture? = gradeBaked ? gradeField : nil
         // Idle SDK/vehicle frames keep exactly the last water phase. Bound the step when the
         // camera resumes so a long pause never jumps the shoreline or animates at rest.
         let now = CACurrentMediaTime()
-        if selectionChanged, animates, waterMotionEnabled, !reducedEffects {
+        if cameraMoved, animates, waterMotionEnabled, !reducedEffects {
             let dt = previousCameraFrame.map { min(1.0 / 12.0, max(0, now - $0)) } ?? 0
             waterPhase = (waterPhase + Float(dt)).truncatingRemainder(dividingBy: 3600)
         }
-        if selectionChanged { previousCameraFrame = now }
+        if cameraMoved { previousCameraFrame = now }
         uniforms.params.y = waterPhase
 
         // One drawable pixel of measured geometric error: removed detail is smaller than a pixel.
-        let fov = Float(max(1, min(120, parameters.fieldOfView))) * .pi / 180
-        let focal = Float(texture.height) * 0.5 / tan(fov * 0.5)
-        let lodBase = resident?.lod.map { DioramaLODSelector(table: $0, eye: eye, focalPixels: focal, tolerance: 1) }
+        // 0.9 px while planning leaves headroom for the eye movement before the next re-plan.
+        let lodBase = resident?.lod.map { DioramaLODSelector(table: $0, eye: eye, focalPixels: focal, tolerance: 0.9) }
 
         // Shadows are fitted to what the camera can see: the union of the visible batches, so the
         // 2048 texels cover a street when zoomed in and the whole tile only when zoomed out.
@@ -739,7 +881,7 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost, @unchecke
         if reveal.w < 0.5, lifecycleReveal.w < 0.5, unionState.x < 0.5, let shadowMap, let shadowMatrix = shadowMap.update(command: mtlCommandBuffer, vertices: vertexBuffer, indices: indexBuffer, instances: instanceBuffer,
             ranges: drawn, groups: castingGroups, focus: viewLow.x.isFinite && viewHigh.x > viewLow.x ? (viewLow, viewHigh) : nil,
             sun: SIMD3(uniforms.sunDirection.x, uniforms.sunDirection.y, uniforms.sunDirection.z), preset: timeOfDay, landmarkPresent: landmarks,
-            lod: lodBase, timing: timing) {
+            chunks: geometryChunks, lod: lodBase, timing: timing) {
             uniforms.shadowMatrix = shadowMatrix
             uniforms.shadowParams = SIMD4(1, 1.0 / 2048.0, 0.00006, timeOfDay == .day ? 0.65 : 0.85)
         }
@@ -748,13 +890,17 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost, @unchecke
         var reflected: MTLTexture?
         if !reducedEffects, !wireframe, mainRanges.contains(where: { $0.category == .water }), let reflectionPass {
             let reflectionGroups = eligibleGroups
+            // Mirrored points sit between the reflected tallest visible geometry and the real one.
+            let top = Double(viewHigh.z.isFinite ? min(viewHigh.z, waterHeight + 80) : waterHeight + 30)
             reflected = reflectionPass.encode(command: mtlCommandBuffer, width: texture.width, height: texture.height,
+                transform: transform, driftPlanes: SIMD2(2 * Double(waterHeight) - top, top),
                 depthRange: (Double(parameters.depthRange.min), Double(parameters.depthRange.max)), matrix: matrix, uniforms: uniforms,
                 signature: timeOfDay.rawValue + reflectionSignature,
                 vertices: vertexBuffer, indices: indexBuffer, instances: instanceBuffer,
-                fragmentBuffers: [lightBuffer, lightTableBuffer, lightIndexBuffer, paintBuffer, paintTableBuffer, paintIndexBuffer],
-                textures: [blankReflection, shadowMap?.texture, groundTexture ?? blankReflection, blankReflection, surfaceTexture ?? blankReflection], ranges: drawn, groups: reflectionGroups,
-                lod: lodBase?.scaled(4), timing: timing)
+                fragmentBuffers: [lightBuffer, lightTableBuffer, lightIndexBuffer, scenePaint, scenePaintTable, scenePaintIndices,
+                    airportDetail?.paintBuffer ?? scenePaint, airportDetail?.paintTableBuffer ?? scenePaintTable, airportDetail?.paintIndexBuffer ?? scenePaintIndices],
+                textures: [blankReflection, shadowMap?.texture, groundTexture ?? blankReflection, blankReflection, surfaceTexture ?? blankReflection, airportDetail?.groundTexture ?? groundTexture ?? blankReflection, gradeTexture ?? blankReflection, buildingMaterials], ranges: drawn, groups: reflectionGroups,
+                chunks: geometryChunks, lod: lodBase?.scaled(4), timing: timing)
         }
         uniforms.water.y = reflected == nil ? 0 : 1
 
@@ -771,21 +917,53 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost, @unchecke
         let lodSelector = lodBase
         if planChanged {
             selectedRangeDraws = DioramaDrawPlan.ranges(DioramaDrawPlan.levels(mainRanges, selector: lodSelector))
-            selectedInstanceDraws = DioramaDrawPlan.instances(drawnGroups, eye: eye, lodDistance: lodDistance, selector: lodSelector)
+            selectedInstanceDraws = DioramaDrawPlan.instances(drawnGroups, eye: eye, lodDistance: lodDistance, selector: lodSelector,
+                                                               focalPixels: focal, minimumPixels: 1.2)
             // Half-resolution AO accepts two full-resolution pixels of error (one of its own).
             let aoSelector = lodSelector?.scaled(2)
             postRangeDraws = DioramaDrawPlan.ranges(DioramaDrawPlan.levels(mainRanges, selector: aoSelector))
-            postInstanceDraws = DioramaDrawPlan.instances(drawnGroups, eye: eye, lodDistance: lodDistance, selector: aoSelector)
+            postInstanceDraws = DioramaDrawPlan.instances(drawnGroups, eye: eye, lodDistance: lodDistance, selector: aoSelector,
+                                                           focalPixels: focal, minimumPixels: 2.4)
             selectedOpaqueRanges = selectedRangeDraws.filter { $0.category != .water && $0.category != .propGlow && !$0.translucent }
+            selectedWaterRanges = selectedRangeDraws.filter { $0.category == .water }
+            // Preserve the exact pane order when concatenating transparent indices.
+            selectedGlassRanges = selectedRangeDraws.filter(\.translucent).sorted {
+                simd_distance_squared(($0.minimum + $0.maximum) * 0.5, eye) > simd_distance_squared(($1.minimum + $1.maximum) * 0.5, eye)
+            }
+            selectedGlowRanges = selectedRangeDraws.filter { $0.category == .propGlow }
+            selectedOpaqueGroups = selectedInstanceDraws.filter { $0.category != .propGlow }
+            selectedGlowGroups = selectedInstanceDraws.filter { $0.category == .propGlow }
             postOpaqueRanges = postRangeDraws.filter { $0.category != .water && $0.category != .propGlow && !$0.category.isEmissive && !$0.translucent }
             postEmissionRanges = postRangeDraws.filter { $0.category.isEmissive }
             postOpaqueGroups = postInstanceDraws.filter { !$0.category.isEmissive }
             postEmissionGroups = postInstanceDraws.filter { $0.category.isEmissive }
             selectionTransform = transform
         }
-        let submittedRanges = selectedRangeDraws
-        let submittedGroups = selectedInstanceDraws
+        // Half-resolution AO/bloom texels are two drawable pixels wide. While the camera has moved
+        // less than 1.5 px since they were rendered, re-rendering would only shift them sub-texel.
+        let effectPlanes = SIMD2<Double>(Double(viewLow.z.isFinite ? viewLow.z : waterHeight),
+            Double(viewHigh.z.isFinite ? min(viewHigh.z, (viewLow.z.isFinite ? viewLow.z : waterHeight) + 80) : waterHeight + 30))
+        if planChanged { planPlanes = effectPlanes }
+        if inputsChanged || effectTransform.map({ DioramaEffectDrift.pixels(from: $0, to: transform,
+            width: texture.width, height: texture.height, planes: effectPlanes) >= 1.5 }) ?? true {
+            effectTransform = transform; effectRevision = drawRevision
+        }
         var bloomLevels: [MTLTexture] = []
+        // Conservative screen bounds of everything this tile draws; screen-space effects run only there.
+        var effectFocus: SIMD4<Float>?
+        if viewLow.x.isFinite, viewHigh.x >= viewLow.x {
+            var lo = SIMD2<Float>(repeating: .greatestFiniteMagnitude), hi = -lo
+            var projectable = true
+            for corner in 0..<8 where projectable {
+                let p = SIMD4<Float>(corner & 1 == 0 ? viewLow.x : viewHigh.x, corner & 2 == 0 ? viewLow.y : viewHigh.y,
+                                     corner & 4 == 0 ? viewLow.z : viewHigh.z, 1)
+                let q = matrix * p
+                guard q.w > 0.0001, q.x.isFinite, q.y.isFinite else { projectable = false; break }
+                let uv = SIMD2<Float>(q.x / q.w * 0.5 + 0.5, 0.5 - q.y / q.w * 0.5)
+                lo = simd_min(lo, uv); hi = simd_max(hi, uv)
+            }
+            if projectable { effectFocus = SIMD4(max(lo.x, 0), max(lo.y, 0), min(hi.x, 1), min(hi.y, 1)) }
+        }
         if let postProcess, aoStrength > 0 || bloomStrength > 0 {
             bloomLevels = postProcess.encode(
                 command: mtlCommandBuffer, targetWidth: texture.width, targetHeight: texture.height,
@@ -796,7 +974,7 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost, @unchecke
                 emissiveGroups: postEmissionGroups,
                 matrix: matrix, uniforms: uniforms, eye: eye,
                 aoRadius: postSettings.aoRadius, aoStrength: aoStrength, bloomStrength: bloomStrength, lodDistance: lodDistance,
-                revision: drawRevision, timing: timing)
+                revision: effectRevision, chunks: geometryChunks, timing: timing, focus: effectFocus)
         }
         if aoStrength > 0, postProcess?.occlusion == nil { uniforms.post.x = 0 }
         DioramaFleetLighting.shared.publish(host: self, snapshot: .init(origin: origin, uniforms: uniforms,
@@ -827,68 +1005,49 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost, @unchecke
         encoder.setFragmentBuffer(lightBuffer, offset: 0, index: 1)
         encoder.setFragmentBuffer(lightTableBuffer, offset: 0, index: 2)
         encoder.setFragmentBuffer(lightIndexBuffer, offset: 0, index: 3)
-        encoder.setFragmentBuffer(paintBuffer, offset: 0, index: 4)
-        encoder.setFragmentBuffer(paintTableBuffer, offset: 0, index: 5)
-        encoder.setFragmentBuffer(paintIndexBuffer, offset: 0, index: 6)
+        encoder.setFragmentBuffer(scenePaint, offset: 0, index: 4)
+        encoder.setFragmentBuffer(scenePaintTable, offset: 0, index: 5)
+        encoder.setFragmentBuffer(scenePaintIndices, offset: 0, index: 6)
         encoder.setFragmentTexture(reflected ?? blankReflection, index: 0)
         encoder.setFragmentTexture(shadowMap?.texture, index: 1)
         encoder.setFragmentTexture(groundTexture ?? blankReflection, index: 2)
         encoder.setFragmentTexture(postProcess?.occlusion ?? blankReflection, index: 3)
         encoder.setFragmentTexture(surfaceTexture ?? blankReflection, index: 4)
-        // Opaque seabed, coral and hulls first; translucent sea then tints submerged geometry.
-        // Closed shapes cull their backs; ranges flagged double-sided (fronds, sails) do not.
-        var cullMode: MTLCullMode = .back
-        func cull(_ doubleSided: Bool) {
-            let wanted: MTLCullMode = doubleSided ? .none : .back
-            if wanted != cullMode { encoder.setCullMode(wanted); cullMode = wanted }
+        encoder.setFragmentTexture(airportDetail?.groundTexture ?? groundTexture ?? blankReflection, index: 5)
+        encoder.setFragmentTexture(gradeTexture ?? blankReflection, index: 6)
+        encoder.setFragmentTexture(buildingMaterials, index: 7)
+        encoder.setFragmentBuffer(airportDetail?.paintBuffer ?? paintBuffer, offset: 0, index: 7)
+        encoder.setFragmentBuffer(airportDetail?.paintTableBuffer ?? paintTableBuffer, offset: 0, index: 8)
+        encoder.setFragmentBuffer(airportDetail?.paintIndexBuffer ?? paintIndexBuffer, offset: 0, index: 9)
+        // Batch only inside an identical pipeline/depth phase. Culling and LOD already ran on
+        // the original spatial bins; chunking never submits culled geometry or changes vertices.
+        var submission = DioramaGeometryChunks.Statistics()
+        func drawRanges(_ ranges: [Range], cull: MTLCullMode? = nil) {
+            submission.add(geometryChunks.drawRanges(ranges, encoder: encoder, command: mtlCommandBuffer,
+                indices: indexBuffer, lodIndices: lodIndices, cull: cull))
         }
-        let opaqueRanges = selectedOpaqueRanges
         encoder.setDepthStencilState(depthState)
-        for range in opaqueRanges {
-            cull(range.doubleSided)
-            encoder.drawIndexedPrimitives(type: .triangle, indexCount: range.count, indexType: .uint32, indexBuffer: range.usesLODBuffer ? lodIndices : indexBuffer, indexBufferOffset: range.start * MemoryLayout<UInt32>.stride)
-        }
-        // Instanced prototypes: full detail near the eye, light tessellation beyond `lodDistance`.
-        func drawGroup(_ group: DioramaDrawPlan.Instance) {
-            let start = group.start
-            let count = group.count
-            cull(group.doubleSided)
-            encoder.drawIndexedPrimitives(type: .triangle, indexCount: count, indexType: .uint32, indexBuffer: group.usesLODBuffer ? lodIndices : indexBuffer,
-                                          indexBufferOffset: start * MemoryLayout<UInt32>.stride, instanceCount: group.instanceCount,
-                                          baseVertex: 0, baseInstance: group.firstInstance)
-        }
+        drawRanges(selectedOpaqueRanges)
         if let instanceBuffer, let instancedPipeline {
-            encoder.setVertexBuffer(instanceBuffer, offset: 0, index: 3)
             encoder.setRenderPipelineState(instancedGlowPipeline ?? instancedPipeline)
-            for group in submittedGroups where group.category != .propGlow { drawGroup(group) }
+            submission.add(geometryChunks.drawInstances(selectedOpaqueGroups, encoder: encoder, command: mtlCommandBuffer,
+                indices: indexBuffer, lodIndices: lodIndices, instances: instanceBuffer))
         }
         encoder.setDepthStencilState(noWriteDepthState)
         encoder.setRenderPipelineState(waterPipeline ?? pipeline)
-        cull(true)
-        for range in submittedRanges where range.category == .water {
-            encoder.drawIndexedPrimitives(type: .triangle, indexCount: range.count, indexType: .uint32, indexBuffer: range.usesLODBuffer ? lodIndices : indexBuffer, indexBufferOffset: range.start * MemoryLayout<UInt32>.stride)
-        }
-        // Panoramic panes blend over the completed, depth-tested office; never occlude it
-        // through a transparent depth write or contribute opaque AO/shadow silhouettes.
-        for range in submittedRanges.filter({ $0.translucent }).sorted(by: {
-            simd_distance_squared(($0.minimum + $0.maximum) * 0.5, eye) > simd_distance_squared(($1.minimum + $1.maximum) * 0.5, eye)
-        }) {
-            cull(false)
-            encoder.drawIndexedPrimitives(type: .triangle, indexCount: range.count, indexType: .uint32,
-                indexBuffer: indexBuffer, indexBufferOffset: range.start * MemoryLayout<UInt32>.stride)
-        }
+        drawRanges(selectedWaterRanges, cull: MTLCullMode.none)
+        // Glass stays back-to-front, depth tested and without depth writes.
+        drawRanges(selectedGlassRanges, cull: .back)
         encoder.setRenderPipelineState(glowPipeline ?? pipeline)
-        for range in submittedRanges where range.category == .propGlow {
-            encoder.drawIndexedPrimitives(type: .triangle, indexCount: range.count, indexType: .uint32, indexBuffer: range.usesLODBuffer ? lodIndices : indexBuffer, indexBufferOffset: range.start * MemoryLayout<UInt32>.stride)
-        }
+        drawRanges(selectedGlowRanges, cull: MTLCullMode.none)
         if let instanceBuffer, let instancedGlowPipeline {
-            encoder.setVertexBuffer(instanceBuffer, offset: 0, index: 3)
             encoder.setRenderPipelineState(instancedGlowPipeline)
-            for group in submittedGroups where group.category == .propGlow { drawGroup(group) }
+            submission.add(geometryChunks.drawInstances(selectedGlowGroups, encoder: encoder, command: mtlCommandBuffer,
+                indices: indexBuffer, lodIndices: lodIndices, instances: instanceBuffer))
         }
         if !bloomLevels.isEmpty, let postProcess {
             encoder.setTriangleFillMode(.fill)
-            postProcess.composite(bloomLevels, into: encoder, strength: bloomStrength)
+            postProcess.composite(bloomLevels, into: encoder, strength: bloomStrength, targetWidth: texture.width, targetHeight: texture.height)
         }
         let labelIDs: Set<UInt64>
         if visible.contains(.buildings), !wireframe {
@@ -896,10 +1055,12 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost, @unchecke
         } else { labelIDs = [] }
         publishLabels(labelIDs)
         encoder.endEncoding()
-        let triangles = submittedRanges.reduce(0) { $0 + $1.count / 3 }
-            + submittedGroups.reduce(0) { $0 + $1.count / 3 * $1.instanceCount }
-        timing?.count("Main", triangles: triangles)
-        let drawCalls = submittedRanges.count + submittedGroups.count
+        let triangles = submission.triangles
+        timing?.count("Main", triangles: triangles, draws: submission.draws, inputDraws: submission.inputDraws)
+        let drawCalls = submission.draws
+        let chunkCopiedBytes = submission.copiedBytes
+        let chunkCacheHits = submission.cacheHits
+        let chunkFallbackDraws = submission.fallbackDraws
         let unmergedDrawCalls = mainRanges.count + drawnGroups.count
         let cpuMS = (CACurrentMediaTime() - encodeStarted) * 1000
         let metrics = frameMetrics
@@ -908,7 +1069,9 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost, @unchecke
             guard command.status == .completed else { return }
             self?.didComplete(reveal, lifecycle: lifecycleReveal, union: unionState)
             let gpuMS = command.gpuEndTime > command.gpuStartTime ? (command.gpuEndTime - command.gpuStartTime) * 1000 : nil
-            if let report = metrics.record(triangles: triangles, cpuMS: cpuMS, gpuMS: gpuMS, drawCalls: drawCalls, unmergedDrawCalls: unmergedDrawCalls) { callback?(report) }
+            if let report = metrics.record(triangles: triangles, cpuMS: cpuMS, gpuMS: gpuMS, drawCalls: drawCalls,
+                unmergedDrawCalls: unmergedDrawCalls, chunkCopiedBytes: chunkCopiedBytes,
+                chunkCacheHits: chunkCacheHits, chunkFallbackDraws: chunkFallbackDraws) { callback?(report) }
         }
     }
 
@@ -923,6 +1086,8 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost, @unchecke
         noWriteDepthState = nil
         vertexBuffer = nil
         indexBuffer = nil
+        geometryChunks = nil
+        selectionTransform = nil; selectionVisible = nil
         instanceBuffer = nil
         instancedPipeline = nil
         instancedGlowPipeline = nil
@@ -930,8 +1095,11 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost, @unchecke
         lightTableBuffer = nil
         lightIndexBuffer = nil
         blankReflection = nil
+        gradeField = nil; gradeBakePipeline = nil; gradeBaked = false
         groundTexture = nil
+        lock.lock(); airportGroundDetail = nil; airportGroundDetailRect = nil; lock.unlock()
         surfaceTexture = nil
+        buildingMaterials = nil
         paintBuffer = nil; paintTableBuffer = nil; paintIndexBuffer = nil
         reflectionPass = nil
         passTimer = nil

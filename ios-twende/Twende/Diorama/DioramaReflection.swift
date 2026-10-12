@@ -9,7 +9,7 @@ nonisolated final class DioramaReflection {
     private let depthState: MTLDepthStencilState
     private var color: MTLTexture?
     private var depth: MTLTexture?
-    private var lastMatrix: simd_float4x4?
+    private var lastTransform: simd_double4x4?
     private var lastReveal: SIMD4<Float> = .zero
     private var lastLifecycle: SIMD4<Float> = .zero
     private var lastEdges: SIMD4<Float> = .zero
@@ -49,21 +49,25 @@ nonisolated final class DioramaReflection {
         let d = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm, width: w, height: h, mipmapped: false)
         d.usage = [.renderTarget, .shaderRead]; d.storageMode = .private
         color = device.makeTexture(descriptor: d)
-        d.pixelFormat = .depth32Float; d.usage = .renderTarget
+        d.pixelFormat = .depth32Float; d.usage = .renderTarget; d.storageMode = DioramaPostProcess.transientStorage
         depth = device.makeTexture(descriptor: d)
-        lastMatrix = nil
+        lastTransform = nil
     }
 
-    func encode(command: MTLCommandBuffer, width: Int, height: Int, depthRange: (Double, Double),
+    func encode(command: MTLCommandBuffer, width: Int, height: Int,
+                transform: simd_double4x4, driftPlanes: SIMD2<Double>, depthRange: (Double, Double),
                 matrix: simd_float4x4, uniforms: DioramaShaderUniforms, signature: String,
                 vertices: MTLBuffer, indices: MTLBuffer, instances: MTLBuffer?,
                 fragmentBuffers: [MTLBuffer], textures: [MTLTexture?],
                 ranges: [DioramaRenderLayer.Range], groups: [DioramaInstanceGroup],
-                lod: DioramaLODSelector? = nil, timing: DioramaPassTimer.Frame? = nil) -> MTLTexture? {
+                chunks: DioramaGeometryChunks, lod: DioramaLODSelector? = nil, timing: DioramaPassTimer.Frame? = nil) -> MTLTexture? {
         let w = max(1, min(768, width / 4)), h = max(1, min(768, height / 4))
         prepareSize(width: width, height: height)
         guard let color, let depth else { return nil }
-        if lastMatrix == matrix, lastReveal == uniforms.reveal, lastLifecycle == uniforms.lifecycleReveal,
+        // A quarter-resolution texel spans four drawable pixels; below three pixels of camera drift
+        // the rippled, softened reflection would only move sub-texel, so the cached one is kept.
+        if let lastTransform, DioramaEffectDrift.pixels(from: lastTransform, to: transform, width: width, height: height,
+                                                       planes: driftPlanes) < 3, lastReveal == uniforms.reveal, lastLifecycle == uniforms.lifecycleReveal,
            lastEdges == uniforms.tileEdges, lastTileState == uniforms.tileState, lastSignature == signature,
            lastUnion == uniforms.unionState, lastFocusEdges == uniforms.focusEdges { return color }
         let pass = MTLRenderPassDescriptor()
@@ -92,11 +96,7 @@ nonisolated final class DioramaReflection {
                 && $0.maximum.z >= uniforms.water.x - 0.05 && $0.intersectsReveal(uniforms.reveal)
                 && $0.intersects(matrix, mirrorHeight: uniforms.water.x)
         }, selector: lod))
-        timing?.count("Reflection", triangles: reflectedRanges.reduce(0) { $0 + $1.count / 3 })
-        for range in reflectedRanges {
-            e.setCullMode(range.doubleSided ? .none : .back)
-            e.drawIndexedPrimitives(type: .triangle, indexCount: range.count, indexType: .uint32, indexBuffer: range.usesLODBuffer ? lodIndices : indices, indexBufferOffset: range.start * 4)
-        }
+        var submission = chunks.drawRanges(reflectedRanges, encoder: e, command: command, indices: indices, lodIndices: lodIndices)
         if let instances {
             e.setVertexBuffer(instances, offset: 0, index: 3); e.setRenderPipelineState(instancedPipeline)
             let reflectedGroups = groups.filter { group in
@@ -106,15 +106,12 @@ nonisolated final class DioramaReflection {
                     && bounds.intersectsReveal(uniforms.reveal) && bounds.intersects(matrix, mirrorHeight: uniforms.water.x)
             }
             let reflectedDraws = DioramaDrawPlan.instances(reflectedGroups, selector: lod)
-            timing?.count("Reflection", triangles: reflectedDraws.reduce(0) { $0 + $1.count / 3 * $1.instanceCount })
-            for group in reflectedDraws {
-                e.setCullMode(group.doubleSided ? .none : .back)
-                e.drawIndexedPrimitives(type: .triangle, indexCount: group.count, indexType: .uint32, indexBuffer: group.usesLODBuffer ? lodIndices : indices,
-                    indexBufferOffset: group.start * 4, instanceCount: group.instanceCount, baseVertex: 0, baseInstance: group.firstInstance)
-            }
+            submission.add(chunks.drawInstances(reflectedDraws, encoder: e, command: command,
+                indices: indices, lodIndices: lodIndices, instances: instances))
         }
         e.endEncoding()
-        lastMatrix = matrix; lastReveal = uniforms.reveal; lastSignature = signature
+        timing?.count("Reflection", triangles: submission.triangles, draws: submission.draws, inputDraws: submission.inputDraws)
+        lastTransform = transform; lastReveal = uniforms.reveal; lastSignature = signature
         lastLifecycle = uniforms.lifecycleReveal; lastEdges = uniforms.tileEdges; lastTileState = uniforms.tileState
         lastUnion = uniforms.unionState; lastFocusEdges = uniforms.focusEdges
         return color

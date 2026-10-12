@@ -164,7 +164,8 @@ nonisolated enum DioramaTileGenerator {
         }
         let terrain = (data.sourceTerrain ?? DioramaTerrain.load(rect: data.rect, config: config)).resolvingSurfaces(in: data)
         let streetLayout = DioramaStreetLayout(data: data, config: config)
-        guard let painter = DioramaGroundPainter(rect: data.rect, size: reduced ? config.reducedGroundImageSize : config.groundImageSize, config: config) else {
+        guard let painter = DioramaGroundPainter(rect: data.rect, size: reduced ? config.reducedGroundImageSize : config.groundImageSize,
+                                                 config: config, hybridFinishes: config.vectorFinishes) else {
             throw NSError(domain: "Diorama", code: 2, userInfo: [NSLocalizedDescriptionKey: "ground image could not be created"])
         }
         try timing("terrain + street layout + painter")
@@ -190,7 +191,7 @@ nonisolated enum DioramaTileGenerator {
             propGlow.primitiveRegistry = registry
         }
 
-        let builder = DioramaBuildingGenerator(config: config, roads: roadIndex, terrain: terrain)
+        let builder = DioramaBuildingGenerator(config: config, roads: roadIndex, terrain: terrain, district: DioramaDistrict.of(data.tile))
         var built: [DioramaBuilt] = []
         built.reserveCapacity(data.buildings.count)
         var porchLights: [DioramaLight] = []

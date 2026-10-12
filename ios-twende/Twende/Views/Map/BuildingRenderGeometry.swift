@@ -4,9 +4,16 @@ import simd
 
 /// Bakes the completed SceneKit geometry into an immutable native-map triangle buffer once per selection.
 enum BuildingRenderGeometry {
-    static func vertices(from scene: SCNScene) -> [BuildingRenderVertex] {
+    static func vertices(from scene: SCNScene, excludingAirportInstances: Bool = false) -> [BuildingRenderVertex] {
         var result: [BuildingRenderVertex] = []
         scene.rootNode.enumerateChildNodes { node, _ in
+            if excludingAirportInstances {
+                var ancestor: SCNNode? = node
+                while let current = ancestor {
+                    if current.name?.hasPrefix(AirportInstanceGeometry.prefix) == true { return }
+                    ancestor = current.parent
+                }
+            }
             guard let geometry = node.geometry,
                   let source = geometry.sources(for: .vertex).first else { return }
             let positions = vectors(from: source)
@@ -23,20 +30,22 @@ enum BuildingRenderGeometry {
                       [1, 2, 4].contains(element.bytesPerIndex) else { continue }
                 let data = element.data
                 let material = geometry.materials.isEmpty ? nil : geometry.materials[elementIndex % geometry.materials.count]
-                let color = material?.diffuse.contents as? UIColor ?? .lightGray
+                let generated = material?.name?.hasPrefix("generated.landmark") == true
+                let pigment = generated ? GeneratedLandmarkPigment.make(material: material, geometry: geometry) : nil
+                let color = material?.diffuse.contents as? UIColor ?? (pigment == nil ? .lightGray : .white)
                 var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, alpha: CGFloat = 1
                 color.getRed(&r, green: &g, blue: &b, alpha: &alpha)
                 let tint = SIMD4<Float>(Float(r), Float(g), Float(b), Float(alpha) * Float(material?.transparency ?? 1))
                 let materialName = material?.name ?? ""
                 let isGem = materialName == "landmark.tanzaniteLight"
-                let isSign = materialName == "airtel.signLight"
+                let isSign = materialName == "airtel.signLight" || materialName == "airport.roofSignBlue"
                 let isSignHalo = materialName == "airtel.signHalo"
                 let isHalo = materialName == "landmark.tanzaniteHalo" || isSignHalo
                 let isConcrete = materialName == "surface.bridgeConcrete"
                 let appearance = SIMD4<Float>(
                     (material?.roughness.contents as? NSNumber)?.floatValue ?? 0.85,
                     (material?.metalness.contents as? NSNumber)?.floatValue ?? 0,
-                    isSignHalo ? 0.055 : isSign ? 1 : isGem ? 1.2 : node.name == "architecturalLighting" ? 0.85 : 0, materialName == "landmark.ledScreen" ? -13 : materialName == "landmark.panoramicGlass" ? -12 : materialName == "landmark.windowLight" ? -11 : materialName == "bridgeRoad" ? -7 : ["landmark.clay", "landmark.slate"].contains(materialName) ? -8 : ["landmark.silver", "landmark.pspfAnodised", "airtel.silverSpandrel", "airtel.charcoalAluminium"].contains(materialName) ? -9 : materialName == "landmark.foliage" ? -5 : materialName == "landmark.trunk" ? -2 : materialName == "landmark.sitePaving" ? -6 : isSign || node.name == "architecturalLighting" ? 4 : isHalo ? 3 : isGem ? 2 : isConcrete ? -4 : ["reflectiveWindows", "dormerGlass", "clerestoryGlass", "curtainGlass", "bayWindowGlass"].contains(node.name ?? "") ? 1 : material?.name == "surface.brick" ? -1 : material?.name == "surface.timber" ? -2 : material?.name == "surface.stone" ? -3 : 0
+                    isSignHalo ? 0.055 : isSign ? 1 : isGem ? 1.2 : node.name == "architecturalLighting" ? 0.85 : 0, materialName == "landmark.airportGround" ? -15 : materialName == "landmark.poolWater" ? -14 : materialName == "landmark.ledScreen" ? -13 : materialName == "landmark.panoramicGlass" ? -12 : materialName == "landmark.windowLight" ? -11 : materialName == "bridgeRoad" ? -7 : ["landmark.clay", "landmark.slate"].contains(materialName) ? -8 : ["landmark.silver", "landmark.pspfAnodised", "airtel.silverSpandrel", "airtel.charcoalAluminium"].contains(materialName) ? -9 : materialName == "landmark.foliage" ? -5 : materialName == "landmark.trunk" ? -2 : materialName == "landmark.sitePaving" ? -6 : isSign || node.name == "architecturalLighting" ? 4 : isHalo ? 3 : isGem ? 2 : isConcrete ? -4 : ["reflectiveWindows", "dormerGlass", "clerestoryGlass", "curtainGlass", "bayWindowGlass"].contains(node.name ?? "") ? 1 : material?.name == "surface.brick" ? -1 : material?.name == "surface.timber" ? -2 : material?.name == "surface.stone" ? -3 : 0
                 )
                 let indices: [Int] = data.withUnsafeBytes { bytes in
                     (0..<(data.count / element.bytesPerIndex)).map { index in
@@ -60,7 +69,8 @@ enum BuildingRenderGeometry {
                         let p = transform * SIMD4(positions[id], 1)
                         let inputNormal = normals.indices.contains(id) ? normals[id] : simd_normalize(face)
                         let normal = simd_normalize(normalMatrix * inputNormal)
-                        result.append(BuildingRenderVertex(position: p, normal: SIMD4(normal, 0), color: tint, appearance: appearance))
+                        let sampledTint = pigment?.color(at: id).map { $0 * tint } ?? tint
+                        result.append(BuildingRenderVertex(position: p, normal: SIMD4(normal, 0), color: sampledTint, appearance: appearance))
                     }
                 }
             }

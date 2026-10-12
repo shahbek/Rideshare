@@ -4,6 +4,38 @@ nonisolated enum DioramaBuildingKind: Sendable {
     case villa, apartments, commercial
 }
 
+/// Which researched Dar es Salaam street character ordinary buildings follow.
+/// Masaki/Oyster Bay: white and cream villas and apartment blocks under terracotta, maroon, charcoal
+/// or teal pitched roofs, stacked balcony slabs. City centre/Kisutu: dense pastel render blocks with
+/// turquoise pilaster strips, window eyebrow hoods, corrugated street canopies and tank-crowded roofs.
+nonisolated enum DioramaDistrict: Sendable {
+    case masaki, city
+
+    /// The harbour/city-centre tiles lie south of the Masaki peninsula store (y ≥ 34008 at z16).
+    static func of(_ tile: DioramaTileID) -> DioramaDistrict {
+        let y = tile.z >= 16 ? tile.y >> (tile.z - 16) : tile.y << (16 - tile.z)
+        return y >= 34_008 ? .city : .masaki
+    }
+
+    func wallColors(_ kind: DioramaBuildingKind, config: DioramaConfig) -> [DioramaSwatch] {
+        switch (self, kind) {
+        case (.city, .villa), (.city, .apartments): [.cream, .paleYellow, .salmonRender, .paleBlueRender, .mint, .whitewash, .dustyRose, .cream]
+        case (.city, .commercial): [.cream, .whitewash, .salmonRender, .paleYellow, .paleBlueRender]
+        case (.masaki, .villa): [.whitewash, .cream, .whitewash, .paleYellow, .cream, .whitewash]
+        case (.masaki, .apartments): [.whitewash, .cream, .whitewash, .trimWhite, .paleYellow]
+        case (.masaki, .commercial): config.commercialWallColors
+        }
+    }
+
+    /// Masaki pitched roofs: clay tile, stone-coated maroon/charcoal sheet and painted mabati.
+    var pitchedRoofColors: [DioramaSwatch] {
+        switch self {
+        case .masaki: [.roofTerracotta, .roofTerracotta, .roofTerracotta, .roofMaroon, .roofMaroon, .roofCharcoal, .roofGreen, .roofTeal, .roofRust]
+        case .city: [.mabatiGrey, .roofRust, .roofTerracotta, .mabatiGrey, .roofGreen]
+        }
+    }
+}
+
 /// What the other generators need to know about a built house.
 nonisolated struct DioramaBuilt: Sendable {
     let feature: DioramaBuildingFeature
@@ -26,6 +58,7 @@ nonisolated struct DioramaBuildingGenerator {
     let config: DioramaConfig
     let roads: DioramaRoadIndex
     let terrain: DioramaTerrain
+    var district: DioramaDistrict = .masaki
     private var kit: DioramaBuildingKit { DioramaBuildingKit(config: config) }
 
     func classify(_ f: DioramaBuildingFeature) -> (DioramaBuildingKind, Int) {
@@ -37,9 +70,12 @@ nonisolated struct DioramaBuildingGenerator {
         if let h = f.height {
             floors = max(1, Int((h / config.floorHeight).rounded()))
         } else if isApartment {
-            floors = 3
+            floors = district == .city ? 4 + Int(rng.unit() * 3) : 3
         } else if isCommercial {
-            floors = f.area > 700 ? 2 : 1
+            floors = district == .city ? 3 + Int(rng.unit() * 2) : (f.area > 700 ? 2 : 1)
+        } else if district == .city {
+            // Kisutu/Upanga blocks are rarely single storey; unknown heights read as 3–5 storey walk-ups.
+            floors = f.area > 60 ? 3 + Int(rng.unit() * 3) : 2
         } else {
             // A large roof does not imply an apartment block. Unknown residential heights are
             // explicitly inferred: predominantly bungalows, with some two-storey homes.
@@ -89,13 +125,21 @@ nonisolated struct DioramaBuildingGenerator {
         let kit = self.kit
 
         let override = config.buildingOverrides[f.id]
-        var wallColor: DioramaSwatch
-        switch kind {
-        case .villa: wallColor = rng.pick(config.wallColors)
-        case .apartments: wallColor = rng.pick(config.apartmentWallColors)
-        case .commercial: wallColor = rng.pick(config.commercialWallColors)
-        }
+        var wallColor: DioramaSwatch = rng.pick(district.wallColors(kind, config: config))
         if let forced = override?.wallColor { wallColor = forced }
+
+        // Share footprint safety, not a single facade: use-led typologies retain distinct massing.
+        // Keep authored overrides, cut edges, courtyard holes and low-rise house roofs in their own recipes.
+        if floors >= 4, height >= 12, override == nil, !f.clipped.contains(true), f.area > 60 {
+            let recipe = architecturalRecipe(f, kind: kind, floors: floors, height: height, wallColor: wallColor)
+            var generator = DarTowerGenerator(site: recipe)
+            var facadeLights: [DioramaLight] = []
+            if generator.build(f.ring, into: &mesh, glow: &glow, lights: &facadeLights, includesLights: lights) {
+                pointLights.append(contentsOf: facadeLights)
+                return DioramaBuilt(feature: f, kind: kind, floors: floors, height: height, box: box,
+                    flatRoof: !generator.hasPitchedRoof, wallColor: wallColor, entrance: generator.entrance, entranceOut: generator.entranceOut)
+            }
+        }
 
         // Same-material wall bases follow the existing slope, never a separate pedestal.
         for i in ring.indices where !flags[i] {
@@ -115,14 +159,41 @@ nonisolated struct DioramaBuildingGenerator {
         // Join footprint-derived hip wings; tile cuts/ownership fragments keep their safe flat decks.
         var flatRoof = kind != .villa
         if kind == .villa, rng.chance(1 - config.hipRoofShare) { flatRoof = true }
+        // Oyster Bay apartment blocks often carry clay-tile or teal standing-seam hip roofs.
+        if district == .masaki, kind == .apartments, floors <= 10, rng.chance(0.5) { flatRoof = false }
+        if district == .city, kind == .villa, floors >= 2 { flatRoof = !rng.chance(0.25) }
+        // Separate stream so roof choice never perturbs the rest of the building's random sequence.
+        var roofRoll = DioramaRandom(seed: f.id, salt: 0x52_4F_4F_46)
+        let roll = roofRoll.unit()
+        // Low-rise shops and blocks across Kariakoo/Sinza mostly carry mabati sheds and gables.
+        if flatRoof, override == nil, kind != .villa, floors <= 2, roofRoll.chance(district == .masaki ? 0.25 : 0.6) { flatRoof = false }
         if !flatRoof, flags.contains(true) { flatRoof = true }
         if let forced = override?.flatRoof { flatRoof = forced || flags.contains(true) }
 
         let pitchedColor = override?.roofColor ?? roofColor(&rng)
         if !flatRoof {
-            let roofed = DioramaRoofBuilder.hip(ring, flags: flags, z: height, pitch: config.roofPitchDegrees * Double.pi / 180,
-                                                overhang: config.roofOverhang, maxRise: config.hipRoofMaxRise,
-                                                color: pitchedColor, fascia: .trimWhite, into: &mesh, footprint: f.ring)
+            let pitch = config.roofPitchDegrees * Double.pi / 180
+            let shape = DioramaRoofKit.shape(of: f.ring)
+            // Orthogonal L/T/U plans keep the approved joined hip wings first.
+            var roofed = false
+            if kind == .villa, shape.rectangularity > 0.55, roll < 0.55 || !shape.isConvex {
+                roofed = DioramaRoofBuilder.hip(ring, flags: flags, z: height, pitch: pitch,
+                                               overhang: config.roofOverhang, maxRise: config.hipRoofMaxRise,
+                                               color: pitchedColor, fascia: .trimWhite, into: &mesh, footprint: f.ring)
+            }
+            if !roofed {
+                let modern = district == .masaki && kind == .villa
+                for form in DioramaRoofKit.candidates(for: shape, roll: roll, modern: modern) {
+                    let formPitch = form == .pyramid ? pitch * 1.1 : (form == .gable || form == .jerkinhead ? pitch * 1.05 : pitch)
+                    if DioramaRoofKit.build(form, ring: ring, flags: flags, z: height, pitch: formPitch,
+                                            overhang: form == .shed ? config.roofOverhang * 0.7 : config.roofOverhang,
+                                            maxRise: config.hipRoofMaxRise, color: pitchedColor, fascia: .trimWhite,
+                                            gable: wallColor, into: &mesh) {
+                        roofed = true
+                        break
+                    }
+                }
+            }
             if !roofed { flatRoof = true }
         }
         if flatRoof {
@@ -169,7 +240,8 @@ nonisolated struct DioramaBuildingGenerator {
             }
             let spacing = max(kind == .commercial ? 4.6 : (kind == .villa ? 2.9 : 3.4), budgetSpacing)
             // Oversized openings read from the map camera; metric windows looked like slots.
-            let width: Double = (kind == .villa ? 1.3 : 1.6) * config.detailExaggeration
+            // Dar casements: wide and squat (about 1.5 × 1.5 m) on a 0.95 m sill, heads 0.45 m under the slab.
+            let width: Double = (kind == .villa ? 1.15 : 1.6) * config.detailExaggeration
             let rawColumns = max(Int((length - 1.0) / spacing), 1)
             let columns = isFront && rawColumns.isMultiple(of: 2) ? max(rawColumns - 1, 1) : rawColumns
             let pitch = length / Double(columns)
@@ -186,8 +258,8 @@ nonisolated struct DioramaBuildingGenerator {
                 let base = Double(floor) * storeyHeight
                 let wallBottom = floor == 0 ? 0.5 : base
                 let wallTop = base + storeyHeight
-                let z0 = base + 1.05
-                let z1 = base + storeyHeight - 0.6
+                let z0 = base + (kind == .commercial ? 1.05 : 0.95)
+                let z1 = base + storeyHeight - (kind == .commercial ? 0.6 : 0.45)
                 for c in 0..<columns {
                     let u = pitch * (Double(c) + 0.5)
                     let isShop = kind == .commercial && isFront && floor == 0
@@ -218,7 +290,12 @@ nonisolated struct DioramaBuildingGenerator {
                         let lit = lights && rng.chance(config.litWindowRatio)
                         if lit { litOnFacade += 1; litZ += (lower + upper) / 2 }
                         kit.window(a: a, dir: dir, out: out, u: u, z0: lower, z1: upper,
-                                   width: openingWidth, hasGrille: kind == .villa, lit: lit, into: &mesh, glow: &glow)
+                                   width: openingWidth, hasGrille: kind != .commercial, lit: lit, into: &mesh, glow: &glow)
+                        // Cast-concrete eyebrow hood over each residential window (sun and rain shade).
+                        if kind != .commercial, upper + 0.42 < wallTop {
+                            mesh.facadeBox(a: a, dir: dir, out: out, u: u, width: openingWidth + 0.5, z0: upper + 0.22, z1: upper + 0.32,
+                                           depth: 0.42, .trimWhite)
+                        }
                     }
                 }
             }
@@ -243,12 +320,82 @@ nonisolated struct DioramaBuildingGenerator {
                     storeyHeight: storeyHeight, floors: floors, spacing: max(kind == .villa ? 2.9 : 3.4, budgetSpacing), into: &mesh)
         }
 
+        districtDetails(ring: ring, flags: flags, front: front, kind: kind, floors: floors, storeyHeight: storeyHeight,
+                        height: height, flatRoof: flatRoof, wallColor: wallColor, recessed: verandaDepth > 0, rng: &rng, into: &mesh)
         roofFurniture(ring: ring, box: box, height: height, flatRoof: flatRoof, kind: kind, rng: &rng, into: &mesh)
         return DioramaBuilt(feature: f, kind: kind, floors: floors, height: height, box: box, flatRoof: flatRoof, wallColor: wallColor, entrance: entrance, entranceOut: entranceOut)
     }
 
     private func roofColor(_ rng: inout DioramaRandom) -> DioramaSwatch {
-        rng.chance(config.terracottaRoofShare) ? .roofTerracotta : rng.pick(config.metalRoofColors)
+        rng.pick(district.pitchedRoofColors)
+    }
+
+    // MARK: District character
+
+    /// Street details from the skyline research, all on real (unclipped) front edges.
+    private func districtDetails(ring: [DV2], flags: [Bool], front: Int, kind: DioramaBuildingKind, floors: Int, storeyHeight: Double,
+                                 height: Double, flatRoof: Bool, wallColor: DioramaSwatch, recessed: Bool,
+                                 rng: inout DioramaRandom, into mesh: inout DioramaMesh) {
+        guard front >= 0, front < ring.count, !flags[front] else { return }
+        let a = ring[front], b = ring[(front + 1) % ring.count]
+        let length = a.distance(to: b)
+        guard length > 5 else { return }
+        let dir = (b - a).normalized, out = dir.right
+        let mid = (a + b) * 0.5
+        switch district {
+        case .city where kind != .villa || floors >= 2:
+            // Turquoise pilaster strips framing the street face.
+            if rng.chance(0.6) {
+                for u in [0.3, length - 0.3] {
+                    mesh.facadeBox(a: a, dir: dir, out: out, u: u, width: 0.4, z0: 0.5, z1: height, depth: 0.14, .kisutuTeal)
+                }
+            }
+            // Continuous eyebrow sunshade ledges over every upper floor's windows.
+            for floor in 1..<max(floors, 1) {
+                let z = Double(floor) * storeyHeight + storeyHeight - 0.5
+                mesh.facadeBox(a: a, dir: dir, out: out, u: length / 2, width: length - 1.0, z0: z, z1: z + 0.13, depth: 0.5, .trimWhite)
+            }
+            // Corrugated shop verandah on slim posts over the pavement.
+            if kind == .commercial || floors >= 3, !roads.isOnCarriageway(mid + out * 1.9, margin: 0.2) {
+                let l = a + dir * 0.4, r = b - dir * 0.4, depth = 1.8, z = min(3.4, storeyHeight + 0.2)
+                let wasDoubleSided = mesh.doubleSided
+                mesh.doubleSided = true
+                mesh.quad(DV3(l, z), DV3(r, z), DV3(r + out * depth, z - 0.4), DV3(l + out * depth, z - 0.4), .mabatiGrey)
+                mesh.doubleSided = wasDoubleSided
+                let posts = max(Int(length / 4.5), 1)
+                for k in 0...posts {
+                    let p = l + (r - l) * (Double(k) / Double(posts)) + out * (depth - 0.1)
+                    mesh.cylinder(centre: p, z0: 0, z1: z - 0.4, r0: 0.07, r1: 0.07, sides: 6, .metalCharcoal, cap: false)
+                }
+            }
+            // No invented rooftop signs or stacked parapet blocks.
+        case .masaki where kind == .apartments && floors >= 3 && !recessed:
+            // Stacked balcony slabs with rails on the long face, the Oyster Bay apartment rhythm.
+            let half = length / 2 - 0.5
+            guard half > 1.2 else { return }
+            for floor in 1..<floors {
+                let z = Double(floor) * storeyHeight
+                mesh.box(centre: mid + out * 0.7, z0: z - 0.05, axis: dir, halfLength: half, halfWidth: 0.7, height: 0.2, .trimWhite, bevel: 0.05)
+                kit.balconyRail(a: mid - dir * half + out * 1.32, b: mid + dir * half + out * 1.32, out: out, z: z + 0.15, into: &mesh)
+            }
+        default:
+            break
+        }
+    }
+
+    /// Identical design identity for HD and coarse generation; never reroll a roof during handoff.
+    func architecturalRecipe(_ f: DioramaBuildingFeature, kind: DioramaBuildingKind, floors: Int,
+                             height: Double, wallColor: DioramaSwatch) -> DarSkylineSite {
+        let family = DarBuildingDesign.ordinaryFamily(id: f.id, type: f.type, commercial: kind == .commercial,
+            city: district == .city, floors: floors)
+        let roof = DarBuildingDesign.ordinaryRoof(id: f.id, family: family, city: district == .city, floors: floors)
+        let palette = DioramaSwatch.defaultPalette[wallColor] ?? 0xF4EFE7
+        return DarSkylineSite(id: "ordinary-\(f.id)", osm: f.id, name: f.name, levels: floors, height: height,
+            district: district == .city ? "city" : "masaki", style: family,
+            wall: String(format: "#%06X", palette), accent: district == .city ? "#2E8A9A" : "#F4EFE7",
+            glass: "#417E86", roof: roof, crown: roof == "flat" ? "integrated" : "hip",
+            balconies: family == "coastal" ? "principal" : "none",
+            description: "Use-led district interpretation on the mapped footprint and height", ring: [])
     }
 
     // MARK: Roofs
@@ -326,21 +473,18 @@ nonisolated struct DioramaBuildingGenerator {
         let deck = height + (kind == .apartments ? 0 : config.roofBevel)
         let kit = self.kit
         // Functional rooftop service elements only; no arbitrary vent scatter.
-        if rng.chance(config.standTankChance * 0.6) {
-            let spot = inner.centre - inner.axis * (inner.halfLength * 0.5)
+        // Optional open equipment; do not cover every small roof with the same tank cluster.
+        let tanks = rng.chance(district == .city ? 0.45 : config.standTankChance * 0.6) ? (rng.chance(0.25) ? 2 : 1) : 0
+        for k in 0..<tanks {
+            let spot = inner.centre - inner.axis * (inner.halfLength * 0.5) + inner.axis.left * (Double(k) - Double(tanks - 1) / 2) * 1.7
             if DioramaPolygon.contains(ring, spot), DioramaPolygon.distanceToRing(ring, spot) > 1.4 {
-                kit.waterTank(at: spot, z0: deck, color: rng.chance(0.6) ? .tankBlack : .tankBlue, into: &mesh)
+                kit.waterTank(at: spot, z0: deck, color: rng.chance(0.7) ? .tankBlack : .tankBlue, into: &mesh)
             }
         }
-        if kind == .villa, rng.chance(0.35) {
-            let spot = inner.centre + inner.axis * (inner.halfLength * 0.55)
-            if DioramaPolygon.contains(ring, spot), DioramaPolygon.distanceToRing(ring, spot) > 1.0 {
-                kit.chimney(at: spot, axis: inner.axis, z0: deck, into: &mesh)
-            }
-        }
-        if kind == .apartments, inner.halfLength > 4 {
+        if kind == .apartments, inner.halfLength > 4, rng.chance(0.55) {
             let head = inner.centre - inner.axis * (inner.halfLength - 1.6)
-            if DioramaPolygon.contains(ring, head) {
+            let headPlan = DioramaOrientedRect(centre: head, axis: inner.axis, halfLength: 1.4, halfWidth: 1.1)
+            if DarArchitecturePlan.fits(headPlan.corners, inside: ring, clearance: 0.25) {
                 kit.roofHead(at: head, axis: inner.axis, z0: deck, into: &mesh)
             }
         }

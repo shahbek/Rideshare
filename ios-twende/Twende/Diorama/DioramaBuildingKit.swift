@@ -127,10 +127,13 @@ nonisolated struct DioramaBuildingKit {
         mesh.facadeBox(a: a, dir: dir, out: out, u: u, width: width + frame * 2, z0: z1, z1: z1 + frame * 1.2, depth: projection * 1.2, .frame)
         mesh.facadeBox(a: a, dir: dir, out: out, u: u, width: 0.085 * detail, z0: z0, z1: z1, depth: -0.10, .frame, sides: false)
         if hasGrille {
-            for fraction in [-0.3, 0.3] {
-                mesh.facadeBox(a: a, dir: dir, out: out, u: u + width * fraction, width: 0.05, z0: z0, z1: z1, depth: -0.035, .metalCharcoal, sides: false)
+            // Welded burglar bars, as on nearly every Dar ground and first floor: five uprights, two rails.
+            for fraction in [-0.33, -0.165, 0.0, 0.165, 0.33] {
+                mesh.facadeBox(a: a, dir: dir, out: out, u: u + width * fraction, width: 0.035, z0: z0, z1: z1, depth: -0.035, .metalCharcoal, sides: false)
             }
-            mesh.facadeBox(a: a, dir: dir, out: out, u: u, width: width, z0: z0 + (z1 - z0) * 0.45, z1: z0 + (z1 - z0) * 0.45 + 0.05, depth: -0.03, .metalCharcoal, sides: false)
+            for level in [0.33, 0.66] {
+                mesh.facadeBox(a: a, dir: dir, out: out, u: u, width: width, z0: z0 + (z1 - z0) * level, z1: z0 + (z1 - z0) * level + 0.035, depth: -0.03, .metalCharcoal, sides: false)
+            }
         }
         mesh.facadeBox(a: a, dir: dir, out: out, u: u, width: width + frame * 2, z0: z0 - frame * 1.1, z1: z0, depth: projection * 1.6, .trimWhite)
     }
@@ -140,6 +143,11 @@ nonisolated struct DioramaBuildingKit {
               kind: DioramaBuildingKind, covered: Bool, into mesh: inout DioramaMesh) {
         reveal(a: a, dir: dir, out: out, u: u, width: width, z0: bottom, z1: top, into: &mesh)
         mesh.facadeBox(a: a, dir: dir, out: out, u: u, width: width, z0: bottom, z1: top, depth: -0.19, kind == .villa ? .doorWood : .glass, sides: false)
+        if kind == .villa {
+            // Paired leaves with a glazed fanlight over them.
+            mesh.facadeBox(a: a, dir: dir, out: out, u: u, width: 0.04, z0: bottom, z1: top - 0.45, depth: -0.17, .frame, sides: false)
+            mesh.facadeBox(a: a, dir: dir, out: out, u: u, width: width - 0.1, z0: top - 0.42, z1: top - 0.06, depth: -0.18, .glass, sides: false)
+        }
         mesh.facadeBox(a: a, dir: dir, out: out, u: u + width * 0.3, width: 0.05 * detail, z0: bottom + 0.75, z1: bottom + 1.02, depth: -0.16, .metalCharcoal, sides: false)
         guard !covered else { return }
         mesh.facadeBox(a: a, dir: dir, out: out, u: u, width: width + 0.5 * detail, z0: top + 0.1, z1: top + 0.26 * detail, depth: 0.8 * detail, .concrete)
@@ -232,15 +240,20 @@ nonisolated struct DioramaBuildingKit {
             mesh.architecturalInstance(prototype, .init(translation: DV3(p, z0)))
             return
         }
-        let radius = 0.62 * detail, height = 1.3 * detail
-        mesh.box(centre: p, z0: z0, axis: DV2(1, 0), halfLength: radius * 1.1, halfWidth: radius * 1.1, height: 0.2, .trimWhite, bevel: 0.03)
-        let base = DV3(p, z0 + 0.2)
-        mesh.tube(from: base, to: base + DV3(0, 0, height), r0: radius, r1: radius, sides: 14, color, cap: false)
-        mesh.tube(from: base + DV3(0, 0, height), to: base + DV3(0, 0, height + radius * 0.35), r0: radius, r1: radius * 0.3, sides: 14, color)
+        DarArchitecturalKit.tank(at: p, bottom: z0, color: color, into: &mesh)
     }
 
     /// Stair head / lift motor room on apartment roofs.
     func roofHead(at p: DV2, axis: DV2, z0: Double, into mesh: inout DioramaMesh) {
-        mesh.box(centre: p, z0: z0, axis: axis, halfLength: 1.4, halfWidth: 1.1, height: 2.3, .trimWhite, top: .roofConcrete, bevel: config.bevel)
+        let ring = DarArchitecturalKit.roundedPlan(.init(centre: p, axis: axis, halfLength: 1.4, halfWidth: 1.1), radius: 0.38)
+        DarArchitecturalKit.solid(ring, bottom: z0, top: z0 + 2.3, shoulder: 0.24, color: .trimWhite, into: &mesh)
+        let front = p - axis.left * 1.1
+        mesh.facadeBox(a: front, dir: axis, out: -axis.left, u: 0, width: 0.75,
+            z0: z0 + 0.05, z1: z0 + 1.85, depth: 0.012, .doorWood, sides: false)
+        for row in 0..<4 {
+            mesh.facadeBox(a: front, dir: axis, out: -axis.left, u: 0.8, width: 0.4,
+                z0: z0 + 1.4 + Double(row) * 0.13, z1: z0 + 1.45 + Double(row) * 0.13,
+                depth: 0.018, .metalCharcoal, sides: false)
+        }
     }
 }

@@ -33,6 +33,8 @@ nonisolated enum DioramaSwatch: Int, CaseIterable, Sendable {
     // Emissive (night) colours
     case windowGlow, lampGlow, kioskGlow, shopGlow
     case naturalEarth, seaCliffRoof
+    // Dar district styles (skyline research): stone-coated/painted mabati roofs, Kisutu renders and trim
+    case roofMaroon, roofCharcoal, mabatiGrey, salmonRender, paleBlueRender, kisutuTeal
 
     /// Fixed palette. Never random RGB.
     static let defaultPalette: [DioramaSwatch: UInt32] = [
@@ -49,6 +51,8 @@ nonisolated enum DioramaSwatch: Int, CaseIterable, Sendable {
         .tankBlack: 0x232427, .tankBlue: 0x2B5FA8, .dishWhite: 0xECECEC, .solarNavy: 0x1F2E4E,
         .grass: 0x83AD32, .courtyard: 0xE7D9C6, .deck: 0xB98E62, .earth: 0xE3D3B2, .seabed: 0xB7A77F, .sea: 0x2E8FA3, .painted: 0xFFFFFF,
         .naturalEarth: 0xB3987A, .seaCliffRoof: 0x665A55,
+        .roofMaroon: 0x7B2D26, .roofCharcoal: 0x3E3E40, .mabatiGrey: 0x9AA0A3,
+        .salmonRender: 0xD9967A, .paleBlueRender: 0xB9C6CF, .kisutuTeal: 0x2E8A9A,
         .wetSand: 0xB7A77F, .dampStone: 0x817866, .algaeStone: 0x667B62,
         .rockWarm: 0xB6A485, .rockGrey: 0x8E9188, .rockPale: 0xC9C2B6, .seaweed: 0x6B7352,
         .asphalt: 0x5C4A58, .roadEarth: 0xC19466, .pavement: 0xEBDCD2, .kerb: 0xF6EFE8, .marking: 0xFAF4E8, .crossing: 0xFFFBF2, .parkEdge: 0xD9CBB4,
@@ -132,14 +136,20 @@ nonisolated struct DioramaConfig: Sendable {
     var terrainRelief: Double = 0.75
     /// Tiles share a continuous elevation field; boundaries are not valleys.
     var terrainEdgeEase: Double = 0
-    /// Side of the painted ground image (pixels). 4096 over a ~600 m tile is about 15 cm per pixel.
-    var groundImageSize: Int = 4096
-    var reducedGroundImageSize: Int = 2048
+    /// Side of the painted ground image (pixels). With `vectorFinishes` the raster only carries natural
+    /// ground (grass, lawn, sand, soil); 1024 over a ~611 m tile is about 60 cm per pixel, softened by
+    /// the shader's organic boundary warp. Roads, pavements, paving and car parks are exact vector
+    /// layers at any zoom. Packages saved before this were 4096/2048 and stay readable.
+    var groundImageSize: Int = 1024
+    var reducedGroundImageSize: Int = 512
+    /// Hard finishes as analytic vector layers instead of raster paint (compact tiles).
+    var vectorFinishes: Bool = true
 
     // MARK: Tile
     var tileZoom: Int = 16
     var minimumZoom: Double = 15.5
-    var fullDetailMinimumZoom: Double = 17.5
+    /// HD from medium zoom: the tile under the camera focus plus its closest visible neighbours.
+    var fullDetailMinimumZoom: Double = 16.0
     /// The Slipway, Msasani peninsula: one z16 tile (about 600 m across) holding the Slipway complex,
     /// the DoubleTree, Slipway Villas and the bay. Data comes from the bundled `slipway_tile.json`.
     var seedLatitude: Double = -6.7546
@@ -180,7 +190,7 @@ nonisolated struct DioramaConfig: Sendable {
     // MARK: Post-processing
     var ambientOcclusionStrength: Float = 0.8
     var ambientOcclusionRadius: Float = 1.6
-    var bloomStrength: Float = 0.55
+    var bloomStrength: Float = 0.4
     /// Fraction of the final colour pulled towards the warm-violet grade.
     var gradeStrength: Float = 0.035
     /// Haze per metre of distance from the eye (exponential).

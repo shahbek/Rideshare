@@ -1,0 +1,5100 @@
+{
+ "source": "OpenStreetMap ways (ODbL), building:levels >= 10 in the harbour tiles and >= 8 on the Masaki peninsula; existing bespoke landmarks excluded",
+ "architecturePolicy": "Revision 4: source names, footprints, levels and heights retained. Historical family/description/crown fields below are NOT current architectural authority. Every site now uses its explicit address-keyed composition from dar_skyline_compositions.json: occupied lower/tall wings, supported setbacks, distinct front/side physical sections and roof treatments. No seeded family selection for major towers. Individually inspected hotel exteriors and provisional Faykat match are recorded separately from inferred skyline compositions; do not claim 70 verified replicas. No service fencing or automatic tank clusters. Saved-tile bake only, with unchanged 40k/finite/footprint/height checks and bespoke landmarks/downloads.",
+ "sites": [
+  {
+   "id": "sky-1210681032",
+   "osm": 1210681032,
+   "name": "Msasani Tower",
+   "levels": 9,
+   "height": 31.0,
+   "district": "masaki",
+   "style": "ribbon",
+   "wall": "#F1EEE6",
+   "accent": "#9AA3A8",
+   "glass": "#3B5F78",
+   "roof": "flat",
+   "crown": "plant",
+   "balconies": "none",
+   "description": "Msasani Tower: a 9-storey white office block wrapped in deep horizontal spandrel bands with continuous blue-grey ribbon windows and a screened rooftop plant room.",
+   "confidence": "named, facade inferred from district references",
+   "ring": [
+    [
+     39.2709207,
+     -6.7689155
+    ],
+    [
+     39.2709538,
+     -6.7688747
+    ],
+    [
+     39.2709326,
+     -6.7688516
+    ],
+    [
+     39.2707706,
+     -6.7688869
+    ],
+    [
+     39.2707601,
+     -6.7686536
+    ],
+    [
+     39.2707647,
+     -6.7686429
+    ],
+    [
+     39.2707803,
+     -6.7686269
+    ],
+    [
+     39.2708157,
+     -6.7686041
+    ],
+    [
+     39.2708476,
+     -6.7685908
+    ],
+    [
+     39.2709979,
+     -6.7685907
+    ],
+    [
+     39.2709957,
+     -6.7686107
+    ],
+    [
+     39.2711201,
+     -6.7686056
+    ],
+    [
+     39.2711228,
+     -6.7687208
+    ],
+    [
+     39.2710349,
+     -6.7687258
+    ],
+    [
+     39.2709973,
+     -6.7687661
+    ],
+    [
+     39.2710201,
+     -6.7687994
+    ],
+    [
+     39.2710741,
+     -6.7687534
+    ],
+    [
+     39.2711603,
+     -6.7688621
+    ],
+    [
+     39.2711476,
+     -6.7689038
+    ],
+    [
+     39.2711583,
+     -6.7689051
+    ],
+    [
+     39.2711612,
+     -6.7690621
+    ],
+    [
+     39.2710535,
+     -6.7690842
+    ],
+    [
+     39.2710381,
+     -6.769003
+    ],
+    [
+     39.2710218,
+     -6.7690084
+    ],
+    [
+     39.2709207,
+     -6.7689155
+    ]
+   ]
+  },
+  {
+   "id": "sky-1247739447",
+   "osm": 1247739447,
+   "name": null,
+   "levels": 9,
+   "height": 29.4,
+   "district": "masaki",
+   "style": "coastal",
+   "wall": "#EEF0EE",
+   "accent": "#C9CDC9",
+   "glass": "#3A4A55",
+   "roof": "flat",
+   "crown": "pergola",
+   "balconies": "wrap",
+   "description": "Oyster Bay Oyster Bay apartment block on Kimweri Avenue: a 9-storey cool white apartment block with wrap-around balcony slabs and glass rails, dark sliding glazing and a rooftop pergola and stair towers.",
+   "confidence": "district style family; individual facade unverified",
+   "ring": [
+    [
+     39.2720809,
+     -6.7578428
+    ],
+    [
+     39.2722563,
+     -6.7579368
+    ],
+    [
+     39.2721491,
+     -6.7581341
+    ],
+    [
+     39.2719737,
+     -6.7580401
+    ],
+    [
+     39.2720809,
+     -6.7578428
+    ]
+   ]
+  },
+  {
+   "id": "sky-1455750056",
+   "osm": 1455750056,
+   "name": null,
+   "levels": 8,
+   "height": 27.7,
+   "district": "masaki",
+   "style": "ribbon",
+   "wall": "#EDEBE5",
+   "accent": "#7A8288",
+   "glass": "#3C5568",
+   "roof": "flat",
+   "crown": "plant",
+   "balconies": "none",
+   "description": "Oyster Bay office (8 storeys, 3,170 m\u00b2): a deep white floorplate with grey spandrel ribbons, dark glazing and a rooftop plant enclosure.",
+   "confidence": "OSM-tagged form, facade inferred",
+   "ring": [
+    [
+     39.2752826,
+     -6.768745
+    ],
+    [
+     39.2753185,
+     -6.7689111
+    ],
+    [
+     39.2753475,
+     -6.7690521
+    ],
+    [
+     39.2753835,
+     -6.7692186
+    ],
+    [
+     39.2760037,
+     -6.7690863
+    ],
+    [
+     39.2759709,
+     -6.7689345
+    ],
+    [
+     39.275678,
+     -6.768997
+    ],
+    [
+     39.2756441,
+     -6.7688401
+    ],
+    [
+     39.2759433,
+     -6.7687762
+    ],
+    [
+     39.2759077,
+     -6.7686117
+    ],
+    [
+     39.2752826,
+     -6.768745
+    ]
+   ]
+  },
+  {
+   "id": "sky-169846957",
+   "osm": 169846957,
+   "name": null,
+   "levels": 9,
+   "height": 29.4,
+   "district": "masaki",
+   "style": "coastal",
+   "wall": "#EEF0EE",
+   "accent": "#C9CDC9",
+   "glass": "#3A4A55",
+   "roof": "flat",
+   "crown": "pergola",
+   "balconies": "wrap",
+   "description": "Oyster Bay Oyster Bay apartment block on Oysterbay: a 9-storey cool white apartment block with wrap-around balcony slabs and glass rails, dark sliding glazing and a rooftop pergola and stair towers.",
+   "confidence": "district style family; individual facade unverified",
+   "ring": [
+    [
+     39.2779819,
+     -6.7611848
+    ],
+    [
+     39.2781383,
+     -6.7613416
+    ],
+    [
+     39.2778337,
+     -6.7616412
+    ],
+    [
+     39.2776773,
+     -6.7614845
+    ],
+    [
+     39.2779819,
+     -6.7611848
+    ]
+   ]
+  },
+  {
+   "id": "sky-169846959",
+   "osm": 169846959,
+   "name": null,
+   "levels": 9,
+   "height": 29.4,
+   "district": "masaki",
+   "style": "coastal",
+   "wall": "#EFE6D6",
+   "accent": "#D5C7AE",
+   "glass": "#3A4A55",
+   "roof": "teal",
+   "crown": "hip",
+   "balconies": "front",
+   "description": "Oyster Bay Oyster Bay apartment block on Oysterbay: a 9-storey cream apartment block with stacked sea-facing balconies, dark sliding glazing and a teal standing-seam metal hip roof.",
+   "confidence": "district style family; individual facade unverified",
+   "ring": [
+    [
+     39.2784315,
+     -6.7616347
+    ],
+    [
+     39.2781272,
+     -6.7619383
+    ],
+    [
+     39.2779699,
+     -6.7617828
+    ],
+    [
+     39.2782742,
+     -6.7614792
+    ],
+    [
+     39.2783504,
+     -6.7615545
+    ],
+    [
+     39.2784315,
+     -6.7616347
+    ]
+   ]
+  },
+  {
+   "id": "sky-180786885",
+   "osm": 180786885,
+   "name": null,
+   "levels": 12,
+   "height": 40.9,
+   "district": "city",
+   "style": "glass",
+   "wall": "#D3D7D8",
+   "accent": "#BFCBCB",
+   "glass": "#3E6F8E",
+   "roof": "flat",
+   "crown": "frame",
+   "balconies": "none",
+   "description": "Bridge Street apartments (12 storeys, OSM: glass): blue reflective glazing between pale-grey piers, topped by an open crown frame.",
+   "confidence": "OSM-tagged form, facade inferred",
+   "ring": [
+    [
+     39.2867414,
+     -6.8176049
+    ],
+    [
+     39.2864486,
+     -6.817362
+    ],
+    [
+     39.2864729,
+     -6.8173331
+    ],
+    [
+     39.2867387,
+     -6.8172837
+    ],
+    [
+     39.2867584,
+     -6.8173769
+    ],
+    [
+     39.2867506,
+     -6.8174244
+    ],
+    [
+     39.2867607,
+     -6.8174357
+    ],
+    [
+     39.2867305,
+     -6.8174693
+    ],
+    [
+     39.2868057,
+     -6.8175332
+    ],
+    [
+     39.2867414,
+     -6.8176049
+    ]
+   ]
+  },
+  {
+   "id": "sky-362041329",
+   "osm": 362041329,
+   "name": null,
+   "levels": 9,
+   "height": 29.4,
+   "district": "masaki",
+   "style": "coastal",
+   "wall": "#EEF0EE",
+   "accent": "#C9CDC9",
+   "glass": "#3A4A55",
+   "roof": "terracotta",
+   "crown": "hip",
+   "balconies": "front",
+   "description": "Oyster Bay Oyster Bay apartment block on Bonde La Mpunga: a 9-storey cool white apartment block with stacked sea-facing balconies, dark sliding glazing and a terracotta hip roof.",
+   "confidence": "district style family; individual facade unverified",
+   "ring": [
+    [
+     39.2708807,
+     -6.7595414
+    ],
+    [
+     39.2708321,
+     -6.7596324
+    ],
+    [
+     39.2709289,
+     -6.7596834
+    ],
+    [
+     39.2709384,
+     -6.7596884
+    ],
+    [
+     39.2710271,
+     -6.7597352
+    ],
+    [
+     39.2711318,
+     -6.7595391
+    ],
+    [
+     39.2710907,
+     -6.7595175
+    ],
+    [
+     39.2711105,
+     -6.7594804
+    ],
+    [
+     39.2709518,
+     -6.7593967
+    ],
+    [
+     39.2709058,
+     -6.7594826
+    ],
+    [
+     39.2709746,
+     -6.7595189
+    ],
+    [
+     39.2709446,
+     -6.7595751
+    ],
+    [
+     39.2708807,
+     -6.7595414
+    ]
+   ]
+  },
+  {
+   "id": "sky-362921855",
+   "osm": 362921855,
+   "name": "Sea Breeze Apartments",
+   "levels": 8,
+   "height": 26.3,
+   "district": "masaki",
+   "style": "coastal",
+   "wall": "#F4F1EA",
+   "accent": "#CFC8BC",
+   "glass": "#33434D",
+   "roof": "flat",
+   "crown": "pergola",
+   "balconies": "front",
+   "description": "Sea Breeze Apartments: an 8-storey white apartment slab with deep recessed sea-facing balconies, white rooftop stair towers and clustered water tanks.",
+   "confidence": "named, facade inferred from district references",
+   "ring": [
+    [
+     39.2728191,
+     -6.7493476
+    ],
+    [
+     39.272854,
+     -6.7493078
+    ],
+    [
+     39.2728605,
+     -6.7493114
+    ],
+    [
+     39.2728665,
+     -6.7493131
+    ],
+    [
+     39.2728727,
+     -6.7493129
+    ],
+    [
+     39.2728769,
+     -6.7493114
+    ],
+    [
+     39.2729167,
+     -6.7493415
+    ],
+    [
+     39.272925,
+     -6.7493408
+    ],
+    [
+     39.2729309,
+     -6.7493413
+    ],
+    [
+     39.2729351,
+     -6.7493448
+    ],
+    [
+     39.2729393,
+     -6.7493523
+    ],
+    [
+     39.2729401,
+     -6.7493618
+    ],
+    [
+     39.272967,
+     -6.7493801
+    ],
+    [
+     39.27299,
+     -6.7493898
+    ],
+    [
+     39.2729956,
+     -6.7493958
+    ],
+    [
+     39.2729971,
+     -6.7494048
+    ],
+    [
+     39.2729968,
+     -6.7494134
+    ],
+    [
+     39.2729928,
+     -6.7494201
+    ],
+    [
+     39.2729931,
+     -6.7494291
+    ],
+    [
+     39.2730085,
+     -6.7494268
+    ],
+    [
+     39.2730126,
+     -6.7494827
+    ],
+    [
+     39.2729894,
+     -6.7494854
+    ],
+    [
+     39.272983,
+     -6.7494899
+    ],
+    [
+     39.2729814,
+     -6.7494973
+    ],
+    [
+     39.2729844,
+     -6.749506
+    ],
+    [
+     39.2729834,
+     -6.7495157
+    ],
+    [
+     39.2729806,
+     -6.7495211
+    ],
+    [
+     39.2729566,
+     -6.7495486
+    ],
+    [
+     39.2729578,
+     -6.7495535
+    ],
+    [
+     39.2729577,
+     -6.7495579
+    ],
+    [
+     39.2729544,
+     -6.7495651
+    ],
+    [
+     39.2729473,
+     -6.7495694
+    ],
+    [
+     39.2729388,
+     -6.7495693
+    ],
+    [
+     39.2729033,
+     -6.7496119
+    ],
+    [
+     39.272878,
+     -6.7496169
+    ],
+    [
+     39.2728402,
+     -6.7495822
+    ],
+    [
+     39.2728392,
+     -6.7495704
+    ],
+    [
+     39.2728787,
+     -6.7495241
+    ],
+    [
+     39.2728813,
+     -6.7495163
+    ],
+    [
+     39.2728811,
+     -6.749508
+    ],
+    [
+     39.2728778,
+     -6.7495005
+    ],
+    [
+     39.2728774,
+     -6.7494938
+    ],
+    [
+     39.2728779,
+     -6.7494842
+    ],
+    [
+     39.2728761,
+     -6.7494757
+    ],
+    [
+     39.2728731,
+     -6.7494679
+    ],
+    [
+     39.2728722,
+     -6.7494612
+    ],
+    [
+     39.2728736,
+     -6.7494521
+    ],
+    [
+     39.2728737,
+     -6.7494441
+    ],
+    [
+     39.2728707,
+     -6.7494336
+    ],
+    [
+     39.2728696,
+     -6.7494274
+    ],
+    [
+     39.2728699,
+     -6.7494223
+    ],
+    [
+     39.2728718,
+     -6.7494108
+    ],
+    [
+     39.2728723,
+     -6.7494074
+    ],
+    [
+     39.2728717,
+     -6.7494029
+    ],
+    [
+     39.2728687,
+     -6.7493983
+    ],
+    [
+     39.2728201,
+     -6.7493582
+    ],
+    [
+     39.2728191,
+     -6.7493476
+    ]
+   ]
+  },
+  {
+   "id": "sky-364152051",
+   "osm": 364152051,
+   "name": "faykate tower",
+   "levels": 14,
+   "height": 47.5,
+   "district": "masaki",
+   "style": "glass",
+   "wall": "#D9CDB6",
+   "accent": "#BFCBCB",
+   "glass": "#3E6F8E",
+   "roof": "flat",
+   "crown": "frame",
+   "balconies": "none",
+   "description": "Faykate Tower on Ali Hassan Mwinyi Road: a 14-storey commercial block with blue reflective glazing between sandstone-coloured corner piers, a two-storey glazed shop podium and an open crown frame carrying a rooftop mast.",
+   "confidence": "named, facade inferred from district references",
+   "ring": [
+    [
+     39.2661881,
+     -6.7775733
+    ],
+    [
+     39.2661649,
+     -6.7778067
+    ],
+    [
+     39.2661176,
+     -6.7778059
+    ],
+    [
+     39.2661182,
+     -6.7777935
+    ],
+    [
+     39.265736,
+     -6.7777512
+    ],
+    [
+     39.2657359,
+     -6.7777559
+    ],
+    [
+     39.2656951,
+     -6.7777557
+    ],
+    [
+     39.2657155,
+     -6.7775145
+    ],
+    [
+     39.2658264,
+     -6.7775233
+    ],
+    [
+     39.2658274,
+     -6.7775184
+    ],
+    [
+     39.2658673,
+     -6.7775102
+    ],
+    [
+     39.2659065,
+     -6.7775077
+    ],
+    [
+     39.265943,
+     -6.7775089
+    ],
+    [
+     39.2659912,
+     -6.7775125
+    ],
+    [
+     39.2660371,
+     -6.7775267
+    ],
+    [
+     39.2660373,
+     -6.7775323
+    ],
+    [
+     39.2661881,
+     -6.7775733
+    ]
+   ]
+  },
+  {
+   "id": "sky-368439335",
+   "osm": 368439335,
+   "name": "Tiffany Diamond Hotel",
+   "levels": 11,
+   "height": 35.6,
+   "district": "city",
+   "style": "kisutu",
+   "wall": "#EFE7D6",
+   "accent": "#2F6F73",
+   "glass": "#3E6E8E",
+   "roof": "flat",
+   "crown": "sign",
+   "balconies": "front",
+   "description": "Tiffany Diamond Hotel on Jamhuri Street: an 11-storey cream hotel tower with stacked balconies, a teal vertical stair strip, blue glazed windows and a rooftop sign frame.",
+   "confidence": "named, facade inferred from district references",
+   "ring": [
+    [
+     39.2841367,
+     -6.8182588
+    ],
+    [
+     39.2842108,
+     -6.818137
+    ],
+    [
+     39.2842945,
+     -6.8181874
+    ],
+    [
+     39.2843027,
+     -6.8181758
+    ],
+    [
+     39.28438,
+     -6.8182315
+    ],
+    [
+     39.2844205,
+     -6.81817
+    ],
+    [
+     39.2845308,
+     -6.8182689
+    ],
+    [
+     39.2843849,
+     -6.8184123
+    ],
+    [
+     39.2841367,
+     -6.8182588
+    ]
+   ]
+  },
+  {
+   "id": "sky-368439357",
+   "osm": 368439357,
+   "name": "Tayyab Manzir",
+   "levels": 13,
+   "height": 41.8,
+   "district": "city",
+   "style": "kisutu",
+   "wall": "#E6C9B8",
+   "accent": "#7A2E2E",
+   "glass": "#3E5566",
+   "roof": "flat",
+   "crown": "tanks",
+   "balconies": "front",
+   "description": "Tayyab Manzir on India Street: a 13-storey dusty-pink residential tower with maroon accents, AC-lined balconies and roof tanks.",
+   "confidence": "named, facade inferred from district references",
+   "ring": [
+    [
+     39.2858235,
+     -6.8178948
+    ],
+    [
+     39.2858979,
+     -6.8178172
+    ],
+    [
+     39.2859733,
+     -6.8178885
+    ],
+    [
+     39.2859843,
+     -6.8178771
+    ],
+    [
+     39.2860397,
+     -6.8179294
+    ],
+    [
+     39.2860215,
+     -6.8179484
+    ],
+    [
+     39.2860337,
+     -6.8179599
+    ],
+    [
+     39.2860159,
+     -6.8179785
+    ],
+    [
+     39.2860152,
+     -6.8179778
+    ],
+    [
+     39.2859696,
+     -6.8180253
+    ],
+    [
+     39.2859543,
+     -6.8180109
+    ],
+    [
+     39.2859415,
+     -6.8180243
+    ],
+    [
+     39.2859087,
+     -6.8179933
+    ],
+    [
+     39.2859162,
+     -6.8179855
+    ],
+    [
+     39.2858908,
+     -6.8179616
+    ],
+    [
+     39.285886,
+     -6.8179666
+    ],
+    [
+     39.285865,
+     -6.8179468
+    ],
+    [
+     39.2858718,
+     -6.8179397
+    ],
+    [
+     39.2858472,
+     -6.8179166
+    ],
+    [
+     39.2858426,
+     -6.8179214
+    ],
+    [
+     39.2858295,
+     -6.817909
+    ],
+    [
+     39.2858338,
+     -6.8179046
+    ],
+    [
+     39.2858235,
+     -6.8178948
+    ]
+   ]
+  },
+  {
+   "id": "sky-368439379",
+   "osm": 368439379,
+   "name": "Khan",
+   "levels": 11,
+   "height": 37.6,
+   "district": "city",
+   "style": "modernist",
+   "wall": "#DCD2BF",
+   "accent": "#9A8F80",
+   "glass": "#30383C",
+   "roof": "flat",
+   "crown": "castellated",
+   "balconies": "none",
+   "description": "Khan on India Street: a 11-storey modernist concrete frame grid with deep floor ledges and vertical fins over recessed dark glazing, and a castellated parapet.",
+   "confidence": "district style family; individual facade unverified",
+   "ring": [
+    [
+     39.2861041,
+     -6.817746
+    ],
+    [
+     39.2861656,
+     -6.8176178
+    ],
+    [
+     39.2863168,
+     -6.817685
+    ],
+    [
+     39.2862976,
+     -6.8177157
+    ],
+    [
+     39.2862,
+     -6.8177964
+    ],
+    [
+     39.2861041,
+     -6.817746
+    ]
+   ]
+  },
+  {
+   "id": "sky-368439382",
+   "osm": 368439382,
+   "name": "Tanzanite Executive Suites",
+   "levels": 10,
+   "height": 34.3,
+   "district": "city",
+   "style": "glass",
+   "wall": "#C9CDD0",
+   "accent": "#9FB0B5",
+   "glass": "#2F5F86",
+   "roof": "flat",
+   "crown": "fins",
+   "balconies": "none",
+   "description": "Tanzanite Executive Suites (Jamhuri Street, OSM: glass): a 10-storey blue curtain-wall hotel slab with vertical silver mullion fins and a finned crown.",
+   "confidence": "named, facade inferred from district references",
+   "ring": [
+    [
+     39.2841086,
+     -6.8178912
+    ],
+    [
+     39.2842507,
+     -6.8179999
+    ],
+    [
+     39.2842204,
+     -6.8180381
+    ],
+    [
+     39.2842308,
+     -6.8180463
+    ],
+    [
+     39.2841281,
+     -6.8181756
+    ],
+    [
+     39.2841312,
+     -6.818178
+    ],
+    [
+     39.2840789,
+     -6.8182437
+    ],
+    [
+     39.2838889,
+     -6.8181313
+    ],
+    [
+     39.2841086,
+     -6.8178912
+    ]
+   ]
+  },
+  {
+   "id": "sky-368439416",
+   "osm": 368439416,
+   "name": "Zahra Tower",
+   "levels": 10,
+   "height": 32.5,
+   "district": "city",
+   "style": "kisutu",
+   "wall": "#B8CAD4",
+   "accent": "#2D4E6E",
+   "glass": "#2F4F6E",
+   "roof": "flat",
+   "crown": "lattice",
+   "balconies": "front",
+   "description": "Zahra Tower on Makunganya Street: a 10-storey pale blue-grey tower with decorative grille panels, navy accents and stacked balconies.",
+   "confidence": "named, facade inferred from district references",
+   "ring": [
+    [
+     39.2856646,
+     -6.8171992
+    ],
+    [
+     39.2856669,
+     -6.817212
+    ],
+    [
+     39.285692,
+     -6.8172076
+    ],
+    [
+     39.2856968,
+     -6.8172347
+    ],
+    [
+     39.2857068,
+     -6.8172329
+    ],
+    [
+     39.2857274,
+     -6.817349
+    ],
+    [
+     39.2854857,
+     -6.8173913
+    ],
+    [
+     39.2854663,
+     -6.8172818
+    ],
+    [
+     39.2854951,
+     -6.8172767
+    ],
+    [
+     39.2854913,
+     -6.8172551
+    ],
+    [
+     39.2855016,
+     -6.8172533
+    ],
+    [
+     39.2854978,
+     -6.8172318
+    ],
+    [
+     39.285492,
+     -6.8172328
+    ],
+    [
+     39.2854846,
+     -6.8171915
+    ],
+    [
+     39.2856508,
+     -6.8171625
+    ],
+    [
+     39.2856576,
+     -6.8172004
+    ],
+    [
+     39.2856646,
+     -6.8171992
+    ]
+   ]
+  },
+  {
+   "id": "sky-368439427",
+   "osm": 368439427,
+   "name": null,
+   "levels": 12,
+   "height": 38.7,
+   "district": "city",
+   "style": "kisutu",
+   "wall": "#F1EEE6",
+   "accent": "#8E1F2B",
+   "glass": "#3E5566",
+   "roof": "flat",
+   "crown": "tanks",
+   "balconies": "front",
+   "description": "Kisutu Kisutu balcony tower: a 12-storey white render tower with a maroon vertical stair strip, eyebrow window hoods, stacked street-facing balconies, AC units and a roof crowded with black water tanks.",
+   "confidence": "district style family; individual facade unverified",
+   "ring": [
+    [
+     39.28617,
+     -6.8175869
+    ],
+    [
+     39.286231,
+     -6.8174617
+    ],
+    [
+     39.2863234,
+     -6.8174363
+    ],
+    [
+     39.286453,
+     -6.8175563
+    ],
+    [
+     39.2863763,
+     -6.817629
+    ],
+    [
+     39.2863208,
+     -6.8175774
+    ],
+    [
+     39.2863025,
+     -6.8176106
+    ],
+    [
+     39.2862913,
+     -6.8176057
+    ],
+    [
+     39.2862752,
+     -6.8176389
+    ],
+    [
+     39.28617,
+     -6.8175869
+    ]
+   ]
+  },
+  {
+   "id": "sky-368489092",
+   "osm": 368489092,
+   "name": "DIGITAL PLANET",
+   "levels": 10,
+   "height": 34.3,
+   "district": "city",
+   "style": "modernist",
+   "wall": "#DCD2BF",
+   "accent": "#9A8F80",
+   "glass": "#30383C",
+   "roof": "flat",
+   "crown": "tanks",
+   "balconies": "none",
+   "description": "DIGITAL PLANET on Jamhuri Street: a 10-storey modernist concrete frame grid with deep floor ledges and vertical fins over recessed dark glazing, and a roof crowded with black water tanks.",
+   "confidence": "district style family; individual facade unverified",
+   "ring": [
+    [
+     39.2835631,
+     -6.8172487
+    ],
+    [
+     39.2836086,
+     -6.8171894
+    ],
+    [
+     39.2836985,
+     -6.8172247
+    ],
+    [
+     39.2836776,
+     -6.8173068
+    ],
+    [
+     39.2836884,
+     -6.8173134
+    ],
+    [
+     39.283672,
+     -6.8173359
+    ],
+    [
+     39.2835631,
+     -6.8172487
+    ]
+   ]
+  },
+  {
+   "id": "sky-368493342",
+   "osm": 368493342,
+   "name": "Exim Bank",
+   "levels": 12,
+   "height": 40.9,
+   "district": "city",
+   "style": "glass",
+   "wall": "#DCD6CA",
+   "accent": "#BFCBCB",
+   "glass": "#4F7D74",
+   "roof": "flat",
+   "crown": "frame",
+   "balconies": "none",
+   "description": "Exim Bank on Jamhuri Street: a 12-storey corporate tower with green reflective glazing, silver aluminium-panel corner piers and an open crown frame.",
+   "confidence": "named, facade inferred from district references",
+   "ring": [
+    [
+     39.2824701,
+     -6.8172093
+    ],
+    [
+     39.2826772,
+     -6.8168637
+    ],
+    [
+     39.2828965,
+     -6.8169932
+    ],
+    [
+     39.2826646,
+     -6.8173803
+    ],
+    [
+     39.2824802,
+     -6.8172714
+    ],
+    [
+     39.282505,
+     -6.81723
+    ],
+    [
+     39.2824701,
+     -6.8172093
+    ]
+   ]
+  },
+  {
+   "id": "sky-368498138",
+   "osm": 368498138,
+   "name": "Hotel Nikko Tower",
+   "levels": 10,
+   "height": 34.3,
+   "district": "city",
+   "style": "glass",
+   "wall": "#BFC4C6",
+   "accent": "#9FA6AA",
+   "glass": "#7E8E95",
+   "roof": "flat",
+   "crown": "fins",
+   "balconies": "none",
+   "description": "Hotel Nikko Tower on Aggrey Street (OSM: metal): a slim 10-storey tower clad in silver aluminium composite panels with silver-grey glazing and a finned top.",
+   "confidence": "named, facade inferred from district references",
+   "ring": [
+    [
+     39.2825185,
+     -6.8200368
+    ],
+    [
+     39.2825962,
+     -6.8200456
+    ],
+    [
+     39.2825774,
+     -6.8202105
+    ],
+    [
+     39.2824897,
+     -6.8202007
+    ],
+    [
+     39.2825021,
+     -6.8200921
+    ],
+    [
+     39.2825121,
+     -6.8200932
+    ],
+    [
+     39.2825185,
+     -6.8200368
+    ]
+   ]
+  },
+  {
+   "id": "sky-368503315",
+   "osm": 368503315,
+   "name": null,
+   "levels": 13,
+   "height": 41.8,
+   "district": "city",
+   "style": "tiled",
+   "wall": "#CFCFCB",
+   "accent": "#7A2E2E",
+   "glass": "#6E5C45",
+   "roof": "flat",
+   "crown": "frame",
+   "balconies": "none",
+   "description": "Kisutu tile-clad slab on Kitumbini Street: a 13-storey light-grey tile block with maroon tile bands at every floor, wide white-framed windows, AC units and an open crown frame.",
+   "confidence": "district style family; individual facade unverified",
+   "ring": [
+    [
+     39.2827803,
+     -6.819218
+    ],
+    [
+     39.2827976,
+     -6.8191829
+    ],
+    [
+     39.2827637,
+     -6.819165
+    ],
+    [
+     39.2827735,
+     -6.8191521
+    ],
+    [
+     39.2827853,
+     -6.8191456
+    ],
+    [
+     39.2827947,
+     -6.8191425
+    ],
+    [
+     39.2828065,
+     -6.8191432
+    ],
+    [
+     39.2829315,
+     -6.8192055
+    ],
+    [
+     39.2828914,
+     -6.8192821
+    ],
+    [
+     39.2828688,
+     -6.8192704
+    ],
+    [
+     39.2828596,
+     -6.8192879
+    ],
+    [
+     39.2828781,
+     -6.8192975
+    ],
+    [
+     39.2828651,
+     -6.8193222
+    ],
+    [
+     39.2828175,
+     -6.8192974
+    ],
+    [
+     39.2828253,
+     -6.819282
+    ],
+    [
+     39.2828216,
+     -6.8192788
+    ],
+    [
+     39.2828207,
+     -6.8192799
+    ],
+    [
+     39.2827827,
+     -6.819257
+    ],
+    [
+     39.2827984,
+     -6.8192278
+    ],
+    [
+     39.2827803,
+     -6.819218
+    ]
+   ]
+  },
+  {
+   "id": "sky-368509959",
+   "osm": 368509959,
+   "name": null,
+   "levels": 10,
+   "height": 32.5,
+   "district": "city",
+   "style": "tiled",
+   "wall": "#E0DBD0",
+   "accent": "#2E5878",
+   "glass": "#6E5C45",
+   "roof": "flat",
+   "crown": "plant",
+   "balconies": "none",
+   "description": "Kisutu tile-clad slab on Kitumbini Street: a 10-storey pale tile block with blue tile bands at every floor, wide white-framed windows, AC units and a screened plant room.",
+   "confidence": "district style family; individual facade unverified",
+   "ring": [
+    [
+     39.2817242,
+     -6.8193231
+    ],
+    [
+     39.2819459,
+     -6.8194358
+    ],
+    [
+     39.2820542,
+     -6.8192256
+    ],
+    [
+     39.281829,
+     -6.8191112
+    ],
+    [
+     39.2818076,
+     -6.8191527
+    ],
+    [
+     39.2818198,
+     -6.8191588
+    ],
+    [
+     39.281799,
+     -6.8191991
+    ],
+    [
+     39.281788,
+     -6.8191936
+    ],
+    [
+     39.2817643,
+     -6.8192396
+    ],
+    [
+     39.2817756,
+     -6.8192453
+    ],
+    [
+     39.2817502,
+     -6.8192947
+    ],
+    [
+     39.2817412,
+     -6.8192902
+    ],
+    [
+     39.2817242,
+     -6.8193231
+    ]
+   ]
+  },
+  {
+   "id": "sky-368509961",
+   "osm": 368509961,
+   "name": null,
+   "levels": 15,
+   "height": 50.8,
+   "district": "city",
+   "style": "modernist",
+   "wall": "#CFC3AE",
+   "accent": "#9A8F80",
+   "glass": "#30383C",
+   "roof": "flat",
+   "crown": "tanks",
+   "balconies": "none",
+   "description": "Kisutu modernist frame grid on Chagga Street: a 15-storey modernist concrete frame grid with deep floor ledges and vertical fins over recessed dark glazing, and a roof crowded with black water tanks.",
+   "confidence": "district style family; individual facade unverified",
+   "ring": [
+    [
+     39.282487,
+     -6.8177242
+    ],
+    [
+     39.282612,
+     -6.8175063
+    ],
+    [
+     39.2827201,
+     -6.8175675
+    ],
+    [
+     39.2826744,
+     -6.8176471
+    ],
+    [
+     39.2825951,
+     -6.8177854
+    ],
+    [
+     39.282487,
+     -6.8177242
+    ]
+   ]
+  },
+  {
+   "id": "sky-368510000",
+   "osm": 368510000,
+   "name": null,
+   "levels": 13,
+   "height": 41.8,
+   "district": "city",
+   "style": "kisutu",
+   "wall": "#E6C9B8",
+   "accent": "#7A2E2E",
+   "glass": "#3E5566",
+   "roof": "flat",
+   "crown": "tanks",
+   "balconies": "wrap",
+   "description": "Kisutu Kisutu balcony tower on Chagga Street: a 13-storey dusty-pink render tower with a maroon vertical stair strip, eyebrow window hoods, balcony slabs on two faces, AC units and a roof crowded with black water tanks.",
+   "confidence": "district style family; individual facade unverified",
+   "ring": [
+    [
+     39.2823897,
+     -6.8176171
+    ],
+    [
+     39.2824149,
+     -6.817632
+    ],
+    [
+     39.2824103,
+     -6.8176397
+    ],
+    [
+     39.2824373,
+     -6.8176557
+    ],
+    [
+     39.2824426,
+     -6.8176469
+    ],
+    [
+     39.2824702,
+     -6.8176632
+    ],
+    [
+     39.2825045,
+     -6.8176061
+    ],
+    [
+     39.2824674,
+     -6.8175841
+    ],
+    [
+     39.2825107,
+     -6.817512
+    ],
+    [
+     39.2825512,
+     -6.8175359
+    ],
+    [
+     39.282587,
+     -6.8174764
+    ],
+    [
+     39.2825579,
+     -6.8174592
+    ],
+    [
+     39.2825624,
+     -6.8174517
+    ],
+    [
+     39.2825352,
+     -6.8174357
+    ],
+    [
+     39.2825306,
+     -6.8174433
+    ],
+    [
+     39.2825036,
+     -6.8174273
+    ],
+    [
+     39.2823897,
+     -6.8176171
+    ]
+   ]
+  },
+  {
+   "id": "sky-368510030",
+   "osm": 368510030,
+   "name": null,
+   "levels": 15,
+   "height": 50.8,
+   "district": "city",
+   "style": "modernist",
+   "wall": "#CFC3AE",
+   "accent": "#9A8F80",
+   "glass": "#30383C",
+   "roof": "flat",
+   "crown": "castellated",
+   "balconies": "none",
+   "description": "Kisutu modernist frame grid on Libya Street: a 15-storey modernist concrete frame grid with deep floor ledges and vertical fins over recessed dark glazing, and a castellated parapet.",
+   "confidence": "district style family; individual facade unverified",
+   "ring": [
+    [
+     39.2817919,
+     -6.8190299
+    ],
+    [
+     39.2818721,
+     -6.8190727
+    ],
+    [
+     39.2819185,
+     -6.8189694
+    ],
+    [
+     39.2818869,
+     -6.8189554
+    ],
+    [
+     39.2818944,
+     -6.8189387
+    ],
+    [
+     39.2818467,
+     -6.8189176
+    ],
+    [
+     39.2817919,
+     -6.8190299
+    ]
+   ]
+  },
+  {
+   "id": "sky-368510057",
+   "osm": 368510057,
+   "name": null,
+   "levels": 14,
+   "height": 44.9,
+   "district": "city",
+   "style": "kisutu",
+   "wall": "#B9C6CF",
+   "accent": "#2D4E6E",
+   "glass": "#3E6E8E",
+   "roof": "flat",
+   "crown": "lattice",
+   "balconies": "front",
+   "description": "Kisutu Kisutu balcony tower on Mosque Street: a 14-storey pale blue-grey render tower with a navy vertical stair strip, eyebrow window hoods, stacked street-facing balconies, AC units and decorative grille panels at the crown.",
+   "confidence": "district style family; individual facade unverified",
+   "ring": [
+    [
+     39.2821419,
+     -6.8188542
+    ],
+    [
+     39.282183,
+     -6.8187692
+    ],
+    [
+     39.2822487,
+     -6.8188005
+    ],
+    [
+     39.2821521,
+     -6.8190005
+    ],
+    [
+     39.282082,
+     -6.8189672
+    ],
+    [
+     39.2821191,
+     -6.8188904
+    ],
+    [
+     39.2821083,
+     -6.8188852
+    ],
+    [
+     39.2821268,
+     -6.818847
+    ],
+    [
+     39.2821419,
+     -6.8188542
+    ]
+   ]
+  },
+  {
+   "id": "sky-524594382",
+   "osm": 524594382,
+   "name": null,
+   "levels": 8,
+   "height": 26.3,
+   "district": "masaki",
+   "style": "coastal",
+   "wall": "#F4F1EA",
+   "accent": "#D0CAC0",
+   "glass": "#3A4A55",
+   "roof": "flat",
+   "crown": "pergola",
+   "balconies": "wrap",
+   "description": "Oyster Bay Oyster Bay apartment block on Chato Road: a 8-storey white apartment block with wrap-around balcony slabs and glass rails, dark sliding glazing and a rooftop pergola and stair towers.",
+   "confidence": "district style family; individual facade unverified",
+   "ring": [
+    [
+     39.2616882,
+     -6.7753146
+    ],
+    [
+     39.2617539,
+     -6.7753201
+    ],
+    [
+     39.2617531,
+     -6.7753294
+    ],
+    [
+     39.2618021,
+     -6.7753335
+    ],
+    [
+     39.2618029,
+     -6.7753241
+    ],
+    [
+     39.2618423,
+     -6.7753274
+    ],
+    [
+     39.2618415,
+     -6.7753368
+    ],
+    [
+     39.261968,
+     -6.7753474
+    ],
+    [
+     39.2619486,
+     -6.7755758
+    ],
+    [
+     39.2619132,
+     -6.7755728
+    ],
+    [
+     39.2619159,
+     -6.7755412
+    ],
+    [
+     39.2617643,
+     -6.7755284
+    ],
+    [
+     39.2617621,
+     -6.7755544
+    ],
+    [
+     39.2616908,
+     -6.7755484
+    ],
+    [
+     39.2616869,
+     -6.7755945
+    ],
+    [
+     39.2616645,
+     -6.7755927
+    ],
+    [
+     39.2616729,
+     -6.7754948
+    ],
+    [
+     39.2616882,
+     -6.7753146
+    ]
+   ]
+  },
+  {
+   "id": "sky-615205667",
+   "osm": 615205667,
+   "name": "Zavery Tower",
+   "levels": 13,
+   "height": 41.8,
+   "district": "city",
+   "style": "tiled",
+   "wall": "#CFCFCB",
+   "accent": "#22355E",
+   "glass": "#7AA7C9",
+   "roof": "flat",
+   "crown": "tanks",
+   "balconies": "none",
+   "description": "Zavery Tower on Sofia Kawawa Street: a 13-storey light grey tile-clad block with navy tile bands at every floor, wide white-framed windows and AC units, like the newer Kisutu tile towers.",
+   "confidence": "named, facade inferred from district references",
+   "ring": [
+    [
+     39.2823123,
+     -6.8219005
+    ],
+    [
+     39.2824063,
+     -6.8219003
+    ],
+    [
+     39.2824055,
+     -6.8222091
+    ],
+    [
+     39.2823078,
+     -6.8222077
+    ],
+    [
+     39.2823123,
+     -6.8219005
+    ]
+   ]
+  },
+  {
+   "id": "sky-635183912",
+   "osm": 635183912,
+   "name": "New Avon Apartments",
+   "levels": 10,
+   "height": 32.5,
+   "district": "city",
+   "style": "kisutu",
+   "wall": "#C9DCCB",
+   "accent": "#2F6F73",
+   "glass": "#3E6E8E",
+   "roof": "flat",
+   "crown": "tanks",
+   "balconies": "front",
+   "description": "New Avon Apartments on Aggrey Street: a 10-storey mint-render apartment tower with stacked balconies and teal strips.",
+   "confidence": "named, facade inferred from district references",
+   "ring": [
+    [
+     39.2819068,
+     -6.820294
+    ],
+    [
+     39.2819444,
+     -6.820301
+    ],
+    [
+     39.2819474,
+     -6.8202848
+    ],
+    [
+     39.2819617,
+     -6.8202874
+    ],
+    [
+     39.2819588,
+     -6.8203024
+    ],
+    [
+     39.2819747,
+     -6.8203054
+    ],
+    [
+     39.2819758,
+     -6.8202994
+    ],
+    [
+     39.2819854,
+     -6.8203012
+    ],
+    [
+     39.281984,
+     -6.8203089
+    ],
+    [
+     39.2819933,
+     -6.8203106
+    ],
+    [
+     39.2819525,
+     -6.8205271
+    ],
+    [
+     39.2818649,
+     -6.8205109
+    ],
+    [
+     39.2818796,
+     -6.8204328
+    ],
+    [
+     39.2818833,
+     -6.8204335
+    ],
+    [
+     39.2818892,
+     -6.8204026
+    ],
+    [
+     39.2818864,
+     -6.820402
+    ],
+    [
+     39.2819068,
+     -6.820294
+    ]
+   ]
+  },
+  {
+   "id": "sky-635183925",
+   "osm": 635183925,
+   "name": "Mr. Discount Supermarket",
+   "levels": 11,
+   "height": 35.6,
+   "district": "city",
+   "style": "tiled",
+   "wall": "#D6D1C6",
+   "accent": "#7A2E2E",
+   "glass": "#6F98B5",
+   "roof": "flat",
+   "crown": "tanks",
+   "balconies": "none",
+   "description": "Mr. Discount building on Uhuru Street: an 11-storey beige tile tower with maroon floor bands over a shop podium.",
+   "confidence": "named, facade inferred from district references",
+   "ring": [
+    [
+     39.2829231,
+     -6.8215717
+    ],
+    [
+     39.2830485,
+     -6.8215708
+    ],
+    [
+     39.283058,
+     -6.8215837
+    ],
+    [
+     39.2830582,
+     -6.8217615
+    ],
+    [
+     39.2829825,
+     -6.8217626
+    ],
+    [
+     39.2829697,
+     -6.8217591
+    ],
+    [
+     39.28297,
+     -6.8217535
+    ],
+    [
+     39.2829267,
+     -6.8217542
+    ],
+    [
+     39.2829192,
+     -6.8217487
+    ],
+    [
+     39.2829189,
+     -6.8216916
+    ],
+    [
+     39.2829171,
+     -6.8216916
+    ],
+    [
+     39.2829171,
+     -6.8216834
+    ],
+    [
+     39.2829204,
+     -6.8216834
+    ],
+    [
+     39.2829202,
+     -6.8216361
+    ],
+    [
+     39.2829181,
+     -6.8216361
+    ],
+    [
+     39.2829181,
+     -6.8216284
+    ],
+    [
+     39.2829203,
+     -6.8216284
+    ],
+    [
+     39.2829231,
+     -6.8215717
+    ]
+   ]
+  },
+  {
+   "id": "sky-635183926",
+   "osm": 635183926,
+   "name": "MCL Cable LTD",
+   "levels": 10,
+   "height": 34.3,
+   "district": "city",
+   "style": "ribbon",
+   "wall": "#E9E6DF",
+   "accent": "#55606A",
+   "glass": "#37516A",
+   "roof": "flat",
+   "crown": "plant",
+   "balconies": "none",
+   "description": "MCL Cable building on India Street: a 10-storey concrete office with grey spandrel ribbons and dark glazing.",
+   "confidence": "named, facade inferred from district references",
+   "ring": [
+    [
+     39.2837106,
+     -6.8214263
+    ],
+    [
+     39.2838926,
+     -6.8214411
+    ],
+    [
+     39.2839271,
+     -6.8214199
+    ],
+    [
+     39.2840014,
+     -6.8213137
+    ],
+    [
+     39.2839723,
+     -6.8212959
+    ],
+    [
+     39.2839688,
+     -6.8213014
+    ],
+    [
+     39.2839415,
+     -6.8212866
+    ],
+    [
+     39.2839442,
+     -6.8212817
+    ],
+    [
+     39.2838917,
+     -6.8212492
+    ],
+    [
+     39.2838873,
+     -6.8212549
+    ],
+    [
+     39.2838704,
+     -6.8212453
+    ],
+    [
+     39.2838748,
+     -6.8212375
+    ],
+    [
+     39.283825,
+     -6.8212093
+    ],
+    [
+     39.2838231,
+     -6.8212127
+    ],
+    [
+     39.2838079,
+     -6.8212041
+    ],
+    [
+     39.2837269,
+     -6.8211985
+    ],
+    [
+     39.2837228,
+     -6.8212559
+    ],
+    [
+     39.2837044,
+     -6.8212546
+    ],
+    [
+     39.283696,
+     -6.8213721
+    ],
+    [
+     39.2837144,
+     -6.8213734
+    ],
+    [
+     39.2837106,
+     -6.8214263
+    ]
+   ]
+  },
+  {
+   "id": "sky-635183940",
+   "osm": 635183940,
+   "name": "Solitaire Plaza",
+   "levels": 14,
+   "height": 44.9,
+   "district": "city",
+   "style": "kisutu",
+   "wall": "#D9967A",
+   "accent": "#4A4E52",
+   "glass": "#4B5A63",
+   "roof": "flat",
+   "crown": "tanks",
+   "balconies": "front",
+   "description": "Solitaire Plaza on Indira Gandhi Street: a 14-storey salmon-brick-coloured residential tower with a charcoal stair core, stacked AC-lined balconies and a crowded roof of black water tanks.",
+   "confidence": "named, facade inferred from district references",
+   "ring": [
+    [
+     39.2835003,
+     -6.819811
+    ],
+    [
+     39.2836994,
+     -6.8199567
+    ],
+    [
+     39.283599,
+     -6.820092
+    ],
+    [
+     39.2833999,
+     -6.8199463
+    ],
+    [
+     39.2835003,
+     -6.819811
+    ]
+   ]
+  },
+  {
+   "id": "sky-635183943",
+   "osm": 635183943,
+   "name": null,
+   "levels": 11,
+   "height": 35.6,
+   "district": "city",
+   "style": "kisutu",
+   "wall": "#F1EEE6",
+   "accent": "#8E1F2B",
+   "glass": "#4B5A63",
+   "roof": "flat",
+   "crown": "tanks",
+   "balconies": "wrap",
+   "description": "Kisutu Kisutu balcony tower on Kaluta Street: a 11-storey white render tower with a maroon vertical stair strip, eyebrow window hoods, balcony slabs on two faces, AC units and a roof crowded with black water tanks.",
+   "confidence": "district style family; individual facade unverified",
+   "ring": [
+    [
+     39.2857186,
+     -6.8190939
+    ],
+    [
+     39.2858261,
+     -6.8189963
+    ],
+    [
+     39.2859651,
+     -6.8191471
+    ],
+    [
+     39.2859176,
+     -6.8191902
+    ],
+    [
+     39.2858738,
+     -6.8191426
+    ],
+    [
+     39.2858138,
+     -6.8191971
+    ],
+    [
+     39.2857186,
+     -6.8190939
+    ]
+   ]
+  },
+  {
+   "id": "sky-635184003",
+   "osm": 635184003,
+   "name": null,
+   "levels": 13,
+   "height": 44.2,
+   "district": "city",
+   "style": "modernist",
+   "wall": "#CFC3AE",
+   "accent": "#9A8F80",
+   "glass": "#30383C",
+   "roof": "flat",
+   "crown": "tanks",
+   "balconies": "none",
+   "description": "Kisutu modernist frame grid on India Street: a 13-storey modernist concrete frame grid with deep floor ledges and vertical fins over recessed dark glazing, and a roof crowded with black water tanks.",
+   "confidence": "district style family; individual facade unverified",
+   "ring": [
+    [
+     39.2846901,
+     -6.8192923
+    ],
+    [
+     39.284816,
+     -6.8191016
+    ],
+    [
+     39.284839,
+     -6.8191166
+    ],
+    [
+     39.2848434,
+     -6.81911
+    ],
+    [
+     39.2851776,
+     -6.8193275
+    ],
+    [
+     39.2850474,
+     -6.8195248
+    ],
+    [
+     39.2846901,
+     -6.8192923
+    ]
+   ]
+  },
+  {
+   "id": "sky-635184005",
+   "osm": 635184005,
+   "name": null,
+   "levels": 14,
+   "height": 44.9,
+   "district": "city",
+   "style": "kisutu",
+   "wall": "#EADCC0",
+   "accent": "#2F6F73",
+   "glass": "#4B5A63",
+   "roof": "flat",
+   "crown": "plant",
+   "balconies": "corners",
+   "description": "Kisutu Kisutu balcony tower on Kaluta: a 14-storey cream render tower with a teal vertical stair strip, eyebrow window hoods, corner balconies, AC units and a screened plant room.",
+   "confidence": "district style family; individual facade unverified",
+   "ring": [
+    [
+     39.2857671,
+     -6.818649
+    ],
+    [
+     39.2858048,
+     -6.8186138
+    ],
+    [
+     39.2857926,
+     -6.8186009
+    ],
+    [
+     39.2858206,
+     -6.8185747
+    ],
+    [
+     39.2858279,
+     -6.8185824
+    ],
+    [
+     39.2858512,
+     -6.8185607
+    ],
+    [
+     39.2859097,
+     -6.8186225
+    ],
+    [
+     39.2859208,
+     -6.8186105
+    ],
+    [
+     39.2859937,
+     -6.8186812
+    ],
+    [
+     39.2859895,
+     -6.8186851
+    ],
+    [
+     39.286018,
+     -6.8187152
+    ],
+    [
+     39.2859816,
+     -6.8187492
+    ],
+    [
+     39.2859841,
+     -6.8187518
+    ],
+    [
+     39.2859485,
+     -6.8187851
+    ],
+    [
+     39.2859458,
+     -6.8187822
+    ],
+    [
+     39.2859179,
+     -6.8188083
+    ],
+    [
+     39.2857671,
+     -6.818649
+    ]
+   ]
+  },
+  {
+   "id": "sky-635184039",
+   "osm": 635184039,
+   "name": "NHC",
+   "levels": 11,
+   "height": 37.6,
+   "district": "city",
+   "style": "modernist",
+   "wall": "#D6CCBA",
+   "accent": "#9A8F80",
+   "glass": "#30383C",
+   "roof": "flat",
+   "crown": "plant",
+   "balconies": "none",
+   "description": "NHC block on Jamhuri Street: a National Housing Corporation concrete frame grid tower with floor ledges, fins and recessed glazing.",
+   "confidence": "named, facade inferred from district references",
+   "ring": [
+    [
+     39.2814288,
+     -6.8210883
+    ],
+    [
+     39.281429,
+     -6.8210751
+    ],
+    [
+     39.2814257,
+     -6.8210725
+    ],
+    [
+     39.2814233,
+     -6.8210685
+    ],
+    [
+     39.2814227,
+     -6.8210653
+    ],
+    [
+     39.2814227,
+     -6.8210628
+    ],
+    [
+     39.2814235,
+     -6.8210606
+    ],
+    [
+     39.2814251,
+     -6.8210585
+    ],
+    [
+     39.2814268,
+     -6.8210567
+    ],
+    [
+     39.2814287,
+     -6.8210555
+    ],
+    [
+     39.2814302,
+     -6.8210551
+    ],
+    [
+     39.2814304,
+     -6.8210533
+    ],
+    [
+     39.2814315,
+     -6.8210403
+    ],
+    [
+     39.2814514,
+     -6.8210415
+    ],
+    [
+     39.2814516,
+     -6.821037
+    ],
+    [
+     39.2816487,
+     -6.8210558
+    ],
+    [
+     39.2816427,
+     -6.8211108
+    ],
+    [
+     39.2814478,
+     -6.8210966
+    ],
+    [
+     39.2814485,
+     -6.8210902
+    ],
+    [
+     39.2814288,
+     -6.8210883
+    ]
+   ]
+  },
+  {
+   "id": "sky-635184042",
+   "osm": 635184042,
+   "name": null,
+   "levels": 11,
+   "height": 37.6,
+   "district": "city",
+   "style": "modernist",
+   "wall": "#DCD2BF",
+   "accent": "#9A8F80",
+   "glass": "#30383C",
+   "roof": "flat",
+   "crown": "plant",
+   "balconies": "none",
+   "description": "Kisutu modernist frame grid on Lindi Street: a 11-storey modernist concrete frame grid with deep floor ledges and vertical fins over recessed dark glazing, and a screened plant room.",
+   "confidence": "district style family; individual facade unverified",
+   "ring": [
+    [
+     39.2821909,
+     -6.8219499
+    ],
+    [
+     39.2822849,
+     -6.8219503
+    ],
+    [
+     39.2822837,
+     -6.8222022
+    ],
+    [
+     39.2821898,
+     -6.8222017
+    ],
+    [
+     39.2821909,
+     -6.8219499
+    ]
+   ]
+  },
+  {
+   "id": "sky-635184060",
+   "osm": 635184060,
+   "name": "Durban Hotel Ltd",
+   "levels": 11,
+   "height": 35.6,
+   "district": "city",
+   "style": "kisutu",
+   "wall": "#EADCC0",
+   "accent": "#2F6F73",
+   "glass": "#3C5A6A",
+   "roof": "flat",
+   "crown": "tanks",
+   "balconies": "front",
+   "description": "Durban Hotel on Uhuru Street: an 11-storey cream render tower with a teal stair strip, eyebrow window hoods and balconies.",
+   "confidence": "named, facade inferred from district references",
+   "ring": [
+    [
+     39.2828021,
+     -6.8212523
+    ],
+    [
+     39.2829125,
+     -6.8212585
+    ],
+    [
+     39.2829077,
+     -6.8213287
+    ],
+    [
+     39.2828975,
+     -6.8214783
+    ],
+    [
+     39.2827867,
+     -6.8214708
+    ],
+    [
+     39.2828021,
+     -6.8212523
+    ]
+   ]
+  },
+  {
+   "id": "sky-635184063",
+   "osm": 635184063,
+   "name": "Golden Plaza",
+   "levels": 12,
+   "height": 38.7,
+   "district": "city",
+   "style": "tiled",
+   "wall": "#DCCBA2",
+   "accent": "#8A6A3A",
+   "glass": "#6E5C45",
+   "roof": "flat",
+   "crown": "frame",
+   "balconies": "none",
+   "description": "Golden Plaza on Indira Gandhi Street: a broad 12-storey commercial block in warm gold-beige tile cladding with bronze tinted glass, bronze floor bands and a crown frame.",
+   "confidence": "named, facade inferred from district references",
+   "ring": [
+    [
+     39.2833714,
+     -6.819973
+    ],
+    [
+     39.2835857,
+     -6.8201126
+    ],
+    [
+     39.2835453,
+     -6.8201737
+    ],
+    [
+     39.2835405,
+     -6.8201706
+    ],
+    [
+     39.2835052,
+     -6.820224
+    ],
+    [
+     39.283511,
+     -6.8202277
+    ],
+    [
+     39.2834764,
+     -6.82028
+    ],
+    [
+     39.283475,
+     -6.8202791
+    ],
+    [
+     39.2834526,
+     -6.820313
+    ],
+    [
+     39.2834502,
+     -6.8203115
+    ],
+    [
+     39.2833957,
+     -6.820394
+    ],
+    [
+     39.2831843,
+     -6.8202562
+    ],
+    [
+     39.2833714,
+     -6.819973
+    ]
+   ]
+  },
+  {
+   "id": "sky-635184074",
+   "osm": 635184074,
+   "name": "Kanisa la Pentekoste Tanzania",
+   "levels": 11,
+   "height": 35.6,
+   "district": "city",
+   "style": "tiled",
+   "wall": "#E0DBD0",
+   "accent": "#22355E",
+   "glass": "#7AA7C9",
+   "roof": "flat",
+   "crown": "tanks",
+   "balconies": "none",
+   "description": "Lindi Street tower (Kanisa la Pentekoste): an 11-storey pale tile block with navy floor bands.",
+   "confidence": "named, facade inferred from district references",
+   "ring": [
+    [
+     39.2819081,
+     -6.8219135
+    ],
+    [
+     39.2820285,
+     -6.8219165
+    ],
+    [
+     39.2820189,
+     -6.8221978
+    ],
+    [
+     39.2819083,
+     -6.8221953
+    ],
+    [
+     39.2819081,
+     -6.8219135
+    ]
+   ]
+  },
+  {
+   "id": "sky-635184108",
+   "osm": 635184108,
+   "name": null,
+   "levels": 10,
+   "height": 32.5,
+   "district": "city",
+   "style": "kisutu",
+   "wall": "#EADCC0",
+   "accent": "#2F6F73",
+   "glass": "#3E5566",
+   "roof": "flat",
+   "crown": "sign",
+   "balconies": "front",
+   "description": "Kisutu Kisutu balcony tower on India: a 10-storey cream render tower with a teal vertical stair strip, eyebrow window hoods, stacked street-facing balconies, AC units and a rooftop sign frame.",
+   "confidence": "district style family; individual facade unverified",
+   "ring": [
+    [
+     39.285073,
+     -6.8190246
+    ],
+    [
+     39.2851238,
+     -6.8189368
+    ],
+    [
+     39.2853232,
+     -6.8190506
+    ],
+    [
+     39.2852724,
+     -6.8191384
+    ],
+    [
+     39.285073,
+     -6.8190246
+    ]
+   ]
+  },
+  {
+   "id": "sky-635184112",
+   "osm": 635184112,
+   "name": null,
+   "levels": 10,
+   "height": 34.3,
+   "district": "city",
+   "style": "modernist",
+   "wall": "#CFC3AE",
+   "accent": "#9A8F80",
+   "glass": "#30383C",
+   "roof": "flat",
+   "crown": "castellated",
+   "balconies": "none",
+   "description": "Kisutu modernist frame grid on Indira Gandhi: a 10-storey modernist concrete frame grid with deep floor ledges and vertical fins over recessed dark glazing, and a castellated parapet.",
+   "confidence": "district style family; individual facade unverified",
+   "ring": [
+    [
+     39.2826321,
+     -6.8208509
+    ],
+    [
+     39.2830222,
+     -6.8208562
+    ],
+    [
+     39.2830232,
+     -6.8208502
+    ],
+    [
+     39.283033,
+     -6.8208502
+    ],
+    [
+     39.2830391,
+     -6.820844
+    ],
+    [
+     39.2830393,
+     -6.8208121
+    ],
+    [
+     39.2830313,
+     -6.8208116
+    ],
+    [
+     39.2830333,
+     -6.8207026
+    ],
+    [
+     39.2830432,
+     -6.8207021
+    ],
+    [
+     39.2830425,
+     -6.8206571
+    ],
+    [
+     39.2830113,
+     -6.8206566
+    ],
+    [
+     39.283012,
+     -6.8206481
+    ],
+    [
+     39.2829282,
+     -6.8206463
+    ],
+    [
+     39.2829279,
+     -6.8206546
+    ],
+    [
+     39.2828253,
+     -6.8206528
+    ],
+    [
+     39.2828249,
+     -6.8206621
+    ],
+    [
+     39.2828223,
+     -6.8206619
+    ],
+    [
+     39.2828225,
+     -6.820671
+    ],
+    [
+     39.2828207,
+     -6.8206713
+    ],
+    [
+     39.2828204,
+     -6.8207094
+    ],
+    [
+     39.2828215,
+     -6.8207095
+    ],
+    [
+     39.282821,
+     -6.8207194
+    ],
+    [
+     39.282819,
+     -6.8207195
+    ],
+    [
+     39.2828191,
+     -6.8207219
+    ],
+    [
+     39.2828358,
+     -6.820722
+    ],
+    [
+     39.2828362,
+     -6.8207701
+    ],
+    [
+     39.2828205,
+     -6.8207697
+    ],
+    [
+     39.2828206,
+     -6.8207444
+    ],
+    [
+     39.2827929,
+     -6.820743
+    ],
+    [
+     39.282794,
+     -6.8207096
+    ],
+    [
+     39.2826339,
+     -6.8207085
+    ],
+    [
+     39.2826332,
+     -6.8207175
+    ],
+    [
+     39.2826266,
+     -6.8207175
+    ],
+    [
+     39.2826257,
+     -6.8207519
+    ],
+    [
+     39.2826353,
+     -6.820754
+    ],
+    [
+     39.2826326,
+     -6.8208053
+    ],
+    [
+     39.2826264,
+     -6.8208054
+    ],
+    [
+     39.2826246,
+     -6.820839
+    ],
+    [
+     39.2826323,
+     -6.8208403
+    ],
+    [
+     39.2826321,
+     -6.8208509
+    ]
+   ]
+  },
+  {
+   "id": "sky-635184120",
+   "osm": 635184120,
+   "name": null,
+   "levels": 10,
+   "height": 32.5,
+   "district": "city",
+   "style": "tiled",
+   "wall": "#DCCBA2",
+   "accent": "#8A6A3A",
+   "glass": "#7AA7C9",
+   "roof": "flat",
+   "crown": "frame",
+   "balconies": "none",
+   "description": "Kisutu tile-clad slab on India Street: a 10-storey gold-beige tile block with bronze tile bands at every floor, wide white-framed windows, AC units and an open crown frame.",
+   "confidence": "district style family; individual facade unverified",
+   "ring": [
+    [
+     39.2849931,
+     -6.819201
+    ],
+    [
+     39.2850456,
+     -6.8191186
+    ],
+    [
+     39.2852216,
+     -6.8192291
+    ],
+    [
+     39.2851691,
+     -6.8193115
+    ],
+    [
+     39.2849931,
+     -6.819201
+    ]
+   ]
+  },
+  {
+   "id": "sky-635184123",
+   "osm": 635184123,
+   "name": null,
+   "levels": 10,
+   "height": 34.3,
+   "district": "city",
+   "style": "modernist",
+   "wall": "#D1C7B4",
+   "accent": "#9A8F80",
+   "glass": "#30383C",
+   "roof": "flat",
+   "crown": "tanks",
+   "balconies": "none",
+   "description": "Kisutu modernist frame grid on Samora Street: a 10-storey modernist concrete frame grid with deep floor ledges and vertical fins over recessed dark glazing, and a roof crowded with black water tanks.",
+   "confidence": "district style family; individual facade unverified",
+   "ring": [
+    [
+     39.2845477,
+     -6.8199821
+    ],
+    [
+     39.2847382,
+     -6.8200784
+    ],
+    [
+     39.2846431,
+     -6.820264
+    ],
+    [
+     39.2844526,
+     -6.8201677
+    ],
+    [
+     39.2845477,
+     -6.8199821
+    ]
+   ]
+  },
+  {
+   "id": "sky-635184131",
+   "osm": 635184131,
+   "name": "NHC",
+   "levels": 11,
+   "height": 37.6,
+   "district": "city",
+   "style": "modernist",
+   "wall": "#D1C7B4",
+   "accent": "#9A8F80",
+   "glass": "#30383C",
+   "roof": "flat",
+   "crown": "plant",
+   "balconies": "none",
+   "description": "NHC block on Jamhuri Street: the paired NHC frame-grid tower, with a weathered concrete eggcrate facade.",
+   "confidence": "named, facade inferred from district references",
+   "ring": [
+    [
+     39.2814472,
+     -6.821101
+    ],
+    [
+     39.2816435,
+     -6.8211132
+    ],
+    [
+     39.2816389,
+     -6.8211871
+    ],
+    [
+     39.2814426,
+     -6.8211749
+    ],
+    [
+     39.2814472,
+     -6.821101
+    ]
+   ]
+  },
+  {
+   "id": "sky-635184169",
+   "osm": 635184169,
+   "name": null,
+   "levels": 10,
+   "height": 34.3,
+   "district": "city",
+   "style": "modernist",
+   "wall": "#D8CDB9",
+   "accent": "#9A8F80",
+   "glass": "#30383C",
+   "roof": "flat",
+   "crown": "plant",
+   "balconies": "none",
+   "description": "Kisutu modernist frame grid on Kaluta: a 10-storey modernist concrete frame grid with deep floor ledges and vertical fins over recessed dark glazing, and a screened plant room.",
+   "confidence": "district style family; individual facade unverified",
+   "ring": [
+    [
+     39.2854791,
+     -6.8190558
+    ],
+    [
+     39.285741,
+     -6.8186475
+    ],
+    [
+     39.2859008,
+     -6.8188044
+    ],
+    [
+     39.285549,
+     -6.8191255
+    ],
+    [
+     39.2854791,
+     -6.8190558
+    ]
+   ]
+  },
+  {
+   "id": "sky-635184194",
+   "osm": 635184194,
+   "name": null,
+   "levels": 11,
+   "height": 37.6,
+   "district": "city",
+   "style": "modernist",
+   "wall": "#DCD2BF",
+   "accent": "#9A8F80",
+   "glass": "#30383C",
+   "roof": "flat",
+   "crown": "castellated",
+   "balconies": "none",
+   "description": "Kisutu modernist frame grid on Aggrey Street: a 11-storey modernist concrete frame grid with deep floor ledges and vertical fins over recessed dark glazing, and a castellated parapet.",
+   "confidence": "district style family; individual facade unverified",
+   "ring": [
+    [
+     39.2834148,
+     -6.8205271
+    ],
+    [
+     39.283179,
+     -6.8204344
+    ],
+    [
+     39.2831258,
+     -6.8204647
+    ],
+    [
+     39.2831304,
+     -6.8206955
+    ],
+    [
+     39.283215,
+     -6.8206955
+    ],
+    [
+     39.2833564,
+     -6.8207017
+    ],
+    [
+     39.2833821,
+     -6.8206122
+    ],
+    [
+     39.2834148,
+     -6.8205271
+    ]
+   ]
+  },
+  {
+   "id": "sky-635184201",
+   "osm": 635184201,
+   "name": null,
+   "levels": 10,
+   "height": 32.5,
+   "district": "city",
+   "style": "kisutu",
+   "wall": "#E9D6B4",
+   "accent": "#5A6A72",
+   "glass": "#4B5A63",
+   "roof": "flat",
+   "crown": "tanks",
+   "balconies": "wrap",
+   "description": "Kisutu Kisutu balcony tower on Indira Ghandhi: a 10-storey sand render tower with a slate vertical stair strip, eyebrow window hoods, balcony slabs on two faces, AC units and a roof crowded with black water tanks.",
+   "confidence": "district style family; individual facade unverified",
+   "ring": [
+    [
+     39.2829204,
+     -6.8213628
+    ],
+    [
+     39.2829183,
+     -6.8214808
+    ],
+    [
+     39.2830307,
+     -6.8214845
+    ],
+    [
+     39.2830398,
+     -6.8214706
+    ],
+    [
+     39.2830396,
+     -6.8213659
+    ],
+    [
+     39.2829204,
+     -6.8213628
+    ]
+   ]
+  },
+  {
+   "id": "sky-635184248",
+   "osm": 635184248,
+   "name": "NHC",
+   "levels": 10,
+   "height": 34.3,
+   "district": "city",
+   "style": "modernist",
+   "wall": "#DAD0BD",
+   "accent": "#9A8F80",
+   "glass": "#30383C",
+   "roof": "flat",
+   "crown": "castellated",
+   "balconies": "none",
+   "description": "NHC office on Jamhuri Street: a 10-storey concrete eggcrate facade with a castellated parapet.",
+   "confidence": "named, facade inferred from district references",
+   "ring": [
+    [
+     39.2816692,
+     -6.8209818
+    ],
+    [
+     39.2816632,
+     -6.8210502
+    ],
+    [
+     39.2815044,
+     -6.8210364
+    ],
+    [
+     39.2815056,
+     -6.8210226
+    ],
+    [
+     39.2814622,
+     -6.8210189
+    ],
+    [
+     39.281467,
+     -6.8209642
+    ],
+    [
+     39.2816692,
+     -6.8209818
+    ]
+   ]
+  },
+  {
+   "id": "sky-635184251",
+   "osm": 635184251,
+   "name": null,
+   "levels": 13,
+   "height": 41.8,
+   "district": "city",
+   "style": "kisutu",
+   "wall": "#F0E2A8",
+   "accent": "#2E8A9A",
+   "glass": "#3E6E8E",
+   "roof": "flat",
+   "crown": "tanks",
+   "balconies": "front",
+   "description": "Kisutu Kisutu balcony tower on Lindi Street: a 13-storey pale-yellow render tower with a turquoise vertical stair strip, eyebrow window hoods, stacked street-facing balconies, AC units and a roof crowded with black water tanks.",
+   "confidence": "district style family; individual facade unverified",
+   "ring": [
+    [
+     39.2826371,
+     -6.8219629
+    ],
+    [
+     39.2826422,
+     -6.821963
+    ],
+    [
+     39.2826423,
+     -6.8219509
+    ],
+    [
+     39.2827444,
+     -6.821952
+    ],
+    [
+     39.2827443,
+     -6.8219631
+    ],
+    [
+     39.2827545,
+     -6.8219632
+    ],
+    [
+     39.2827536,
+     -6.8220596
+    ],
+    [
+     39.282756,
+     -6.8220597
+    ],
+    [
+     39.2827556,
+     -6.8220976
+    ],
+    [
+     39.2827527,
+     -6.8220976
+    ],
+    [
+     39.2827517,
+     -6.8221947
+    ],
+    [
+     39.2827427,
+     -6.8221946
+    ],
+    [
+     39.2827426,
+     -6.8222062
+    ],
+    [
+     39.282643,
+     -6.8222052
+    ],
+    [
+     39.2826432,
+     -6.8221924
+    ],
+    [
+     39.2826347,
+     -6.8221923
+    ],
+    [
+     39.2826371,
+     -6.8219629
+    ]
+   ]
+  },
+  {
+   "id": "sky-635184252",
+   "osm": 635184252,
+   "name": null,
+   "levels": 11,
+   "height": 35.6,
+   "district": "city",
+   "style": "kisutu",
+   "wall": "#F1EEE6",
+   "accent": "#8E1F2B",
+   "glass": "#4B5A63",
+   "roof": "flat",
+   "crown": "lattice",
+   "balconies": "front",
+   "description": "Kisutu Kisutu balcony tower on Samora Avenue: a 11-storey white render tower with a maroon vertical stair strip, eyebrow window hoods, stacked street-facing balconies, AC units and decorative grille panels at the crown.",
+   "confidence": "district style family; individual facade unverified",
+   "ring": [
+    [
+     39.286083,
+     -6.8192651
+    ],
+    [
+     39.2862198,
+     -6.8194189
+    ],
+    [
+     39.2861588,
+     -6.8194724
+    ],
+    [
+     39.2861574,
+     -6.8194709
+    ],
+    [
+     39.2860483,
+     -6.8195665
+    ],
+    [
+     39.285943,
+     -6.819448
+    ],
+    [
+     39.2859385,
+     -6.819452
+    ],
+    [
+     39.2859054,
+     -6.8194147
+    ],
+    [
+     39.2859025,
+     -6.8194115
+    ],
+    [
+     39.285963,
+     -6.8193586
+    ],
+    [
+     39.2859585,
+     -6.8193535
+    ],
+    [
+     39.2859873,
+     -6.8193282
+    ],
+    [
+     39.2859962,
+     -6.8193381
+    ],
+    [
+     39.2860122,
+     -6.819324
+    ],
+    [
+     39.286004,
+     -6.8193147
+    ],
+    [
+     39.2860297,
+     -6.8192922
+    ],
+    [
+     39.2860395,
+     -6.8193033
+    ],
+    [
+     39.286083,
+     -6.8192651
+    ]
+   ]
+  },
+  {
+   "id": "sky-635184297",
+   "osm": 635184297,
+   "name": null,
+   "levels": 10,
+   "height": 32.5,
+   "district": "city",
+   "style": "kisutu",
+   "wall": "#F0E2A8",
+   "accent": "#2E8A9A",
+   "glass": "#3E6E8E",
+   "roof": "flat",
+   "crown": "sign",
+   "balconies": "front",
+   "description": "Kisutu Kisutu balcony tower on Kaluta Street: a 10-storey pale-yellow render tower with a turquoise vertical stair strip, eyebrow window hoods, stacked street-facing balconies, AC units and a rooftop sign frame.",
+   "confidence": "district style family; individual facade unverified",
+   "ring": [
+    [
+     39.2859326,
+     -6.8190089
+    ],
+    [
+     39.2859743,
+     -6.8189734
+    ],
+    [
+     39.2860882,
+     -6.8191056
+    ],
+    [
+     39.286029,
+     -6.8191559
+    ],
+    [
+     39.285971,
+     -6.8190885
+    ],
+    [
+     39.2859885,
+     -6.8190737
+    ],
+    [
+     39.2859326,
+     -6.8190089
+    ]
+   ]
+  },
+  {
+   "id": "sky-635184315",
+   "osm": 635184315,
+   "name": null,
+   "levels": 11,
+   "height": 37.6,
+   "district": "city",
+   "style": "modernist",
+   "wall": "#CFC3AE",
+   "accent": "#9A8F80",
+   "glass": "#30383C",
+   "roof": "flat",
+   "crown": "plant",
+   "balconies": "none",
+   "description": "Kisutu modernist frame grid on India Street: a 11-storey modernist concrete frame grid with deep floor ledges and vertical fins over recessed dark glazing, and a screened plant room.",
+   "confidence": "district style family; individual facade unverified",
+   "ring": [
+    [
+     39.2849397,
+     -6.8188568
+    ],
+    [
+     39.2850863,
+     -6.8189361
+    ],
+    [
+     39.285067,
+     -6.8189712
+    ],
+    [
+     39.2850729,
+     -6.8189743
+    ],
+    [
+     39.2850366,
+     -6.8190405
+    ],
+    [
+     39.2850307,
+     -6.8190373
+    ],
+    [
+     39.2850149,
+     -6.8190719
+    ],
+    [
+     39.2850052,
+     -6.8191199
+    ],
+    [
+     39.2849709,
+     -6.8191772
+    ],
+    [
+     39.2849291,
+     -6.8191537
+    ],
+    [
+     39.2849475,
+     -6.8191288
+    ],
+    [
+     39.2849247,
+     -6.8191158
+    ],
+    [
+     39.2849085,
+     -6.8191456
+    ],
+    [
+     39.2848118,
+     -6.8190898
+    ],
+    [
+     39.2849397,
+     -6.8188568
+    ]
+   ]
+  },
+  {
+   "id": "sky-635184327",
+   "osm": 635184327,
+   "name": null,
+   "levels": 10,
+   "height": 32.5,
+   "district": "city",
+   "style": "kisutu",
+   "wall": "#E9D6B4",
+   "accent": "#5A6A72",
+   "glass": "#3E5566",
+   "roof": "flat",
+   "crown": "tanks",
+   "balconies": "wrap",
+   "description": "Kisutu Kisutu balcony tower on Aggrey Street: a 10-storey sand render tower with a slate vertical stair strip, eyebrow window hoods, balcony slabs on two faces, AC units and a roof crowded with black water tanks.",
+   "confidence": "district style family; individual facade unverified",
+   "ring": [
+    [
+     39.2820081,
+     -6.8202893
+    ],
+    [
+     39.2819895,
+     -6.8205106
+    ],
+    [
+     39.2821367,
+     -6.8205229
+    ],
+    [
+     39.2821553,
+     -6.8203015
+    ],
+    [
+     39.2820081,
+     -6.8202893
+    ]
+   ]
+  },
+  {
+   "id": "sky-635184348",
+   "osm": 635184348,
+   "name": "Rainbow Hotel",
+   "levels": 13,
+   "height": 41.8,
+   "district": "city",
+   "style": "kisutu",
+   "wall": "#F0E2A8",
+   "accent": "#2E8A9A",
+   "glass": "#3E6E8E",
+   "roof": "flat",
+   "crown": "tanks",
+   "balconies": "front",
+   "description": "Rainbow Hotel on Kaluta Street: a 13-storey pale-yellow hotel tower with turquoise pilaster strips, window eyebrow hoods and stacked balconies.",
+   "confidence": "named, facade inferred from district references",
+   "ring": [
+    [
+     39.2858253,
+     -6.8193432
+    ],
+    [
+     39.2858805,
+     -6.8193944
+    ],
+    [
+     39.2858941,
+     -6.8193799
+    ],
+    [
+     39.2858983,
+     -6.8193838
+    ],
+    [
+     39.2859255,
+     -6.819355
+    ],
+    [
+     39.2859371,
+     -6.8193658
+    ],
+    [
+     39.2860347,
+     -6.8192622
+    ],
+    [
+     39.2860053,
+     -6.819235
+    ],
+    [
+     39.2860307,
+     -6.819208
+    ],
+    [
+     39.285989,
+     -6.8191693
+    ],
+    [
+     39.2858253,
+     -6.8193432
+    ]
+   ]
+  },
+  {
+   "id": "sky-635210231",
+   "osm": 635210231,
+   "name": null,
+   "levels": 12,
+   "height": 38.7,
+   "district": "city",
+   "style": "tiled",
+   "wall": "#CFCFCB",
+   "accent": "#7A2E2E",
+   "glass": "#6F98B5",
+   "roof": "flat",
+   "crown": "tanks",
+   "balconies": "none",
+   "description": "Kisutu tile-clad slab on Kitumbini Street: a 12-storey light-grey tile block with maroon tile bands at every floor, wide white-framed windows, AC units and a roof crowded with black water tanks.",
+   "confidence": "district style family; individual facade unverified",
+   "ring": [
+    [
+     39.2822712,
+     -6.8184844
+    ],
+    [
+     39.2823523,
+     -6.8183504
+    ],
+    [
+     39.2825375,
+     -6.8184609
+    ],
+    [
+     39.2824564,
+     -6.8185949
+    ],
+    [
+     39.2822712,
+     -6.8184844
+    ]
+   ]
+  },
+  {
+   "id": "sky-666595330",
+   "osm": 666595330,
+   "name": null,
+   "levels": 9,
+   "height": 31.0,
+   "district": "masaki",
+   "style": "glass",
+   "wall": "#E7E2D8",
+   "accent": "#BFCBCB",
+   "glass": "#4E7F87",
+   "roof": "flat",
+   "crown": "stepped",
+   "balconies": "none",
+   "description": "Ali Hassan Mwinyi Road office (9 storeys, 1,950 m\u00b2 floorplate): a teal-green curtain wall framed by white render bands, with a stepped top storey.",
+   "confidence": "OSM-tagged form, facade inferred",
+   "ring": [
+    [
+     39.2741395,
+     -6.781984
+    ],
+    [
+     39.2742298,
+     -6.7820556
+    ],
+    [
+     39.2742204,
+     -6.7820673
+    ],
+    [
+     39.2743194,
+     -6.7821458
+    ],
+    [
+     39.274328,
+     -6.7821351
+    ],
+    [
+     39.2744152,
+     -6.7822042
+    ],
+    [
+     39.2744911,
+     -6.7821098
+    ],
+    [
+     39.2744697,
+     -6.7820928
+    ],
+    [
+     39.2745833,
+     -6.7819514
+    ],
+    [
+     39.2746044,
+     -6.7819681
+    ],
+    [
+     39.274698,
+     -6.7818516
+    ],
+    [
+     39.274419,
+     -6.7816306
+    ],
+    [
+     39.2743336,
+     -6.7817369
+    ],
+    [
+     39.2743242,
+     -6.7817294
+    ],
+    [
+     39.2741942,
+     -6.7818912
+    ],
+    [
+     39.2742063,
+     -6.7819008
+    ],
+    [
+     39.2741395,
+     -6.781984
+    ]
+   ]
+  },
+  {
+   "id": "sky-681326637",
+   "osm": 681326637,
+   "name": null,
+   "levels": 8,
+   "height": 26.3,
+   "district": "masaki",
+   "style": "coastal",
+   "wall": "#EFE6D6",
+   "accent": "#D5C7AE",
+   "glass": "#3F4B52",
+   "roof": "terracotta",
+   "crown": "hip",
+   "balconies": "front",
+   "description": "Msasani apartment block (8 storeys, OSM gabled roof): cream render, stacked front balconies with solid upstands and a terracotta pitched roof.",
+   "confidence": "OSM-tagged form, facade inferred",
+   "ring": [
+    [
+     39.2863431,
+     -6.7554361
+    ],
+    [
+     39.2864982,
+     -6.755555
+    ],
+    [
+     39.2863993,
+     -6.7556914
+    ],
+    [
+     39.2863637,
+     -6.7556681
+    ],
+    [
+     39.2863396,
+     -6.7557007
+    ],
+    [
+     39.2863751,
+     -6.7557254
+    ],
+    [
+     39.2862648,
+     -6.7558683
+    ],
+    [
+     39.286108,
+     -6.7557548
+    ],
+    [
+     39.2863431,
+     -6.7554361
+    ]
+   ]
+  },
+  {
+   "id": "sky-683934278",
+   "osm": 683934278,
+   "name": null,
+   "levels": 12,
+   "height": 40.9,
+   "district": "city",
+   "style": "modernist",
+   "wall": "#DCD2BF",
+   "accent": "#A49A8A",
+   "glass": "#33393D",
+   "roof": "flat",
+   "crown": "plant",
+   "balconies": "none",
+   "description": "Samora Avenue block (12 storeys, 2,400 m\u00b2): a broad modernist frame grid with continuous floor ledges and vertical fins, of the 1970s Samora Avenue generation.",
+   "confidence": "OSM-tagged form, facade inferred",
+   "ring": [
+    [
+     39.2865578,
+     -6.8185938
+    ],
+    [
+     39.2866564,
+     -6.8185102
+    ],
+    [
+     39.2866412,
+     -6.8184924
+    ],
+    [
+     39.2866841,
+     -6.818456
+    ],
+    [
+     39.2866996,
+     -6.8184741
+    ],
+    [
+     39.286901,
+     -6.8183034
+    ],
+    [
+     39.2869959,
+     -6.8184137
+    ],
+    [
+     39.2871536,
+     -6.81828
+    ],
+    [
+     39.2871321,
+     -6.818255
+    ],
+    [
+     39.2871865,
+     -6.8182089
+    ],
+    [
+     39.2872049,
+     -6.8182302
+    ],
+    [
+     39.287274,
+     -6.8181716
+    ],
+    [
+     39.2872953,
+     -6.8181964
+    ],
+    [
+     39.2873125,
+     -6.8181818
+    ],
+    [
+     39.2873624,
+     -6.8182398
+    ],
+    [
+     39.287345,
+     -6.8182546
+    ],
+    [
+     39.2873776,
+     -6.8182925
+    ],
+    [
+     39.2867535,
+     -6.8188215
+    ],
+    [
+     39.2865578,
+     -6.8185938
+    ]
+   ]
+  },
+  {
+   "id": "sky-686600932",
+   "osm": 686600932,
+   "name": "Indian Ocean Residential Apartments",
+   "levels": 8,
+   "height": 26.3,
+   "district": "masaki",
+   "style": "coastal",
+   "wall": "#EEF0EE",
+   "accent": "#C9CDC9",
+   "glass": "#3A4A55",
+   "roof": "teal",
+   "crown": "hip",
+   "balconies": "wrap",
+   "description": "Indian Ocean Residential Apartments: an 8-storey Mwaya seafront block with stacked white balcony bands and a teal standing-seam metal hip roof, the distinctive green roofs of the Oyster Bay coast (OSM: metal roof).",
+   "confidence": "named, facade inferred from district references",
+   "ring": [
+    [
+     39.2871551,
+     -6.7490876
+    ],
+    [
+     39.2871798,
+     -6.7490923
+    ],
+    [
+     39.2872063,
+     -6.749094
+    ],
+    [
+     39.2872408,
+     -6.7491103
+    ],
+    [
+     39.2872656,
+     -6.749131
+    ],
+    [
+     39.2872899,
+     -6.7491446
+    ],
+    [
+     39.2872575,
+     -6.7492115
+    ],
+    [
+     39.2873248,
+     -6.7492437
+    ],
+    [
+     39.2872874,
+     -6.7493209
+    ],
+    [
+     39.2872345,
+     -6.7492956
+    ],
+    [
+     39.287189,
+     -6.7493893
+    ],
+    [
+     39.2872415,
+     -6.7494144
+    ],
+    [
+     39.2872017,
+     -6.7494966
+    ],
+    [
+     39.2871485,
+     -6.7494712
+    ],
+    [
+     39.287121,
+     -6.7495279
+    ],
+    [
+     39.286971,
+     -6.7494562
+    ],
+    [
+     39.2870007,
+     -6.7493951
+    ],
+    [
+     39.2869428,
+     -6.7493675
+    ],
+    [
+     39.2869906,
+     -6.7492688
+    ],
+    [
+     39.2870605,
+     -6.7493023
+    ],
+    [
+     39.2871016,
+     -6.7492176
+    ],
+    [
+     39.287047,
+     -6.7491915
+    ],
+    [
+     39.2870814,
+     -6.7491204
+    ],
+    [
+     39.2871408,
+     -6.7491488
+    ],
+    [
+     39.2871551,
+     -6.7490876
+    ]
+   ]
+  },
+  {
+   "id": "sky-688368962",
+   "osm": 688368962,
+   "name": null,
+   "levels": 8,
+   "height": 26.3,
+   "district": "masaki",
+   "style": "coastal",
+   "wall": "#EEF0EE",
+   "accent": "#C9CDC9",
+   "glass": "#3A4A55",
+   "roof": "flat",
+   "crown": "pergola",
+   "balconies": "wrap",
+   "description": "Oyster Bay Oyster Bay apartment block: a 8-storey cool white apartment block with wrap-around balcony slabs and glass rails, dark sliding glazing and a rooftop pergola and stair towers.",
+   "confidence": "district style family; individual facade unverified",
+   "ring": [
+    [
+     39.2773734,
+     -6.7547824
+    ],
+    [
+     39.2774359,
+     -6.7550783
+    ],
+    [
+     39.2769987,
+     -6.7551504
+    ],
+    [
+     39.2769607,
+     -6.7549255
+    ],
+    [
+     39.27696,
+     -6.7549086
+    ],
+    [
+     39.2769646,
+     -6.754896
+    ],
+    [
+     39.2769703,
+     -6.7548774
+    ],
+    [
+     39.2769819,
+     -6.7548595
+    ],
+    [
+     39.2769936,
+     -6.7548479
+    ],
+    [
+     39.2770133,
+     -6.7548384
+    ],
+    [
+     39.2773734,
+     -6.7547824
+    ]
+   ]
+  },
+  {
+   "id": "sky-688369458",
+   "osm": 688369458,
+   "name": null,
+   "levels": 13,
+   "height": 41.8,
+   "district": "city",
+   "style": "kisutu",
+   "wall": "#C6D8C4",
+   "accent": "#2F6F73",
+   "glass": "#3E5566",
+   "roof": "flat",
+   "crown": "tanks",
+   "balconies": "front",
+   "description": "Kisutu Kisutu balcony tower on Samora Street: a 13-storey mint render tower with a teal vertical stair strip, eyebrow window hoods, stacked street-facing balconies, AC units and a roof crowded with black water tanks.",
+   "confidence": "district style family; individual facade unverified",
+   "ring": [
+    [
+     39.2860262,
+     -6.8197693
+    ],
+    [
+     39.2861483,
+     -6.8197698
+    ],
+    [
+     39.2861481,
+     -6.8198269
+    ],
+    [
+     39.2861818,
+     -6.819827
+    ],
+    [
+     39.2861813,
+     -6.8199425
+    ],
+    [
+     39.2863162,
+     -6.819943
+    ],
+    [
+     39.2863162,
+     -6.8199594
+    ],
+    [
+     39.2863585,
+     -6.8199595
+    ],
+    [
+     39.2863584,
+     -6.8200018
+    ],
+    [
+     39.2863188,
+     -6.8200016
+    ],
+    [
+     39.2863185,
+     -6.8200598
+    ],
+    [
+     39.2862777,
+     -6.8200597
+    ],
+    [
+     39.2862776,
+     -6.8200773
+    ],
+    [
+     39.2861512,
+     -6.8200768
+    ],
+    [
+     39.2861513,
+     -6.8200471
+    ],
+    [
+     39.2860827,
+     -6.8200468
+    ],
+    [
+     39.2860828,
+     -6.8200173
+    ],
+    [
+     39.2860532,
+     -6.8200171
+    ],
+    [
+     39.2860534,
+     -6.8199647
+    ],
+    [
+     39.286016,
+     -6.8199646
+    ],
+    [
+     39.286016,
+     -6.8199473
+    ],
+    [
+     39.285994,
+     -6.8199473
+    ],
+    [
+     39.2859945,
+     -6.819829
+    ],
+    [
+     39.286026,
+     -6.8198292
+    ],
+    [
+     39.2860262,
+     -6.8197693
+    ]
+   ]
+  },
+  {
+   "id": "sky-688369509",
+   "osm": 688369509,
+   "name": "Tahfif Office & School Supplies",
+   "levels": 21,
+   "height": 70.6,
+   "district": "city",
+   "style": "ribbon",
+   "wall": "#EDE8DC",
+   "accent": "#2F6F73",
+   "glass": "#3E6E8E",
+   "roof": "flat",
+   "crown": "frame",
+   "balconies": "corners",
+   "description": "Mansfield Street tower (Tahfif, 21 storeys): the tallest ordinary block in the harbour tile, a cream frame with teal-glazed ribbon windows, corner balconies and an open crown frame.",
+   "confidence": "named, facade inferred from district references",
+   "ring": [
+    [
+     39.2875325,
+     -6.8184362
+    ],
+    [
+     39.2876656,
+     -6.8185931
+    ],
+    [
+     39.2874269,
+     -6.8187928
+    ],
+    [
+     39.2872938,
+     -6.8186359
+    ],
+    [
+     39.2875325,
+     -6.8184362
+    ]
+   ]
+  },
+  {
+   "id": "sky-688369519",
+   "osm": 688369519,
+   "name": null,
+   "levels": 11,
+   "height": 35.6,
+   "district": "city",
+   "style": "kisutu",
+   "wall": "#C6D8C4",
+   "accent": "#2F6F73",
+   "glass": "#3E6E8E",
+   "roof": "flat",
+   "crown": "lattice",
+   "balconies": "front",
+   "description": "Kisutu Kisutu balcony tower on Sokoine Drive: a 11-storey mint render tower with a teal vertical stair strip, eyebrow window hoods, stacked street-facing balconies, AC units and decorative grille panels at the crown.",
+   "confidence": "district style family; individual facade unverified",
+   "ring": [
+    [
+     39.2890736,
+     -6.8185131
+    ],
+    [
+     39.2891786,
+     -6.8184132
+    ],
+    [
+     39.2893146,
+     -6.8185541
+    ],
+    [
+     39.2892096,
+     -6.818654
+    ],
+    [
+     39.2890736,
+     -6.8185131
+    ]
+   ]
+  },
+  {
+   "id": "sky-688369626",
+   "osm": 688369626,
+   "name": "Le Grande Casino",
+   "levels": 12,
+   "height": 38.7,
+   "district": "city",
+   "style": "kisutu",
+   "wall": "#E8E2DA",
+   "accent": "#8E1F2B",
+   "glass": "#2C3F55",
+   "roof": "teal",
+   "crown": "hip",
+   "balconies": "front",
+   "description": "Le Grande Casino on Samora Avenue (OSM: corrugated metal roof): a 12-storey white tower with maroon accent bands and a pitched metal roof cap.",
+   "confidence": "named, facade inferred from district references",
+   "ring": [
+    [
+     39.285796,
+     -6.8199698
+    ],
+    [
+     39.2858513,
+     -6.8199224
+    ],
+    [
+     39.2858789,
+     -6.8199231
+    ],
+    [
+     39.2861333,
+     -6.8201867
+    ],
+    [
+     39.2861357,
+     -6.8202245
+    ],
+    [
+     39.2860565,
+     -6.8202944
+    ],
+    [
+     39.2860167,
+     -6.8202937
+    ],
+    [
+     39.2860047,
+     -6.820279
+    ],
+    [
+     39.2859895,
+     -6.820278
+    ],
+    [
+     39.2859452,
+     -6.8202269
+    ],
+    [
+     39.2859431,
+     -6.8202121
+    ],
+    [
+     39.2859301,
+     -6.8202115
+    ],
+    [
+     39.2858745,
+     -6.8201482
+    ],
+    [
+     39.2858732,
+     -6.8201322
+    ],
+    [
+     39.2858544,
+     -6.8201142
+    ],
+    [
+     39.2858761,
+     -6.8200893
+    ],
+    [
+     39.2859015,
+     -6.8200659
+    ],
+    [
+     39.2858604,
+     -6.8200256
+    ],
+    [
+     39.2858315,
+     -6.8199947
+    ],
+    [
+     39.2858245,
+     -6.8200003
+    ],
+    [
+     39.285796,
+     -6.8199698
+    ]
+   ]
+  },
+  {
+   "id": "sky-688369692",
+   "osm": 688369692,
+   "name": null,
+   "levels": 13,
+   "height": 41.8,
+   "district": "city",
+   "style": "tiled",
+   "wall": "#CFCFCB",
+   "accent": "#7A2E2E",
+   "glass": "#6E5C45",
+   "roof": "flat",
+   "crown": "tanks",
+   "balconies": "none",
+   "description": "Kisutu tile-clad slab on Bridge Street: a 13-storey light-grey tile block with maroon tile bands at every floor, wide white-framed windows, AC units and a roof crowded with black water tanks.",
+   "confidence": "district style family; individual facade unverified",
+   "ring": [
+    [
+     39.2872545,
+     -6.8179783
+    ],
+    [
+     39.2873892,
+     -6.8178693
+    ],
+    [
+     39.2873587,
+     -6.8178321
+    ],
+    [
+     39.2873889,
+     -6.8178077
+    ],
+    [
+     39.2873749,
+     -6.8177907
+    ],
+    [
+     39.2874186,
+     -6.8177553
+    ],
+    [
+     39.2874589,
+     -6.8178044
+    ],
+    [
+     39.2875404,
+     -6.8177384
+    ],
+    [
+     39.2876086,
+     -6.8178214
+    ],
+    [
+     39.2873222,
+     -6.8180532
+    ],
+    [
+     39.2873054,
+     -6.8180328
+    ],
+    [
+     39.2872731,
+     -6.8180589
+    ],
+    [
+     39.2872376,
+     -6.8180157
+    ],
+    [
+     39.2872662,
+     -6.8179926
+    ],
+    [
+     39.2872545,
+     -6.8179783
+    ]
+   ]
+  },
+  {
+   "id": "sky-688369695",
+   "osm": 688369695,
+   "name": "Diplomat House",
+   "levels": 13,
+   "height": 44.2,
+   "district": "city",
+   "style": "modernist",
+   "wall": "#D8CDB9",
+   "accent": "#9C9283",
+   "glass": "#2E3438",
+   "roof": "flat",
+   "crown": "castellated",
+   "balconies": "none",
+   "description": "Diplomat House on Samora Avenue: a 13-storey modernist slab with a deep beige concrete eggcrate grid of floor ledges and vertical fins over recessed dark glazing, and a castellated parapet.",
+   "confidence": "named, facade inferred from district references",
+   "ring": [
+    [
+     39.2880016,
+     -6.8173689
+    ],
+    [
+     39.2878422,
+     -6.8175094
+    ],
+    [
+     39.287673,
+     -6.8173311
+    ],
+    [
+     39.2877265,
+     -6.8172817
+    ],
+    [
+     39.2877386,
+     -6.8172947
+    ],
+    [
+     39.2877875,
+     -6.8172496
+    ],
+    [
+     39.2877984,
+     -6.81726
+    ],
+    [
+     39.28781,
+     -6.8172512
+    ],
+    [
+     39.2878236,
+     -6.8172497
+    ],
+    [
+     39.2878361,
+     -6.8172545
+    ],
+    [
+     39.2878458,
+     -6.8172649
+    ],
+    [
+     39.2878544,
+     -6.8172589
+    ],
+    [
+     39.2879114,
+     -6.8173043
+    ],
+    [
+     39.287924,
+     -6.8172918
+    ],
+    [
+     39.2880016,
+     -6.8173689
+    ]
+   ]
+  },
+  {
+   "id": "sky-688628398",
+   "osm": 688628398,
+   "name": null,
+   "levels": 13,
+   "height": 41.8,
+   "district": "city",
+   "style": "tiled",
+   "wall": "#DCCBA2",
+   "accent": "#8A6A3A",
+   "glass": "#6E5C45",
+   "roof": "flat",
+   "crown": "tanks",
+   "balconies": "none",
+   "description": "Kisutu tile-clad slab on Uhuru: a 13-storey gold-beige tile block with bronze tile bands at every floor, wide white-framed windows, AC units and a roof crowded with black water tanks.",
+   "confidence": "district style family; individual facade unverified",
+   "ring": [
+    [
+     39.2818544,
+     -6.8215521
+    ],
+    [
+     39.2820139,
+     -6.8215647
+    ],
+    [
+     39.2819871,
+     -6.8219012
+    ],
+    [
+     39.2819727,
+     -6.8219001
+    ],
+    [
+     39.2819719,
+     -6.8219102
+    ],
+    [
+     39.2819342,
+     -6.8219072
+    ],
+    [
+     39.281935,
+     -6.8218974
+    ],
+    [
+     39.281868,
+     -6.8218922
+    ],
+    [
+     39.2818673,
+     -6.8219015
+    ],
+    [
+     39.2818361,
+     -6.821899
+    ],
+    [
+     39.2818368,
+     -6.8218903
+    ],
+    [
+     39.281813,
+     -6.8218884
+    ],
+    [
+     39.2818151,
+     -6.8218611
+    ],
+    [
+     39.2818286,
+     -6.8218621
+    ],
+    [
+     39.2818307,
+     -6.8218368
+    ],
+    [
+     39.2818388,
+     -6.8218375
+    ],
+    [
+     39.2818394,
+     -6.8218294
+    ],
+    [
+     39.2818303,
+     -6.8218286
+    ],
+    [
+     39.281833,
+     -6.8217959
+    ],
+    [
+     39.2818358,
+     -6.8217961
+    ],
+    [
+     39.2818362,
+     -6.8217913
+    ],
+    [
+     39.28184,
+     -6.8217916
+    ],
+    [
+     39.2818404,
+     -6.8217862
+    ],
+    [
+     39.2818431,
+     -6.8217864
+    ],
+    [
+     39.2818434,
+     -6.8217829
+    ],
+    [
+     39.2818344,
+     -6.8217821
+    ],
+    [
+     39.2818361,
+     -6.8217599
+    ],
+    [
+     39.2818432,
+     -6.8217605
+    ],
+    [
+     39.2818448,
+     -6.8217411
+    ],
+    [
+     39.2818422,
+     -6.8217409
+    ],
+    [
+     39.2818444,
+     -6.8217145
+    ],
+    [
+     39.2818477,
+     -6.8217147
+    ],
+    [
+     39.2818507,
+     -6.8216777
+    ],
+    [
+     39.2818436,
+     -6.8216772
+    ],
+    [
+     39.2818454,
+     -6.8216551
+    ],
+    [
+     39.2818544,
+     -6.8216558
+    ],
+    [
+     39.2818548,
+     -6.8216506
+    ],
+    [
+     39.281852,
+     -6.8216504
+    ],
+    [
+     39.2818522,
+     -6.8216474
+    ],
+    [
+     39.2818471,
+     -6.821647
+    ],
+    [
+     39.2818473,
+     -6.8216438
+    ],
+    [
+     39.2818452,
+     -6.8216437
+    ],
+    [
+     39.2818477,
+     -6.8216125
+    ],
+    [
+     39.2818591,
+     -6.8216134
+    ],
+    [
+     39.2818611,
+     -6.8215891
+    ],
+    [
+     39.2818515,
+     -6.8215884
+    ],
+    [
+     39.2818534,
+     -6.8215657
+    ],
+    [
+     39.2818628,
+     -6.8215664
+    ],
+    [
+     39.2818633,
+     -6.8215607
+    ],
+    [
+     39.2818538,
+     -6.82156
+    ],
+    [
+     39.2818544,
+     -6.8215521
+    ]
+   ]
+  },
+  {
+   "id": "sky-688628399",
+   "osm": 688628399,
+   "name": null,
+   "levels": 11,
+   "height": 37.6,
+   "district": "city",
+   "style": "modernist",
+   "wall": "#D8CDB9",
+   "accent": "#9A8F80",
+   "glass": "#30383C",
+   "roof": "flat",
+   "crown": "tanks",
+   "balconies": "none",
+   "description": "Kisutu modernist frame grid on Sofia Kawawa: a 11-storey modernist concrete frame grid with deep floor ledges and vertical fins over recessed dark glazing, and a roof crowded with black water tanks.",
+   "confidence": "district style family; individual facade unverified",
+   "ring": [
+    [
+     39.2820245,
+     -6.8215717
+    ],
+    [
+     39.2820429,
+     -6.8215727
+    ],
+    [
+     39.2820428,
+     -6.8215756
+    ],
+    [
+     39.2821202,
+     -6.8215798
+    ],
+    [
+     39.2821207,
+     -6.8215713
+    ],
+    [
+     39.2821615,
+     -6.8215736
+    ],
+    [
+     39.2821437,
+     -6.8218919
+    ],
+    [
+     39.282007,
+     -6.8218844
+    ],
+    [
+     39.2820245,
+     -6.8215717
+    ]
+   ]
+  },
+  {
+   "id": "sky-689135117",
+   "osm": 689135117,
+   "name": "Bayport Oriflame",
+   "levels": 8,
+   "height": 27.7,
+   "district": "masaki",
+   "style": "ribbon",
+   "wall": "#F3F2EE",
+   "accent": "#2F5D86",
+   "glass": "#2E5878",
+   "roof": "flat",
+   "crown": "plant",
+   "balconies": "none",
+   "description": "Bayport/Oriflame building on Chato Road: an 8-storey white commercial block with blue glass ribbon windows, blue fascia accents and a plant screen on the roof.",
+   "confidence": "named, facade inferred from district references",
+   "ring": [
+    [
+     39.2600582,
+     -6.777472
+    ],
+    [
+     39.2600692,
+     -6.7773185
+    ],
+    [
+     39.2600662,
+     -6.7773183
+    ],
+    [
+     39.260062,
+     -6.777318
+    ],
+    [
+     39.260066,
+     -6.7772607
+    ],
+    [
+     39.2600705,
+     -6.777261
+    ],
+    [
+     39.2600819,
+     -6.7771013
+    ],
+    [
+     39.2600769,
+     -6.777101
+    ],
+    [
+     39.2600808,
+     -6.7770475
+    ],
+    [
+     39.2600861,
+     -6.7770479
+    ],
+    [
+     39.260096,
+     -6.7769077
+    ],
+    [
+     39.260113,
+     -6.7769089
+    ],
+    [
+     39.2601151,
+     -6.7768796
+    ],
+    [
+     39.2601683,
+     -6.7768833
+    ],
+    [
+     39.260166,
+     -6.7769151
+    ],
+    [
+     39.2602359,
+     -6.77692
+    ],
+    [
+     39.2602003,
+     -6.7774192
+    ],
+    [
+     39.2601994,
+     -6.7774191
+    ],
+    [
+     39.2601973,
+     -6.7774483
+    ],
+    [
+     39.260204,
+     -6.7774488
+    ],
+    [
+     39.2602016,
+     -6.777482
+    ],
+    [
+     39.2600582,
+     -6.777472
+    ]
+   ]
+  },
+  {
+   "id": "sky-690216618",
+   "osm": 690216618,
+   "name": "Marina Towers",
+   "levels": 8,
+   "height": 26.3,
+   "district": "masaki",
+   "style": "coastal",
+   "wall": "#F2EFE8",
+   "accent": "#D9D4CA",
+   "glass": "#3C4E58",
+   "roof": "terracotta",
+   "crown": "hip",
+   "balconies": "wrap",
+   "description": "Marina Towers on Yacht Club Road: a broad 8-storey seafront apartment block with wrap-around white balcony slabs and glass rails, dark sliding glazing and a terracotta clay-tile hip roof (OSM: clay tiles, pitched).",
+   "confidence": "named, facade inferred from district references",
+   "ring": [
+    [
+     39.2742539,
+     -6.746429
+    ],
+    [
+     39.2741265,
+     -6.7466298
+    ],
+    [
+     39.2738949,
+     -6.7464849
+    ],
+    [
+     39.2739008,
+     -6.7464757
+    ],
+    [
+     39.27389,
+     -6.7464689
+    ],
+    [
+     39.2740025,
+     -6.7462915
+    ],
+    [
+     39.2740158,
+     -6.7462997
+    ],
+    [
+     39.2740465,
+     -6.7462514
+    ],
+    [
+     39.2739297,
+     -6.7461783
+    ],
+    [
+     39.2741164,
+     -6.745884
+    ],
+    [
+     39.2742292,
+     -6.7459546
+    ],
+    [
+     39.2742591,
+     -6.7459074
+    ],
+    [
+     39.2742476,
+     -6.7459002
+    ],
+    [
+     39.2742669,
+     -6.7458696
+    ],
+    [
+     39.2742588,
+     -6.7458645
+    ],
+    [
+     39.2743504,
+     -6.7457202
+    ],
+    [
+     39.2743714,
+     -6.7457333
+    ],
+    [
+     39.2743762,
+     -6.7457258
+    ],
+    [
+     39.2746069,
+     -6.7458702
+    ],
+    [
+     39.2746043,
+     -6.7458744
+    ],
+    [
+     39.2746016,
+     -6.7458727
+    ],
+    [
+     39.2745938,
+     -6.745885
+    ],
+    [
+     39.2745959,
+     -6.7458863
+    ],
+    [
+     39.27448,
+     -6.7460689
+    ],
+    [
+     39.2743556,
+     -6.745991
+    ],
+    [
+     39.2743578,
+     -6.7459875
+    ],
+    [
+     39.2743534,
+     -6.7459847
+    ],
+    [
+     39.274351,
+     -6.7459885
+    ],
+    [
+     39.2743264,
+     -6.7460272
+    ],
+    [
+     39.2743182,
+     -6.746022
+    ],
+    [
+     39.2742781,
+     -6.7460851
+    ],
+    [
+     39.2742769,
+     -6.7460843
+    ],
+    [
+     39.2742709,
+     -6.7460806
+    ],
+    [
+     39.2741714,
+     -6.7462373
+    ],
+    [
+     39.2741791,
+     -6.7462421
+    ],
+    [
+     39.2741666,
+     -6.7462619
+    ],
+    [
+     39.2741406,
+     -6.7463029
+    ],
+    [
+     39.2741448,
+     -6.7463056
+    ],
+    [
+     39.2741403,
+     -6.7463127
+    ],
+    [
+     39.2741447,
+     -6.7463154
+    ],
+    [
+     39.2741323,
+     -6.7463348
+    ],
+    [
+     39.2741241,
+     -6.7463478
+    ],
+    [
+     39.2742539,
+     -6.746429
+    ]
+   ]
+  },
+  {
+   "id": "sky-991183939",
+   "osm": 991183939,
+   "name": null,
+   "levels": 9,
+   "height": 29.4,
+   "district": "masaki",
+   "style": "coastal",
+   "wall": "#EFE6D6",
+   "accent": "#D5C7AE",
+   "glass": "#3A4A55",
+   "roof": "teal",
+   "crown": "hip",
+   "balconies": "front",
+   "description": "Oyster Bay Oyster Bay apartment block on Kimweri Avenue: a 9-storey cream apartment block with stacked sea-facing balconies, dark sliding glazing and a teal standing-seam metal hip roof.",
+   "confidence": "district style family; individual facade unverified",
+   "ring": [
+    [
+     39.2719649,
+     -6.7577665
+    ],
+    [
+     39.2720514,
+     -6.7578095
+    ],
+    [
+     39.2719764,
+     -6.7579584
+    ],
+    [
+     39.2718898,
+     -6.7579153
+    ],
+    [
+     39.2719649,
+     -6.7577665
+    ]
+   ]
+  }
+ ]
+}

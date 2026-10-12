@@ -22,7 +22,7 @@ nonisolated enum DioramaRoofBuilder {
         let slope = tan(pitch)
         guard !Task.isCancelled, !flags.contains(true), (3...128).contains(ccw.count),
               z.isFinite, slope.isFinite, slope > 0.01, maxRise > 0,
-              let eaves = DioramaPolygon.offset(ccw, by: overhang),
+              let eaves = abs(overhang) < 0.000001 ? ccw : DioramaPolygon.offset(ccw, by: overhang),
               let wings = wings(for: footprint ?? ccw, eaves: eaves, slope: slope, overhang: overhang, maxRise: maxRise),
               !wings.isEmpty else { return false }
         let triangles = DioramaPolygon.triangulate(eaves)
@@ -174,7 +174,7 @@ nonisolated enum DioramaRoofBuilder {
     }
 
     /// Clips a convex polygon to one half-plane, retaining exact intersection points.
-    private static func clip(_ ring: [DV2], by plane: Plane) -> [DV2] {
+    static func clip(_ ring: [DV2], by plane: Plane) -> [DV2] {
         guard ring.count >= 3 else { return [] }
         var output: [DV2] = []
         var previous = ring[ring.count - 1], previousHeight = plane.height(previous)

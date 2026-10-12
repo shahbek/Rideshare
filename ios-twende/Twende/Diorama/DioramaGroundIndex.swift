@@ -17,6 +17,12 @@ nonisolated struct DioramaGroundIndex: Sendable {
     let triangles: [UInt32]
     var bytes: Int { offsets.count * 4 + triangles.count * 4 }
 
+    /// Restores an index previously built for the same tile (GPU-ready snapshot).
+    init(minX: Float, minY: Float, cell: Float, columns: Int, rows: Int, offsets: [UInt32], triangles: [UInt32]) {
+        self.minX = minX; self.minY = minY; self.cell = cell; self.columns = columns; self.rows = rows
+        self.offsets = offsets; self.triangles = triangles
+    }
+
     init?(rect: DioramaRect, ranges: [DioramaRenderLayer.Range], cell: Float = 8,
           index: (Int) -> UInt32, position: (Int) -> SIMD4<Float>, isGround: (Int) -> Bool) {
         let width = Float(rect.width), height = Float(rect.height)

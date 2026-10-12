@@ -47,6 +47,12 @@ struct OfflineMapsView: View {
             }
             RowDivider(leading: 0)
             DioramaDownloadView()
+            RowDivider(leading: 0)
+            DioramaDownloadView(region: .harbour)
+            RowDivider(leading: 0)
+            DioramaDownloadView(region: .golf)
+            RowDivider(leading: 0)
+            AirportDownloadView()
             ForEach(OfflineMapArea.areas) { area in
                 RowDivider(leading: 0)
                 areaRow(area)
@@ -114,7 +120,7 @@ struct OfflineMapsView: View {
                             .underline()
                             .frame(minHeight: 48)
                     }
-                    .disabled(!service.canDownload || service.activeID != nil || !service.removingIDs.isEmpty || DioramaDownloadService.shared.isRunning)
+                    .disabled(!service.canDownload || service.activeID != nil || !service.removingIDs.isEmpty || DioramaDownloadService.isProcessing)
                     .accessibilityIdentifier("offline.download.\(area.id)")
                     Spacer(minLength: 0)
                     if saved != nil {
@@ -126,7 +132,7 @@ struct OfflineMapsView: View {
                             }
                             .font(TwendeFont.caption)
                             .frame(minWidth: 48, minHeight: 48)
-                            .disabled(service.activeID != nil || DioramaDownloadService.shared.isRunning)
+                            .disabled(service.activeID != nil || DioramaDownloadService.isProcessing)
                         }
                     }
                 }

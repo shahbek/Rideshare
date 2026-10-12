@@ -53,7 +53,10 @@ nonisolated struct DioramaLODSelector: Sendable {
         let closest = simd_clamp(eye, minimum, maximum)
         let distance = simd_distance(eye, closest)
         guard distance > 1 else { return 0 }
-        return tolerance * distance / focalPixels
+        // Foreground keeps the strict one-pixel bound; the tolerance then grows with distance (2× at
+        // 520 m, capped at 3× from 820 m) so far blocks of an HD tile draw their lighter levels.
+        let growth = min(3, max(1, 1 + (distance - 220) / 300))
+        return tolerance * growth * distance / focalPixels
     }
 
     private func pick(_ levels: [Level], allowed: Float, scale: Float = 1) -> Level? {
@@ -270,13 +273,18 @@ nonisolated enum DioramaLODBuilder {
         }
     }
 
-    static func build(_ tile: DioramaResidentTile) throws -> Result {
+    /// - Parameters:
+    ///   - only: restrict static simplification to these range indices (nil: every eligible range).
+    ///   - unslottedGroupsOnly: simplify only prototypes that do not already carry levels.
+    static func build(_ tile: DioramaResidentTile, only: Set<Int>? = nil, unslottedGroupsOnly: Bool = false, groups includeGroups: Bool = true) throws -> Result {
         let started = Date()
         let view = VertexView(base: tile.vertexBuffer.contents().assumingMemoryBound(to: DioramaPackedVertex.self), count: tile.vertexCount)
         let indices = UnsafeBufferPointer(start: tile.indexBuffer.contents().assumingMemoryBound(to: UInt32.self), count: tile.indexCount)
         var materials: [UInt32: UInt64] = [:]
         var output: [UInt32] = []
-        let eligible = tile.ranges.indices.filter { simplified.contains(tile.ranges[$0].category) && tile.ranges[$0].count > 0 }
+        let eligible = tile.ranges.indices.filter {
+            simplified.contains(tile.ranges[$0].category) && tile.ranges[$0].count > 0 && (only?.contains($0) ?? true)
+        }
         var levels: [[DioramaLODTable.Level]] = Array(repeating: [], count: tile.ranges.count)
         var previousCounts = tile.ranges.map(\.count)
         var previousErrors = [Float](repeating: 0, count: tile.ranges.count)
@@ -363,7 +371,8 @@ nonisolated enum DioramaLODBuilder {
         // Instanced prototypes (trees, props, architectural parts) in their own local units.
         var prototypes: [DioramaLODStore.Prototype] = []
         var done = Set<SIMD2<Int>>()
-        for group in tile.groups where simplified.contains(group.category) && group.fullCount >= 36 {
+        for group in tile.groups where includeGroups && simplified.contains(group.category) && group.fullCount >= 36
+            && (!unslottedGroupsOnly || group.lodSlot < 0) {
             let key = SIMD2(group.fullStart, group.fullCount)
             guard done.insert(key).inserted, group.fullStart + group.fullCount <= indices.count else { continue }
             try Task.checkCancellation()
@@ -412,5 +421,50 @@ nonisolated enum DioramaLODBuilder {
         let report = "Pixel-error LOD: \(baseTriangles.formatted()) static tris → \(summary); \(prototypes.count) prototype chains; built in \(String(format: "%.1f", Date().timeIntervalSince(started)))s"
         return Result(signature: DioramaLODStore.signature(vertexCount: tile.vertexCount, indexCount: tile.indexCount, ranges: tile.ranges, groups: tile.groups),
                       ranges: levels, prototypes: prototypes, indices: output, report: report)
+    }
+
+    /// Adds measured pixel-error levels to geometry that has none yet (tile-drawn landmarks and
+    /// skyline towers, the airport campus), merged after any verified sidecar levels. Same
+    /// clustering, same error bound and same runtime selection as the saved-tile sidecars, so
+    /// every level is still drawn only while its displacement stays under the pass tolerance.
+    /// Returns the tile unchanged on any failure (full detail, exactly as before).
+    static func completing(_ tile: DioramaResidentTile, ranges selected: Set<Int>? = nil, groups includeGroups: Bool) -> DioramaResidentTile {
+        let missing = Set(tile.ranges.indices.filter { i in
+            let r = tile.ranges[i]
+            return r.lodSlot < 0 && simplified.contains(r.category) && r.count >= 96 && (selected?.contains(i) ?? true)
+        })
+        let groupsMissing = includeGroups && tile.groups.contains { $0.lodSlot < 0 && simplified.contains($0.category) && $0.fullCount >= 36 }
+        guard !missing.isEmpty || groupsMissing else { return tile }
+        let result: Result
+        do { result = try build(tile, only: missing, unslottedGroupsOnly: true, groups: includeGroups) } catch { return tile }
+        guard !result.indices.isEmpty else { return tile }
+        let base = tile.lod
+        let baseCount = base?.indexCount ?? 0
+        let total = baseCount + result.indices.count
+        guard total <= 256 * 1_048_576, let buffer = tile.device.makeBuffer(length: max(16, total * 4), options: .storageModeShared) else { return tile }
+        if let base, baseCount > 0 { buffer.contents().copyMemory(from: base.indexBuffer.contents(), byteCount: baseCount * 4) }
+        result.indices.withUnsafeBytes { bytes in
+            if let address = bytes.baseAddress { buffer.contents().advanced(by: baseCount * 4).copyMemory(from: address, byteCount: bytes.count) }
+        }
+        func shifted(_ levels: [DioramaLODTable.Level]) -> [DioramaLODTable.Level] {
+            levels.map { .init(start: $0.start + baseCount, count: $0.count, error: $0.error) }
+        }
+        var rangeLevels = base?.rangeLevels ?? []
+        var prototypeLevels = base?.prototypeLevels ?? []
+        var ranges = tile.ranges, groups = tile.groups
+        for i in missing.sorted() where i < result.ranges.count && !result.ranges[i].isEmpty {
+            ranges[i].lodSlot = Int32(rangeLevels.count)
+            rangeLevels.append(shifted(result.ranges[i]))
+        }
+        for proto in result.prototypes where !proto.levels.isEmpty {
+            let slot = Int32(prototypeLevels.count)
+            prototypeLevels.append(shifted(proto.levels))
+            for i in groups.indices where groups[i].lodSlot < 0 && groups[i].fullStart == proto.fullStart && groups[i].fullCount == proto.fullCount {
+                groups[i].lodSlot = slot
+                groups[i].lodScale = groups[i].instances.reduce(Float(0)) { max($0, max($1.scale.x, max($1.scale.y, $1.scale.z))) }
+            }
+        }
+        let table = DioramaLODTable(indexBuffer: buffer, indexCount: total, rangeLevels: rangeLevels, prototypeLevels: prototypeLevels)
+        return tile.replacing(ranges: ranges, groups: groups, lod: table, report: result.report)
     }
 }

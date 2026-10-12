@@ -2,6 +2,46 @@ import CryptoKit
 import Foundation
 import Metal
 
+/// Independently prepared offline 3D regions. Each has its own folder, readiness and basemap area.
+nonisolated enum DioramaRegion: String, CaseIterable, Sendable {
+    case masaki, harbour, golf
+    var folder: String {
+        switch self {
+        case .masaki: "MasakiOffline"
+        case .harbour: "HarbourOffline"
+        case .golf: "GolfOffline"
+        }
+    }
+    var displayName: String {
+        switch self {
+        case .masaki: "Masaki"
+        case .harbour: "Harbour"
+        case .golf: "Golf courses"
+        }
+    }
+    var tiles: [DioramaTileID] {
+        switch self {
+        case .masaki: DioramaOfflineStore.tiles
+        case .harbour: DioramaOfflineStore.harbourTiles
+        case .golf: DioramaOfflineStore.golfTiles
+        }
+    }
+    /// Harbour is streamed: pieces arrive into a fresh HarbourStreamZ folder and stay there, so each
+    /// piece downloads once. Older HarbourOffline/HarbourStream folders are left untouched but ignored.
+    var isStreamed: Bool { self == .harbour }
+    /// Server catalogue holding this region's compact ZPK1 stream packages (`DioramaStreamPackage`).
+    var compactCatalogName: String? { self == .harbour ? "harbour-z1" : nil }
+    var rootURL: URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent(isStreamed ? "HarbourStreamZ" : folder, isDirectory: true)
+    }
+    static func of(_ tile: DioramaTileID) -> DioramaRegion {
+        if DioramaOfflineStore.harbourTiles.contains(tile) { return .harbour }
+        if DioramaOfflineStore.golfTiles.contains(tile) { return .golf }
+        return .masaki
+    }
+}
+
 /// User-owned packages live outside purgeable caches. Local visual patches never fetch or rebuild a tile.
 actor DioramaOfflineStore {
     static let shared = DioramaOfflineStore()
@@ -10,6 +50,64 @@ actor DioramaOfflineStore {
         let se = DioramaTileID(latitude: -6.785, longitude: 39.305, zoom: 16)
         return (nw.y...se.y).flatMap { y in (nw.x...se.x).map { DioramaTileID(z: 16, x: $0, y: y) } }
     }()
+
+    nonisolated static let harbourTiles: [DioramaTileID] = {
+        guard let data = HarbourLandmarkData.bundled else { return [] }
+        var result: Set<DioramaTileID> = []
+        for ring in data.sites.map(\.ring) + data.parts.map(\.ring) {
+            let addresses = ring.map { DioramaTileID(latitude: $0[1], longitude: $0[0], zoom: 16) }
+            guard let minX = addresses.map(\.x).min(), let maxX = addresses.map(\.x).max(),
+                  let minY = addresses.map(\.y).min(), let maxY = addresses.map(\.y).max() else { continue }
+            for y in minY...maxY { for x in minX...maxX { result.insert(.init(z: 16, x: x, y: y)) } }
+        }
+        return result.sorted { $0.key < $1.key }
+    }()
+    /// Gymkhana Club and TPDF Lugalo, outside the Masaki envelope and the harbour tiles.
+    nonisolated static let golfTiles: [DioramaTileID] = {
+        let taken = Set(tiles + harbourTiles)
+        return DarGolf.tiles.filter { !taken.contains($0) }
+    }()
+    static let harbour = DioramaOfflineStore(region: .harbour)
+    static let golf = DioramaOfflineStore(region: .golf)
+    nonisolated static func store(for tile: DioramaTileID) -> DioramaOfflineStore {
+        store(for: DioramaRegion.of(tile))
+    }
+    nonisolated static func store(for region: DioramaRegion) -> DioramaOfflineStore {
+        switch region {
+        case .masaki: shared
+        case .harbour: harbour
+        case .golf: golf
+        }
+    }
+    nonisolated static var allTiles: [DioramaTileID] { tiles + harbourTiles + golfTiles }
+
+    private nonisolated final class PackageListing: @unchecked Sendable {
+        let lock = NSLock()
+        var names: [DioramaRegion: (Date, [String])] = [:]
+    }
+    private nonisolated static let listing = PackageListing()
+    /// Cheap synchronous check (15 s cached directory listing) for any saved package of `tile`.
+    nonisolated static func hasSavedPackage(_ tile: DioramaTileID) -> Bool {
+        hasSavedPackage(tile, context: nil)
+    }
+    /// Same cached listing, restricted to one detail mode (`true` surroundings, `false` full detail).
+    nonisolated static func hasSavedPackage(_ tile: DioramaTileID, context: Bool?) -> Bool {
+        let region = DioramaRegion.of(tile)
+        guard region.tiles.contains(tile) else { return false }
+        listing.lock.lock(); defer { listing.lock.unlock() }
+        var names = listing.names[region]
+        if names == nil || Date().timeIntervalSince(names?.0 ?? .distantPast) > 15 {
+            let root = region.rootURL
+            names = (Date(), (try? FileManager.default.contentsOfDirectory(atPath: root.path)) ?? [])
+            listing.names[region] = names
+        }
+        let marker = "-\(tile.key)-"
+        let suffix = context.map { $0 ? "-context1" : "-focus" }
+        return names?.1.contains { $0.hasPrefix("v") && $0.contains(marker) && (suffix.map($0.hasSuffix) ?? true) } ?? false
+    }
+    nonisolated let region: DioramaRegion
+    nonisolated var regionTiles: [DioramaTileID] { region.tiles }
+    init(region: DioramaRegion = .masaki) { self.region = region }
 
     private struct ReadKey: Hashable, Sendable {
         let tile: DioramaTileID
@@ -37,10 +135,9 @@ actor DioramaOfflineStore {
     // The mounted renderers own their artifacts. Do not retain a second evicted-tile working set.
     private let decodedBudget: Int = 0
 
-    private var root: URL {
-        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("MasakiOffline", isDirectory: true)
-    }
+    private var root: URL { region.rootURL }
+
+
     private func key(_ tile: DioramaTileID, context: Bool) -> String {
         DioramaDiskCache.key(tile: tile, config: .slipway, reduced: false) + (context ? "-context1" : "-focus")
     }
@@ -70,10 +167,12 @@ actor DioramaOfflineStore {
                 return ranges.filter { r in r.category == .buildings && stride(from: r.start, to: r.start + r.count, by: 3).contains { removed.contains($0) } }
                     .reduce(0) { $0 + $1.count }
             } ?? 0
-            var plan = DioramaTileArchive.residentPlan(m, origin: tile.centre, patchVertices: patch?.additions.vertices.count ?? 0,
-                patchIndices: patch?.additions.indices.count ?? 0, affectedIndices: affected)
-            plan.lodBytes = DioramaLODStore.indexBytes(package: directory, patched: patch != nil)
-            var cost = DioramaResidencyBudget.residentCost(plan, labelTitles: m.labels.map(\.title), context: context, size: size, scale: scale)
+            let landmarks = DioramaBakedLandmarks.shared.counts(for: tile)
+            var plan = DioramaTileArchive.residentPlan(m, origin: tile.centre, patchVertices: (patch?.additions.vertices.count ?? 0) + landmarks.vertices,
+                patchIndices: (patch?.additions.indices.count ?? 0) + landmarks.indices, affectedIndices: affected)
+            // Computed landmark levels add an index-only buffer (typically well under half the source indices).
+            plan.lodBytes = DioramaLODStore.indexBytes(package: directory, patched: patch != nil) + landmarks.indices * 2
+            var cost = DioramaResidencyBudget.residentCost(plan, labelTitles: context ? [] : m.labels.map(\.title), context: context, size: size, scale: scale)
             // The sidecar's float vertices/indices are held while it is merged.
             if let patch { cost = .init(retained: cost.retained, peak: cost.peak + patch.additions.totalBytes) }
             costs.append(cost)
@@ -81,6 +180,20 @@ actor DioramaOfflineStore {
         // A rejected newer candidate may fall back to an older, larger compatible archive.
         guard !costs.isEmpty else { return nil }
         return .init(retained: costs.map(\.retained).max() ?? 0, peak: costs.map(\.peak).max() ?? 0)
+    }
+
+    /// Decodes once in the background so the GPU-ready snapshot exists before the first visit.
+    /// Returns false when a current snapshot already exists or nothing could be decoded.
+    func warmSnapshot(_ tile: DioramaTileID, context: Bool) async -> Bool {
+        guard DioramaGPUPreparation.shared.device != nil else { return false }
+        let directory = root
+        guard let firstName = candidateNames(tile, context: context).first(where: {
+            FileManager.default.fileExists(atPath: directory.appendingPathComponent($0).appendingPathComponent("manifest.json").path)
+        }) else { return false }
+        let landmarks = DioramaBakedLandmarks.shared.snapshotIdentity(for: tile)
+        if let identity = DioramaResidentSnapshot.identity(package: directory.appendingPathComponent(firstName), landmarks: landmarks),
+           DioramaResidentSnapshot.isCurrent(tile: tile, context: context, identity: identity) { return false }
+        return await readResident(tile, context: context) != nil
     }
 
     /// Decodes a saved package straight into shared Metal storage; no CPU duplicate, no network.
@@ -95,13 +208,41 @@ actor DioramaOfflineStore {
         let directory = root
         let revision = dataRevision
         let started = Date()
+        // Fast path: a GPU-ready snapshot of this exact decode maps straight into Metal.
+        let firstName = names.first { FileManager.default.fileExists(atPath: directory.appendingPathComponent($0).appendingPathComponent("manifest.json").path) }
+        let landmarkIdentity = DioramaBakedLandmarks.shared.snapshotIdentity(for: tile)
+        var identity: String?
+        if let firstName {
+            await acquireReadSlot(focus: !context)
+            let package = directory.appendingPathComponent(firstName)
+            let fast = Task.detached(priority: context ? .utility : .userInitiated) { () -> (String?, DioramaResidentSnapshot.Loaded?) in
+                guard let identity = DioramaResidentSnapshot.identity(package: package, landmarks: landmarkIdentity) else { return (nil, nil) }
+                return (identity, autoreleasepool { DioramaResidentSnapshot.read(tile: tile, context: context, identity: identity, device: device) })
+            }
+            let (found, loaded) = await withTaskCancellationHandler { await fast.value } onCancel: { fast.cancel() }
+            releaseReadSlot()
+            identity = found
+            guard revision == dataRevision, !Task.isCancelled else { return nil }
+            if let loaded {
+                print("[Diorama load] \(tile.key) context=\(context) snapshot-ready=\(String(format: "%.3f", loaded.seconds))s gpu=\(loaded.tile.gpuBytes / 1_048_576)MiB")
+                return loaded.tile
+            }
+        }
+        // Bespoke landmarks inside this tile are drawn by it (Slipway/Sea Cliff method). The read
+        // never waits for recipes that are not baked yet: the tile is drawn now with its saved
+        // shells, the missing recipes build in the background and the tile reloads when they exist.
+        let (landmarks, landmarksComplete) = DioramaBakedLandmarks.shared.cachedMeshes(for: tile)
+        if !landmarksComplete {
+            DioramaBakedLandmarks.shared.buildMissing(for: tile)
+            print("[Diorama load] \(tile.key) context=\(context): \(landmarks.count) baked landmark(s) ready; others build in background")
+        }
         await acquireReadSlot(focus: !context)
         defer { releaseReadSlot() }
         guard !Task.isCancelled else { return nil }
-        let job = Task.detached(priority: context ? .utility : .userInitiated) { () -> (DioramaResidentTile?, String) in
+        let job = Task.detached(priority: context ? .utility : .userInitiated) { () -> (DioramaResidentTile?, String, String?) in
             var failure = "Saved \(context ? "low-detail" : "full-detail") package is missing"
             for name in names {
-                if Task.isCancelled { return (nil, failure) }
+                if Task.isCancelled { return (nil, failure, nil) }
                 let location = directory.appendingPathComponent(name)
                 guard FileManager.default.fileExists(atPath: location.appendingPathComponent("manifest.json").path) else { continue }
                 do {
@@ -111,12 +252,13 @@ actor DioramaOfflineStore {
                     let patch = await DioramaVisualUpgrade.shared.cachedPatch(directory: location, tile: tile, indexCount: indexCount,
                         ranges: DioramaTileArchive.baseRanges(m), groups: DioramaTileArchive.baseGroupShells(m))
                     let result = try autoreleasepool {
-                        try DioramaTileArchive.readResident(from: location, key: name, manifest: m, device: device, patch: patch, origin: tile.centre)
+                        try DioramaTileArchive.readResident(from: location, key: name, manifest: m, device: device, patch: patch, origin: tile.centre,
+                                                            landmarks: landmarks)
                     }
                     if patch == nil { print("[Diorama load] \(tile.key) context=\(context): no verified r3 sidecar; original v36 roofs/trees shown") }
-                    return (result, failure)
+                    return (result, failure, name)
                 } catch {
-                    if Task.isCancelled || error is CancellationError { return (nil, failure) }
+                    if Task.isCancelled || error is CancellationError { return (nil, failure, nil) }
                     switch error {
                     case DioramaTileArchive.ArchiveError.incompatible: failure = "Saved package layout is incompatible"
                     case DioramaTileArchive.ArchiveError.invalid: failure = "Saved package failed geometry/checksum validation or GPU allocation"
@@ -127,11 +269,24 @@ actor DioramaOfflineStore {
                     continue
                 }
             }
-            return (nil, failure)
+            return (nil, failure, nil)
         }
-        let (result, failure) = await withTaskCancellationHandler { await job.value } onCancel: { job.cancel() }
+        let (result, failure, usedName) = await withTaskCancellationHandler { await job.value } onCancel: { job.cancel() }
         guard revision == dataRevision, !Task.isCancelled else { return nil }
         if result == nil { readFailures[request] = failure }
+        // Cache this exact decode for the next visit (background, purgeable, never user data).
+        let expected = DioramaBakedLandmarks.ids(for: tile)
+        let baked = DioramaBakedLandmarks.shared
+        if let result, let identity, usedName == firstName,
+           expected.allSatisfy({ id in landmarks.contains { $0.id == id } || baked.isUnavailable(id) }) {
+            let drawn = landmarks.map(\.id)
+            var floors: [String: Double] = [:]
+            for id in drawn { if let floor = baked.knownFloor(id) { floors[id] = floor } }
+            let snapshotFloors = floors
+            Task.detached(priority: .utility) {
+                DioramaResidentSnapshot.write(result, context: context, identity: identity, drawn: drawn, expected: expected, floors: snapshotFloors)
+            }
+        }
         print("[Diorama load] \(tile.key) context=\(context) resident-ready=\(String(format: "%.3f", Date().timeIntervalSince(started)))s gpu=\((result?.gpuBytes ?? 0) / 1_048_576)MiB")
         return result
     }
@@ -164,7 +319,8 @@ actor DioramaOfflineStore {
             }
             let job = Task.detached(priority: .utility) { () throws -> String in
                 let resident = try autoreleasepool {
-                    try DioramaTileArchive.readResident(from: location, key: name, manifest: m, device: device, patch: patch, origin: tile.centre)
+                    try DioramaTileArchive.readResident(from: location, key: name, manifest: m, device: device, patch: patch, origin: tile.centre,
+                                                        roofs: false)
                 }
                 // Build from the original layout, never from a stale LOD-tagged copy.
                 guard resident.lod == nil else { return "already optimized" }
@@ -180,13 +336,25 @@ actor DioramaOfflineStore {
         return nil
     }
 
-    /// Every file of every current package and sidecar, for publishing pre-baked scenery.
-    func publishableFiles() -> [(directory: String, file: String, url: URL)] {
+    /// Every file of every current package and sidecar, for publishing pre-baked scenery. `compactOnly`
+    /// keeps format-2 packages (and sidecars naming them), so streamed regions never serve old 64-byte
+    /// vertex / 4096 px ground packages.
+    func publishableFiles(compactOnly: Bool = false) -> [(directory: String, file: String, url: URL)] {
         guard let entries = try? FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil) else { return [] }
+        let directories = entries.filter { $0.hasDirectoryPath || (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true }
+        let compact = Set(directories.compactMap { directory -> String? in
+            let name = directory.lastPathComponent
+            guard name.hasPrefix("v"), let m = try? DioramaTileArchive.validatedManifest(at: directory, key: name),
+                  m.format >= DioramaTileArchive.format else { return nil }
+            return name
+        })
         var result: [(String, String, URL)] = []
-        for directory in entries where directory.hasDirectoryPath || (try? directory.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true {
+        for directory in directories {
             let name = directory.lastPathComponent
             guard name.hasPrefix("v") || name.hasPrefix("visual-r") || name.hasPrefix(DioramaLODStore.prefix) else { continue }
+            if compactOnly {
+                guard compact.contains(name) || (!name.hasPrefix("v") && compact.contains { name.contains("-\($0)-") }) else { continue }
+            }
             for file in (try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)) ?? [] {
                 result.append((name, file.lastPathComponent, file))
             }
@@ -202,6 +370,33 @@ actor DioramaOfflineStore {
         let destination = root.appendingPathComponent(name)
         if FileManager.default.fileExists(atPath: destination.path) { try FileManager.default.removeItem(at: destination) }
         try FileManager.default.moveItem(at: staged, to: destination)
+        Self.invalidateListing()
+    }
+    /// Stored (download) bytes of the package each tile would read, per detail mode, plus whether it is
+    /// a compact format-2 package. Sidecars (LOD levels, r3 roofs) of that package are included.
+    func packageSizes() -> [(tile: DioramaTileID, coarse: Int64, full: Int64, compact: Bool)] {
+        func size(_ url: URL) -> Int64 {
+            let enumerator = FileManager.default.enumerator(at: url, includingPropertiesForKeys: [.fileSizeKey])
+            var total: Int64 = 0
+            while let file = enumerator?.nextObject() as? URL { total += Int64((try? file.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0) }
+            return total
+        }
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: root.path)) ?? []
+        return regionTiles.map { tile in
+            var bytes: [Int64] = [0, 0], compact = true
+            for (i, context) in [true, false].enumerated() {
+                guard let name = candidateNames(tile, context: context).first(where: { validFiles(name: $0) }) else { compact = false; continue }
+                let m = try? DioramaTileArchive.validatedManifest(at: root.appendingPathComponent(name), key: name)
+                if (m?.format ?? 0) < DioramaTileArchive.format { compact = false }
+                bytes[i] = size(root.appendingPathComponent(name))
+                    + names.filter { !$0.hasPrefix("v") && $0.contains("-\(name)-") }.reduce(0) { $0 + size(root.appendingPathComponent($1)) }
+            }
+            return (tile, bytes[0], bytes[1], compact)
+        }
+    }
+    /// Directory listing changed outside the actor's own reads (streamed install).
+    nonisolated static func invalidateListing() {
+        listing.lock.lock(); listing.names.removeAll(); listing.lock.unlock()
     }
     func hasDirectory(_ name: String) -> Bool {
         FileManager.default.fileExists(atPath: root.appendingPathComponent(name).appendingPathComponent("manifest.json").path)
@@ -209,6 +404,7 @@ actor DioramaOfflineStore {
             || FileManager.default.fileExists(atPath: root.appendingPathComponent(name).appendingPathComponent("patch.json").path)
     }
     var stagingRoot: URL { root.appendingPathComponent("prebaked-stage", isDirectory: true) }
+    var streamStagingRoot: URL { root.appendingPathComponent("stream-stage", isDirectory: true) }
 
     /// Deduplicated local reads; at most two decompressions run, with focus ahead of queued context.
     func read(_ tile: DioramaTileID, context: Bool = false) async -> DioramaTileArtifacts? {
@@ -340,12 +536,17 @@ actor DioramaOfflineStore {
     /// Publish the region switch only after every detail mode is present. A paused repair never
     /// mixes elevated repaired tiles with the old valley-shaped neighbouring packages.
     func activateJoins() throws {
-        guard Self.tiles.allSatisfy({ isJoined($0, context: false) && isJoined($0, context: true) }) else { throw Failure.package }
-        try Data("joined1".utf8).write(to: root.appendingPathComponent("joined1.ready"), options: .atomic)
+        guard regionTiles.allSatisfy({ isJoined($0, context: false) && isJoined($0, context: true) }) else { throw Failure.package }
+        try Data("joined\(Self.joinRevision)".utf8).write(to: root.appendingPathComponent("joined\(Self.joinRevision).ready"), options: .atomic)
         invalidateReads()
     }
-    private func joinedKey(_ tile: DioramaTileID, context: Bool) -> String {
-        DioramaDiskCache.key(tile: tile, config: .slipway, reduced: false) + "-joined1" + (context ? "-context1" : "-focus")
+    /// Rebuild revisions: 1 terrain/roads, 2 district colours, 3 shared architecture, 4 distinct typologies,
+    /// 5 sand landuse, 6 roof kit, 7 windows/doors, 8 compact packages (1024 px natural raster plus vector
+    /// hard finishes, 32-byte millimetre vertices). Older revisions stay readable until the newer region
+    /// rebuild is complete and activated.
+    nonisolated static let joinRevision = 8
+    private func joinedKey(_ tile: DioramaTileID, context: Bool, revision: Int = DioramaOfflineStore.joinRevision) -> String {
+        DioramaDiskCache.key(tile: tile, config: .slipway, reduced: false) + "-joined\(revision)" + (context ? "-context1" : "-focus")
     }
     func save(_ artifact: DioramaTileArtifacts, context: Bool) throws {
         invalidateReads()
@@ -370,9 +571,7 @@ actor DioramaOfflineStore {
     private func verifiedFiles(directory: URL, name: String) -> Bool {
         guard let bytes = try? Data(contentsOf: directory.appendingPathComponent("manifest.json")),
               let manifest = try? JSONDecoder().decode(DioramaTileArchive.Manifest.self, from: bytes),
-              manifest.key == name, manifest.format == DioramaTileArchive.format,
-              manifest.vertexStride == MemoryLayout<BuildingRenderVertex>.stride,
-              manifest.instanceStride == MemoryLayout<DioramaInstanceData>.stride,
+              manifest.key == name, DioramaTileArchive.supports(manifest),
               manifest.sections.count == 10, Set(manifest.sections.map(\.name)).count == 10,
               manifest.sections.allSatisfy({ $0.bytes >= 0 && $0.bytes <= DioramaTileArchive.maxBytes }),
               manifest.sections.reduce(0, { $0 + $1.bytes }) <= DioramaTileArchive.maxBytes,
@@ -387,7 +586,7 @@ actor DioramaOfflineStore {
     }
     func inventory() -> (complete: Int, bytes: Int64) {
         var count = 0
-        for tile in Self.tiles {
+        for tile in regionTiles {
             if Task.isCancelled { break }
             if [false, true].allSatisfy({ validFiles(tile, context: $0) }) { count += 1 }
         }
@@ -415,16 +614,23 @@ actor DioramaOfflineStore {
                   let version = Int(prefix.dropFirst()) else { return false }
             return version <= DioramaConfig.slipway.generatorVersion
         }.sorted { $0.compare($1, options: .numeric) == .orderedDescending }
-        let joined = joinedKey(tile, context: context)
-        let originals = [current] + older.filter { $0 != joined }
+        let revisions = Array((1...Self.joinRevision).reversed())
+        let joinedNames = revisions.map { joinedKey(tile, context: context, revision: $0) }
+        let originals = [current] + older.filter { !joinedNames.contains($0) }
         let directories = Set(directoryNames ?? [])
         // A published catalogue contains package directories, not the local activation marker.
-        let completeCatalogue = Self.tiles.allSatisfy {
-            directories.contains(joinedKey($0, context: false)) && directories.contains(joinedKey($0, context: true))
+        func complete(_ revision: Int) -> Bool {
+            regionTiles.allSatisfy {
+                directories.contains(joinedKey($0, context: false, revision: revision))
+                    && directories.contains(joinedKey($0, context: true, revision: revision))
+            }
         }
-        let active = directories.contains("joined1.ready") || completeCatalogue
-        let hasOriginal = originals.contains { (directoryNames ?? []).contains($0) }
-        let names = active || !hasOriginal ? [joined] + originals : originals + [joined]
+        let active = revisions.filter { directories.contains("joined\($0).ready") || complete($0) }
+        let activeNames = active.map { joinedKey(tile, context: context, revision: $0) }
+        let pendingNames = joinedNames.filter { !activeNames.contains($0) }
+        // Preserve every completed older revision and originals until the new region is complete.
+        // Partial revisions are recovery-only, never the leading choice for a healthy old region.
+        let names = activeNames + originals + pendingNames
         candidates[request] = names
         return names
     }
@@ -435,9 +641,7 @@ actor DioramaOfflineStore {
         let directory = root.appendingPathComponent(name)
         guard let bytes = try? Data(contentsOf: directory.appendingPathComponent("manifest.json")),
               let manifest = try? JSONDecoder().decode(DioramaTileArchive.Manifest.self, from: bytes),
-              manifest.key == name, manifest.format == DioramaTileArchive.format,
-              manifest.vertexStride == MemoryLayout<BuildingRenderVertex>.stride,
-              manifest.instanceStride == MemoryLayout<DioramaInstanceData>.stride,
+              manifest.key == name, DioramaTileArchive.supports(manifest),
               manifest.sections.count == 10, Set(manifest.sections.map(\.name)).count == 10,
               manifest.sections.allSatisfy({ $0.bytes >= 0 && $0.bytes <= DioramaTileArchive.maxBytes }),
               manifest.sections.reduce(0, { $0 + $1.bytes }) <= DioramaTileArchive.maxBytes,
@@ -449,6 +653,7 @@ actor DioramaOfflineStore {
     }
     func removeAll() throws {
         invalidateReads()
+        DioramaResidentSnapshot.removeAll()
         if FileManager.default.fileExists(atPath: root.path) { try FileManager.default.removeItem(at: root) }
     }
     nonisolated enum Failure: LocalizedError {

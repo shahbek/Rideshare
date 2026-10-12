@@ -22,6 +22,13 @@ final class AppEnvironment {
     init() {
         offlineMaps = OfflineMapService(network: network)
         DioramaDownloadService.shared.configure(maps: offlineMaps)
+        DioramaDownloadService.harbour.configure(maps: offlineMaps)
+        DioramaDownloadService.golf.configure(maps: offlineMaps)
+        let maps = offlineMaps
+        DioramaSceneryStreamer.shared.allowsNetwork = { [weak maps] in maps?.downloadedOnly != true }
+        DioramaPieceStreamer.shared.allowsNetwork = { [weak maps] in maps?.downloadedOnly != true }
+        // The finished harbour ships inside the app; get its far/mid pieces onto the GPU before any map opens.
+        Task { @MainActor in DioramaPieceStreamer.shared.warmUp() }
         payments = MobileMoneyCoordinator(store: store)
         trips = TripCoordinator(drivers: drivers, store: store, network: network, payments: payments)
         flow = BookingFlow(drivers: drivers, store: store, location: location, trips: trips)
@@ -102,6 +109,10 @@ final class AppEnvironment {
     /// Suspends timer-driven simulation so no work runs after the system backgrounds the app.
     func enterBackground() {
         DioramaDownloadService.shared.pause()
+        DioramaDownloadService.harbour.pause()
+        DioramaDownloadService.golf.pause()
+        DioramaSceneryStreamer.shared.pause()
+        DioramaPieceStreamer.shared.pause()
         offlineMaps.pause()
         drivers.pauseLiveUpdates()
     }
@@ -109,6 +120,10 @@ final class AppEnvironment {
     /// Resumes whatever `startServices()` started once the scene is active again.
     func enterForeground() {
         payments.resume()
+        // Resumes the automatic one-time scenery optimization if it was paused by backgrounding.
+        DioramaDownloadService.shared.refresh()
+        DioramaDownloadService.harbour.refresh()
+        DioramaDownloadService.golf.refresh()
         guard hasStartedServices else { return }
         drivers.startLiveUpdates()
         payments.checkAutoTopUp()

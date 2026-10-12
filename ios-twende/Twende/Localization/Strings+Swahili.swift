@@ -743,6 +743,8 @@ extension Strings {
         case .newFare: "Nauli mpya"
         case .updateRoute: "Sasisha njia"
         case .findingAddress: "Inatafuta anwani…"
+        case .householdCode: "Msimbo wa makazi"
+        case .metresAlongStreet: "Mita %ld kwenye %@"
         case .chatWithDriver: "Ongea na dereva"
         case .chatAutoTranslate: "Ujumbe unatafsiriwa moja kwa moja"
         case .chatEmpty: "Mjulishe dereva kuwa unatoka. Ujumbe unatafsiriwa kati ya Kiswahili na Kiingereza."

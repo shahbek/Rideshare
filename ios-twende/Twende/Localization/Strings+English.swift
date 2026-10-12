@@ -743,6 +743,8 @@ extension Strings {
         case .newFare: "New fare"
         case .updateRoute: "Update route"
         case .findingAddress: "Finding address…"
+        case .householdCode: "Household code"
+        case .metresAlongStreet: "%ld m along %@"
         case .chatWithDriver: "Chat with driver"
         case .chatAutoTranslate: "Messages translate automatically"
         case .chatEmpty: "Let your driver know you're on your way out. Messages are translated between Swahili and English."

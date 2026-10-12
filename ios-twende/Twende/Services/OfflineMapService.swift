@@ -15,6 +15,7 @@ final class OfflineMapService {
     private(set) var messages: [String: LKey] = [:]
     private(set) var removingIDs: Set<String> = []
     private(set) var inventoryError: Bool = false
+    private(set) var failureDetails: [String: String] = [:]
 
     var wiFiOnly: Bool {
         didSet {
@@ -95,7 +96,7 @@ final class OfflineMapService {
             switch result {
             case .success(let regions):
                 failed = false
-                records = regions.filter { $0.id.hasPrefix("zuri-") }.map {
+                records = regions.filter { $0.id.hasPrefix("zuri-") || $0.id == OfflineMapArea.harbour.id }.map {
                     RegionSnapshot(id: $0.id, bytes: Int64($0.completedResourceSize),
                         complete: $0.requiredResourceCount > 0 && $0.completedResourceCount >= $0.requiredResourceCount)
                 }
@@ -119,6 +120,7 @@ final class OfflineMapService {
         let token = UUID()
         job = token; activeID = area.id
         progress = 0; downloadedBytes = 0; styleBytes = 0; lastProgressUpdate = 0
+        failureDetails[area.id] = nil
         messages[area.id] = .offlinePreparing
         guard let options = StylePackLoadOptions(glyphsRasterizationMode: .ideographsRasterizedLocally,
             metadata: ["app": "zuri", "schema": 1], acceptExpired: !update) else {
@@ -130,13 +132,20 @@ final class OfflineMapService {
             Task { @MainActor in self?.report(token: token, fraction: fraction * 0.15, bytes: bytes) }
         } completion: { [weak self] result in
             let success: Bool
+            let diagnostic: String?
             switch result {
-            case .success: success = true
-            case .failure: success = false
+            case .success: success = true; diagnostic = nil
+            case .failure(let error):
+                success = false
+                let failure = error as NSError
+                diagnostic = "Map style download failed (\(failure.domain), code \(failure.code)). Saved progress is kept."
             }
             Task { @MainActor in
                 guard let self, self.job == token, self.activeID == area.id else { return }
-                guard success, self.canDownload else { self.fail(area.id, token: token); return }
+                guard success, self.canDownload else {
+                    self.failureDetails[area.id] = diagnostic ?? "Map download paused by the current download policy. Saved progress is kept."
+                    self.fail(area.id, token: token); return
+                }
                 self.styleReady = true
                 self.styleBytes = self.downloadedBytes
                 self.loadTiles(area, token: token, update: update)
@@ -163,14 +172,26 @@ final class OfflineMapService {
             }
         } completion: { [weak self] result in
             let success: Bool
+            let diagnostic: String?
             switch result {
             case .success(let region):
                 success = region.requiredResourceCount > 0 && region.completedResourceCount >= region.requiredResourceCount
-            case .failure: success = false
+                diagnostic = success ? nil : "Map tiles are incomplete. Resume to finish the remaining resources; saved progress is kept."
+            case .failure(let error):
+                success = false
+                let failure = error as NSError
+                diagnostic = "Map tile download failed (\(failure.domain), code \(failure.code)). Saved progress is kept."
             }
             Task { @MainActor in
                 guard let self, self.job == token, self.activeID == area.id else { return }
-                guard success else { self.fail(area.id, token: token); return }
+                guard success else {
+                    self.failureDetails[area.id] = diagnostic
+                    self.fail(area.id, token: token); return
+                }
+                // Publish the checked SDK completion before clearing the active job.
+                // Preparation must not depend on a later asynchronous inventory callback.
+                self.completeIDs.insert(area.id)
+                self.failureDetails[area.id] = nil
                 self.progress = 1
                 self.activeID = nil
                 self.downloads.removeAll()

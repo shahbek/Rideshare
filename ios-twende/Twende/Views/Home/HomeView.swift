@@ -43,6 +43,9 @@ struct HomeView: View {
                         .transition(.move(edge: .top).combined(with: .opacity))
                 }
 
+                HarbourStreamPill(offlineMaps: env.offlineMaps)
+                    .animation(.spring(duration: 0.35), value: DioramaSceneryStreamer.shared.status)
+
                 Spacer()
 
 

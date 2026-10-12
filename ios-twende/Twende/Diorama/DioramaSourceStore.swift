@@ -5,9 +5,20 @@ import ImageIO
 /// Addressed source bytes, retained independently of URLCache and shared across elevation children.
 actor DioramaSourceStore {
     static let shared = DioramaSourceStore()
+    static let harbour = DioramaSourceStore(region: .harbour)
+    static let golf = DioramaSourceStore(region: .golf)
+    private let region: DioramaRegion
+    init(region: DioramaRegion = .masaki) { self.region = region }
+    nonisolated static func store(for tile: DioramaTileID) -> DioramaSourceStore {
+        switch DioramaRegion.of(tile) {
+        case .masaki: shared
+        case .harbour: harbour
+        case .golf: golf
+        }
+    }
     private var root: URL {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("MasakiOffline/sources", isDirectory: true)
+            .appendingPathComponent(region.folder + "/sources", isDirectory: true)
     }
     /// Verified local read for road routing; never constructs a request or downloads data.
     func savedData(key: String) -> Data? {

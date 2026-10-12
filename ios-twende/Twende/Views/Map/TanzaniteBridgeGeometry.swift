@@ -72,10 +72,20 @@ enum TanzaniteBridgeGeometry {
                 LandmarkMesh.beam(&lamps, from: top, to: head, radius: 0.09, sides: 8)
                 LandmarkMesh.beam(&glow, from: head - alignment.tangent(at: station) * 0.35,
                     to: head + alignment.tangent(at: station) * 0.35, radius: 0.13, sides: 8)
+                // Each lamp head is a real light-grid source: sodium pools on the carriageway at dusk/night.
+                LandmarkLightingGeometry.fixture(at: head - SIMD3(0, 0, 0.4), radius: 19, intensity: 2.4, root: scene.rootNode)
+            }
+        }
+        // Pylon floodlights: uplights at each pylon base wash the concrete legs.
+        for station in alignment.record.pylonChainages {
+            for side in [-1.0, 1.0] {
+                let base = alignment.point(at: station, offset: side * (half + 1.2)) + SIMD3(0, 0, 1.0)
+                LandmarkLightingGeometry.fixture(at: base, radius: 26, intensity: 2.2, root: scene.rootNode)
+                LandmarkLightingGeometry.fixture(at: base + SIMD3(0, 0, 18), radius: 22, intensity: 1.6, root: scene.rootNode)
             }
         }
         scene.rootNode.addChildNode(lamps.node(name: "bridgeLightingColumns", material: DarLandmarkParts.silver))
-        scene.rootNode.addChildNode(glow.node(name: "architecturalLighting", material: BuildingSurfaces.make("landmark.fixture", color: "#F1E2C4", roughness: 0.8)))
+        scene.rootNode.addChildNode(glow.node(name: "architecturalLighting", material: LandmarkLightingGeometry.lamp))
         let materials: [(String, BuildingMesh, String)] = [("bridgeConcrete", concrete, "#F4EFE7"), ("bridgeRoad", road, "#A99C97"), ("bridgeCables", cables, "#F4EFE7"), ("bridgeLaneMarkings", markings, "#F8F7ED"), ("bridgeCableSockets", anchors, "#AAB3B8")]
         for (name, mesh, hex) in materials where !mesh.positions.isEmpty {
             scene.rootNode.addChildNode(mesh.node(name: name, material: BuildingSurfaces.make(name == "bridgeConcrete" ? "surface.bridgeConcrete" : name, color: hex, roughness: 0.7)))

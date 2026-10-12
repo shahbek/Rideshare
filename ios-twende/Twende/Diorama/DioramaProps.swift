@@ -378,7 +378,7 @@ nonisolated struct DioramaPropLibrary: Sendable {
         return m
     }
 
-    private static func makeCar(_ color: DioramaSwatch) -> DioramaMesh {
+    static func makeCar(_ color: DioramaSwatch) -> DioramaMesh {
         var m = DioramaMesh()
         m.box(centre: DV2(0, 0), z0: 0.4, halfLength: 2.1, halfWidth: 0.9, height: 0.65, color, top: color, bevel: 0.16, bottom: true)
         m.box(centre: DV2(-0.25, 0), z0: 1.05, halfLength: 1.15, halfWidth: 0.8, height: 0.6, .glass, top: color, bevel: 0.16)
@@ -532,7 +532,7 @@ nonisolated struct DioramaPropPlacer {
     private func pavement(_ p: DV2) -> Double { terrain.height(p) }
 
     private func isOnAmenity(_ p: DV2, margin: Double) -> Bool {
-        for area in data.landuse where Self.hardKinds.contains(area.kind) {
+        for area in data.landuse where Self.hardKinds.contains(area.kind) || DarGolf.playingKinds.contains(area.kind) {
             if DioramaPolygon.contains(polygon: area.rings, p) || DioramaPolygon.distanceToRing(area.rings[0], p) < margin { return true }
         }
         return false

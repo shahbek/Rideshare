@@ -8,7 +8,7 @@ nonisolated enum DioramaMapboxData {
         url.queryItems = [URLQueryItem(name: "access_token", value: token)]
         guard let address = url.url else { return nil }
         do {
-            let bytes = try await DioramaSourceStore.shared.data(url: address, key: "streets-\(tile.z)-\(tile.x)-\(tile.y).pbf", offline: offline)
+            let bytes = try await DioramaSourceStore.store(for: tile).data(url: address, key: "streets-\(tile.z)-\(tile.x)-\(tile.y).pbf", offline: offline)
             let features = try DioramaVectorTile.decode(bytes, includesEnvironment: includesEnvironment)
             guard !features.isEmpty else { return nil }
             return features

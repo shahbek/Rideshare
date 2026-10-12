@@ -21,7 +21,9 @@ final class AirtelBuildingLandmark {
     func update(on map: MapboxMap, settled: Bool = false) {
         let camera = map.cameraState
         updateLighting()
-        guard camera.zoom >= 12.5, GeoPoint(camera.center).distanceKm(to: AirtelBuildingSite.anchor) < 6 else {
+        // Drawn by its saved Masaki tile (Slipway/Sea Cliff method); this host is only the fallback.
+        guard camera.zoom >= 12.5, GeoPoint(camera.center).distanceKm(to: AirtelBuildingSite.anchor) < 6,
+              !DioramaLandmarkBakery.isDrawnBySavedTile("airtel") else {
             remove(from: map); return
         }
         guard pending == nil, query == nil,

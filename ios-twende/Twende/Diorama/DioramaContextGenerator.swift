@@ -14,7 +14,8 @@ nonisolated enum DioramaContextGenerator {
         DioramaGroundGenerator(config: config, data: data, roads: roads, terrain: terrain, painter: painter)
             .generateContext(into: &ground, water: &water)
         let kit = DioramaBuildingKit(config: config)
-        let classifier = DioramaBuildingGenerator(config: config, roads: roads, terrain: terrain)
+        let district = DioramaDistrict.of(data.tile)
+        let classifier = DioramaBuildingGenerator(config: config, roads: roads, terrain: terrain, district: district)
         for feature in data.buildings {
             try Task.checkCancellation()
             if feature.id == DioramaSeaCliffSite.buildingID {
@@ -31,18 +32,53 @@ nonisolated enum DioramaContextGenerator {
             let height = max(2.8, feature.height ?? Double(floors) * config.floorHeight)
             var rng = DioramaRandom(seed: feature.id, salt: 2)
             _ = rng.range(-1...1)
-            let colors = kind == .villa ? config.wallColors : (kind == .apartments ? config.apartmentWallColors : config.commercialWallColors)
-            let color = config.buildingOverrides[feature.id]?.wallColor ?? rng.pick(colors)
+            // Same draws as the full-detail generator so wall and roof colours match across the LOD handoff.
+            let override = config.buildingOverrides[feature.id]
+            let picked = rng.pick(district.wallColors(kind, config: config))
+            let color = override?.wallColor ?? picked
+            if floors >= 4, height >= 12, override == nil, !feature.clipped.contains(true), feature.area > 60 {
+                let recipe = classifier.architecturalRecipe(feature, kind: kind, floors: floors, height: height, wallColor: color)
+                var generator = DarTowerGenerator(site: recipe)
+                let base = terrain.buildingHeight(feature)
+                terrain.foundation(feature.ring, top: base, swatch: color, into: &buildings)
+                buildings.baseZ = base; buildings.recordsHeight = true
+                let built = generator.buildContext(feature.ring, into: &buildings)
+                buildings.baseZ = 0; buildings.recordsHeight = false
+                if built { continue }
+            }
+            var pitched = kind == .villa
+            if kind == .villa, rng.chance(1 - config.hipRoofShare) { pitched = false }
+            if district == .masaki, kind == .apartments, floors <= 10, rng.chance(0.5) { pitched = true }
+            if district == .city, kind == .villa, floors >= 2 { pitched = rng.chance(0.25) }
+            let roofColor = override?.roofColor ?? rng.pick(district.pitchedRoofColors)
+            let deck: DioramaSwatch = pitched && !(override?.flatRoof ?? false) && !feature.clipped.contains(true) ? roofColor : (override?.roofColor ?? .roofConcrete)
             let rounded = DioramaPolygon.rounded(feature.ring, flags: feature.clipped, radius: config.cornerRadius, segments: 6)
             let base = terrain.buildingHeight(feature)
             terrain.foundation(rounded.points, top: base, swatch: color, into: &buildings)
             buildings.baseZ = base
             buildings.recordsHeight = true
             buildings.extrude(rounded.points, z0: 0, z1: height, color)
+            // Same roof-kit choice as full detail (same per-building roll), so silhouettes match at handoff.
+            var roofRoll = DioramaRandom(seed: feature.id, salt: 0x52_4F_4F_46)
+            let roll = roofRoll.unit()
+            if !pitched, override == nil, kind != .villa, floors <= 2, roofRoll.chance(district == .masaki ? 0.25 : 0.6) { pitched = true }
+            var kitRoofed = false
+            if pitched, !(override?.flatRoof ?? false), !rounded.flags.contains(true) {
+                let shape = DioramaRoofKit.shape(of: feature.ring)
+                for form in DioramaRoofKit.candidates(for: shape, roll: roll, modern: district == .masaki && kind == .villa) {
+                    if DioramaRoofKit.build(form, ring: rounded.points, flags: rounded.flags, z: height,
+                                            pitch: config.roofPitchDegrees * Double.pi / 180, overhang: 0.4,
+                                            maxRise: config.hipRoofMaxRise, color: roofColor, fascia: .trimWhite,
+                                            gable: color, into: &buildings) {
+                        kitRoofed = true
+                        break
+                    }
+                }
+            }
             // No stamped square windows at any LOD. A soft roof edge preserves the model language.
-            if kit.roofEdge(rounded.points, flags: rounded.flags, z: height, bevel: config.roofBevel,
-                            deck: .roofConcrete, into: &buildings) == nil {
-                buildings.polygon(rounded.points, z: height, .roofConcrete)
+            if !kitRoofed, kit.roofEdge(rounded.points, flags: rounded.flags, z: height, bevel: config.roofBevel,
+                            deck: deck, into: &buildings) == nil {
+                buildings.polygon(rounded.points, z: height, deck)
             }
             buildings.baseZ = 0; buildings.recordsHeight = false
         }

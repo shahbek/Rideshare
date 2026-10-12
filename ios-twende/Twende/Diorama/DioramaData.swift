@@ -76,6 +76,8 @@ nonisolated struct DioramaRoadFeature: Sendable {
     /// Approximate carriageway width in metres.
     let width: Double
     var name: String? = nil
+    /// 0 when unspecified, 1 along the mapped way, -1 against it.
+    var oneWay: Int = 0
     var isMain: Bool { ["motorway", "trunk", "primary", "secondary", "tertiary"].contains(roadClass) }
 }
 

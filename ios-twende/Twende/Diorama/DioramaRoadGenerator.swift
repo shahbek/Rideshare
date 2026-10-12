@@ -28,11 +28,15 @@ nonisolated struct DioramaRoadGenerator {
     }
 
     func generate(into mesh: inout DioramaMesh) {
-        paintSurfaces()
-        for road in data.roads where road.isPaved && road.width >= 5.5 { markings(road) }
-        junctionPaint()
-        roadNames()
+        paintOnly()
         kerbs(into: &mesh)
+    }
+
+    /// Stylised bakes: every road finish, lane mark and crossing is paint; no kerb geometry at all.
+    func paintOnly() {
+        paintSurfaces()
+        DioramaRoadMarkings(config: config, data: data, roads: roads, layout: layout, painter: painter).paint()
+        roadNames()
     }
 
     private func roadNames() {
@@ -69,93 +73,6 @@ nonisolated struct DioramaRoadGenerator {
                 let pieces = surface.polygons.filter { isPaved(near: DioramaPolygon.centroid($0)) == paved }
                 let swatch: DioramaSwatch = isCarriageway ? (paved ? .asphalt : .roadEarth) : (paved ? .pavement : .earth)
                 painter.fillPieces(pieces, swatch)
-            }
-        }
-    }
-
-    /// Centre dashes keyed to the shared station across split ways, with legible edge paint on
-    /// two-lane-width streets. Narrow access lanes remain unmarked; junction interiors stay clear.
-    private func markings(_ road: DioramaRoadFeature) {
-        let length = DioramaPolygon.length(road.line)
-        let period = config.dashLength + config.dashGap
-        let station = layout.paintStations[road.id] ?? (offset: 0, direction: 1)
-        var run: [(point: DV2, distance: Double, direction: DV2)] = []
-        func flush() {
-            defer { run.removeAll() }
-            guard run.count >= 2 else { return }
-            let points = run.map(\.point)
-            let phase: Double
-            let ordered: [DV2]
-            if station.direction >= 0 {
-                ordered = points
-                phase = station.offset + run[0].distance
-            } else {
-                ordered = Array(points.reversed())
-                phase = station.offset - run[run.count - 1].distance
-            }
-            let wrapped = (phase.truncatingRemainder(dividingBy: period) + period).truncatingRemainder(dividingBy: period)
-            painter.stroke(ordered, width: 0.32, .marking, dashes: [config.dashLength, config.dashGap], phase: wrapped, cap: .butt)
-            if road.width >= 6 {
-                for side in [-1.0, 1.0] {
-                    let offset = (road.width / 2 - 0.38) * side
-                    painter.stroke(run.map { $0.point + $0.direction.right * offset }, width: 0.25, .signYellow, cap: .butt)
-                }
-            }
-        }
-        var d = 0.0
-        while true {
-            guard let s = DioramaPolygon.sample(road.line, at: min(d, length)) else { break }
-            if layout.paintIsClear(s.point), data.rect.contains(s.point) {
-                run.append((s.point, d, s.direction))
-            } else {
-                flush()
-            }
-            if d >= length { break }
-            d = min(d + 0.5, length)
-        }
-        flush()
-        laneArrows(road)
-    }
-
-    /// Illustrative left-hand traffic paint, not routing instructions or inferred turn restrictions.
-    private func laneArrows(_ road: DioramaRoadFeature) {
-        guard road.width >= 6, road.roadClass != "service" else { return }
-        let length = DioramaPolygon.length(road.line)
-        for distance in stride(from: 18.0, to: length - 10, by: 42) {
-            guard let sample = DioramaPolygon.sample(road.line, at: distance),
-                  let before = DioramaPolygon.sample(road.line, at: distance - 5),
-                  let after = DioramaPolygon.sample(road.line, at: distance + 5),
-                  before.direction.dot(after.direction) > 0.96 else { continue }
-            for sign in [-1.0, 1.0] {
-                let forward = sample.direction * sign
-                let centre = sample.point + forward.left * (road.width * 0.25)
-                let outline: [DV2] = [DV2(-0.2, -2.2), DV2(0.2, -2.2), DV2(0.2, 0.45),
-                                     DV2(0.8, 0.1), DV2(0, 2.2), DV2(-0.8, 0.1), DV2(-0.2, 0.45)]
-                let ring = outline.map { centre + forward.right * $0.x + forward * $0.y }
-                guard ring.allSatisfy({ data.rect.contains($0) && layout.paintIsClear($0) && roads.isOnRoad($0, margin: 0) }) else { continue }
-                painter.fill(ring, .marking)
-            }
-        }
-    }
-
-    private func junctionPaint() {
-        for approach in layout.approaches {
-            let across = approach.toward.right
-            let half = approach.width / 2 - 0.4
-            if approach.crossing {
-                for x in stride(from: -half, to: half - 0.4, by: 0.95) {
-                    painter.bar(at: approach.point + across * (x + 0.23), along: approach.toward, length: 2.4, width: 0.46, .crossing)
-                }
-            }
-            // Inferred minor-road priority, not a claim of surveyed traffic-control signage.
-            if approach.yields {
-                let centre = approach.point - approach.toward * (approach.crossing ? 2.1 : 0)
-                for row in [0.0, 0.4] {
-                    for x in stride(from: -half, to: -0.3, by: 0.85) {
-                        let a = centre + across * (x + 0.25) - approach.toward * row
-                        painter.bar(at: a, along: across, length: 0.5, width: 0.28, .marking)
-                    }
-                }
             }
         }
     }

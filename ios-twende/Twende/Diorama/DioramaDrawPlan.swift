@@ -35,11 +35,23 @@ nonisolated enum DioramaDrawPlan {
         return output
     }
 
+    /// - Parameter minimumPixels: groups whose largest placement projects smaller than this (at the
+    ///   group's nearest point) are skipped: bollards, kerb props and small furniture far away.
     static func instances(_ input: [DioramaInstanceGroup], eye: SIMD3<Float>? = nil,
-                          lodDistance: Float = 140, selector: DioramaLODSelector? = nil) -> [Instance] {
+                          lodDistance: Float = 140, selector: DioramaLODSelector? = nil,
+                          focalPixels: Float = 0, minimumPixels: Float = 0) -> [Instance] {
         var output: [Instance] = []
         output.reserveCapacity(input.count)
         for group in input where !group.instances.isEmpty {
+            if minimumPixels > 0, focalPixels > 0, let eye, !group.category.isEmissive {
+                let nearest = simd_clamp(eye, group.minimum, group.maximum)
+                let distance = simd_distance(eye, nearest)
+                if distance > 1 {
+                    var radius: Float = 0
+                    for placement in group.instances { radius = max(radius, placement.radius) }
+                    if radius > 0, radius * focalPixels / distance < minimumPixels { continue }
+                }
+            }
             let light = group.lightCount > 0 && (eye.map {
                 simd_distance((group.minimum + group.maximum) * 0.5, $0) > lodDistance
             } ?? true)

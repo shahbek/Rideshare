@@ -1,4 +1,4 @@
-// functions/scenery-store.ts — pre-baked Masaki 3D scenery distribution.
+// functions/scenery-store.ts — pre-baked 3D scenery distribution (one catalogue per region).
 //
 // A publisher (one device or simulator that prepared and optimized the region) uploads every
 // package file. Each file is content-addressed by SHA-256 and verified here; clients download the
@@ -104,9 +104,38 @@ export class SceneryCatalog extends DurableObject {
     this.ctx.storage.sql.exec("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)", key, String(value));
   }
 
+  private metaText(key: string): string {
+    return this.ctx.storage.sql.exec<{ value: string }>("SELECT value FROM meta WHERE key = ?", key).toArray()[0]?.value ?? "";
+  }
+  private setMetaText(key: string, value: string): void {
+    this.ctx.storage.sql.exec("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)", key, value);
+  }
+
+  /** Seed uploads: one keyless contributor may fill an empty catalogue, holding a 45-minute token. */
+  private seedError(url: URL, g: number): Response | null {
+    const token = url.searchParams.get("seed");
+    if (token === null) return null;
+    if (this.meta("live") !== 0) return Response.json({ error: "already_published" }, { status: 409 });
+    if (token !== this.metaText("seedToken") || Date.now() > this.meta("seedExpiry") || g !== this.meta("upload")) {
+      return Response.json({ error: "seed_expired" }, { status: 409 });
+    }
+    const row = this.ctx.storage.sql.exec<{ n: number; b: number }>(
+      "SELECT COUNT(*) AS n, COALESCE(SUM(bytes), 0) AS b FROM files WHERE generation = ?", g).toArray()[0];
+    if (Number(row?.n ?? 0) >= Number(url.searchParams.get("maxFiles") ?? 0) ||
+        Number(row?.b ?? 0) >= Number(url.searchParams.get("maxBytes") ?? 0)) {
+      return Response.json({ error: "seed_too_large" }, { status: 413 });
+    }
+    this.setMeta("seedActivity", Date.now());
+    return null;
+  }
+
   override async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
     const action = url.searchParams.get("action");
+
+    if (request.method === "POST" && action === "check") {
+      return this.seedError(url, Number(url.searchParams.get("g") ?? "0")) ?? Response.json({ ok: true });
+    }
 
     if (request.method === "GET" && action === "catalog") {
       const live = this.meta("live");
@@ -119,14 +148,38 @@ export class SceneryCatalog extends DurableObject {
     }
 
     if (request.method === "POST" && action === "begin") {
+      const seeding = url.searchParams.get("seed") === "new";
+      let token = "";
+      if (seeding) {
+        if (this.meta("live") !== 0) return Response.json({ error: "already_published" }, { status: 409 });
+        const idle = Date.now() - Math.max(this.meta("seedActivity"), this.meta("seedStarted"));
+        if (this.metaText("seedToken") && Date.now() < this.meta("seedExpiry") && idle < 3 * 60 * 1000) {
+          return Response.json({ error: "seed_in_progress" }, { status: 409 });
+        }
+        token = [...crypto.getRandomValues(new Uint8Array(16))].map((x) => x.toString(16).padStart(2, "0")).join("");
+        this.setMetaText("seedToken", token);
+        this.setMeta("seedExpiry", Date.now() + 45 * 60 * 1000);
+        this.setMeta("seedStarted", Date.now());
+      } else {
+        this.setMetaText("seedToken", "");
+      }
       const next = Math.max(this.meta("upload"), this.meta("live")) + 1;
       this.setMeta("upload", next);
       this.ctx.storage.sql.exec("DELETE FROM files WHERE generation = ?", next);
-      return Response.json({ generation: next });
+      return Response.json(seeding ? { generation: next, token } : { generation: next });
     }
 
     if (request.method === "POST" && action === "record") {
       const body = await request.json<CatalogFile & { g: number }>();
+      const seed = this.seedError(url, body.g);
+      if (seed) return seed;
+      if (url.searchParams.has("seed")) {
+        const used = Number(this.ctx.storage.sql.exec<{ b: number }>(
+          "SELECT COALESCE(SUM(bytes), 0) AS b FROM files WHERE generation = ?", body.g).toArray()[0]?.b ?? 0);
+        if (used + body.b > Number(url.searchParams.get("maxBytes") ?? 0)) {
+          return Response.json({ error: "seed_too_large" }, { status: 413 });
+        }
+      }
       if (body.g !== this.meta("upload") || !validName(body.d) || !validName(body.f) || !/^[0-9a-f]{64}$/.test(body.s)) {
         return Response.json({ error: "stale_or_invalid" }, { status: 409 });
       }
@@ -137,8 +190,28 @@ export class SceneryCatalog extends DurableObject {
       return Response.json({ ok: true });
     }
 
+    if (request.method === "POST" && action === "reset") {
+      // Owner only (gated in index.ts): unpublishes the catalogue and drops any seed lock so the
+      // next keyless contributor, or the owner, can publish a fresh set. Shards stay content-addressed.
+      const previous = this.meta("live");
+      this.setMeta("live", 0);
+      this.setMeta("publishedAt", 0);
+      this.setMetaText("seedToken", "");
+      this.setMeta("seedExpiry", 0);
+      this.setMeta("seedActivity", 0);
+      this.setMeta("seedStarted", 0);
+      this.ctx.storage.sql.exec("DELETE FROM files");
+      return Response.json({ ok: true, unpublished: previous, seedCleared: true });
+    }
+
     if (request.method === "POST" && action === "publish") {
       const body = await request.json<{ g: number; count: number }>();
+      if (url.searchParams.has("seed")) {
+        const token = url.searchParams.get("seed");
+        if (this.meta("live") !== 0 || token !== this.metaText("seedToken") || Date.now() > this.meta("seedExpiry")) {
+          return Response.json({ error: "seed_expired" }, { status: 409 });
+        }
+      }
       const upload = this.meta("upload");
       const count = Number(this.ctx.storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM files WHERE generation = ?", upload).toArray()[0]?.n ?? 0);
       if (body.g !== upload || count === 0 || count !== body.count) {
@@ -147,6 +220,7 @@ export class SceneryCatalog extends DurableObject {
       const previous = this.meta("live");
       this.setMeta("live", upload);
       this.setMeta("publishedAt", Date.now());
+      this.setMetaText("seedToken", "");
       // Keep only the live and immediately previous catalogue rows.
       this.ctx.storage.sql.exec("DELETE FROM files WHERE generation NOT IN (?, ?)", upload, previous);
       return Response.json({ ok: true, revision: upload, files: count });

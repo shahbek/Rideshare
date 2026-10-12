@@ -15,6 +15,8 @@ struct DioramaSettingsView: View {
                 .foregroundStyle(TwendeColor.inkSecondary)
             RowDivider(leading: 0)
             DioramaDebugPanel(state: state)
+            RowDivider(leading: 0)
+            AirportDownloadView()
         }
     }
 }

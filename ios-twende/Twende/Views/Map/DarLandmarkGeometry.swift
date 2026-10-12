@@ -5,6 +5,10 @@ import simd
 enum DarLandmarkGeometry {
     static func make(_ site: DarLandmarkSite) -> SCNScene {
         let scene = SCNScene()
+        if site.kind == "generated" {
+            guard let asset = GeneratedLandmarkAsset.all.first(where: { $0.id == site.id }) else { return scene }
+            return GeneratedLandmarkGeometry.make(site, asset: asset) ?? scene
+        }
         guard let footprint = site.footprint, let ring = footprint.rings.first else { return scene }
         if site.kind == "morocco-square" { return MoroccoSquareGeometry.make(site) }
         if site.kind == "morocco-terminal" { return MoroccoTerminalGeometry.make(site) }
@@ -17,8 +21,10 @@ enum DarLandmarkGeometry {
         ))
         scene.rootNode.addChildNode(root)
         if site.kind == "tower" { PSPFTowerGeometry.build(site, ring: local, root: root) }
+        else if site.kind == "johari-rotana" { JohariRotanaGeometry.build(site, root: root) }
+        else if site.kind == "bandari-tower" { BandariTowerGeometry.build(site, ring: local, root: root) }
         else { DarChurchGeometry.build(site, ring: local, root: root) }
-        DioramaLandmarkEnvironment.add(to: scene, ring: ring, airtel: false)
+        if !site.isHarbourArchitecture { DioramaLandmarkEnvironment.add(to: scene, ring: ring, airtel: false) }
         return scene
     }
 }

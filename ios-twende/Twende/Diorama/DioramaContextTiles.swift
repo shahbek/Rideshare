@@ -46,6 +46,7 @@ final class DioramaContextTiles {
     private var retirements: [UUID: Retirement] = [:]
     private var shapeRevision: UInt = 0
     private var yieldedToHD: Set<DioramaTileID> = []
+    private var hdReclamationOwner: DioramaTileID?
     var hasResidents: Bool { !residents.isEmpty }
     var onChanged: (() -> Void)?
     var budget: DioramaResidencyBudget?
@@ -71,6 +72,12 @@ final class DioramaContextTiles {
     func groundHeight(at point: GeoPoint) -> Double? {
         let tile = DioramaTileID(latitude: point.latitude, longitude: point.longitude, zoom: 16)
         return residents[tile]?.host.groundHeight(at: point)
+    }
+    /// Tiles the HD loader wants: their coarse arrival is brief because HD replaces it right away.
+    var hdPriority: Set<DioramaTileID> = []
+    /// Installed and not retiring: HD may start decoding while this base is still revealing.
+    func isInstalled(_ tile: DioramaTileID) -> Bool {
+        residents[tile] != nil && !retirements.values.contains { $0.tiles.contains(tile) }
     }
     func isReady(_ tile: DioramaTileID) -> Bool {
         guard let resident = residents[tile] else { return false }
@@ -119,11 +126,13 @@ final class DioramaContextTiles {
         let pins = Set(pinnedTiles)
         visibleTiles = Set(priorityTiles)
         var seen: Set<DioramaTileID> = []
-        let next = Array((pinnedTiles + priorityTiles)
-            .filter { DioramaOfflineStore.tiles.contains($0) && seen.insert($0).inserted }
+        let focusPriority = priorityTiles.contains(focus) ? [focus] : []
+        let next = Array((pinnedTiles + focusPriority + priorityTiles)
+            .filter { DioramaDownloadService.viewableTiles.contains($0) && seen.insert($0).inserted }
             .prefix(budget?.contextLimit ?? 4))
         if wantedTiles != next || allowance != budget?.limit {
-            deferredTiles.removeAll(); yieldedToHD.removeAll(); allowance = budget?.limit ?? 0
+            deferredTiles.removeAll(); allowance = budget?.limit ?? 0
+            if let owner = hdReclamationOwner, !next.contains(owner) { finishHDReclamation() }
         }
         wantedTiles = next
         if let loadingTile, !wantedTiles.contains(loadingTile) { pauseLoading() }
@@ -145,7 +154,7 @@ final class DioramaContextTiles {
             }
             map.triggerRepaint()
         }
-        guard allowsLoading, task == nil, budget?.isLoading != true,
+        guard allowsLoading, task == nil, budget?.isLoading(context: true) != true,
               wantedTiles.contains(where: { residents[$0] == nil && !deferredTiles.contains($0) && !yieldedToHD.contains($0) && canBeginGrowth($0) && (retryAfter[$0] ?? .distantPast) <= Date() }) else { return }
         let expected = revision
         task = Task { [weak self] in
@@ -155,16 +164,16 @@ final class DioramaContextTiles {
                 guard !Task.isCancelled, self.revision == expected, UIApplication.shared.applicationState == .active,
                       let budget = self.budget else { return }
                 self.loadingTile = tile
-                guard let cost = await DioramaOfflineStore.shared.residencyCost(tile, context: true, size: self.outputSize, scale: Float(UIScreen.main.scale)) else {
+                guard let cost = await DioramaOfflineStore.store(for: tile).residencyCost(tile, context: true, size: self.outputSize, scale: Float(UIScreen.main.scale)) else {
                     self.markUnavailable(tile); continue
                 }
                 guard !Task.isCancelled, self.revision == expected, self.wantedTiles.contains(tile) else { return }
                 guard let reservation = budget.reserve(cost, context: true) else {
-                    if budget.isLoading { return }
+                    if budget.isLoading(context: true) { return }
                     self.deferredTiles.insert(tile); continue
                 }
                 defer { if self.residents[tile]?.reservation != reservation { budget.release(reservation) } }
-                let job = Task.detached(priority: .utility) { await DioramaOfflineStore.shared.readResident(tile, context: true) }
+                let job = Task.detached(priority: .userInitiated) { await DioramaOfflineStore.store(for: tile).readResident(tile, context: true) }
                 let artifacts = await withTaskCancellationHandler { await job.value } onCancel: { job.cancel() }
                 guard !Task.isCancelled, self.revision == expected, UIApplication.shared.applicationState == .active else { return }
                 guard let artifacts else { self.markUnavailable(tile); continue }
@@ -189,20 +198,34 @@ final class DioramaContextTiles {
     }
     func pauseLoading() { revision &+= 1; task?.cancel(); task = nil; loadingTile = nil }
     func retryAdmission() { deferredTiles.removeAll() }
+    /// A package for `tile` just arrived (streamed); forget its missing-package backoff.
+    func packageArrived(_ tile: DioramaTileID) { retryAfter[tile] = nil; deferredTiles.remove(tile) }
     /// Foreground detail wins over lower-priority coarse hosts, but never loses a paired base.
     func makeRoomForHD(_ tile: DioramaTileID, cost: DioramaResidencyBudget.Cost, pinned: [DioramaTileID]) {
-        guard let budget, !budget.isLoading else { return }
+        guard let budget, !budget.isLoading(context: false),
+              hdReclamationOwner == nil || hdReclamationOwner == tile else { return }
         let protected = Set(pinned + [tile])
         let candidates = wantedTiles.reversed().filter { !protected.contains($0) && residents[$0] != nil }
         guard budget.canFitAfterReleasing(candidates.compactMap { residents[$0]?.reservation }, cost: cost) else { return }
         // Visible candidates keep their ledger entries until their empty GPU endpoint completes.
         // Hold these admissions across release callbacks so base cannot steal the freed HD headroom.
+        guard !candidates.isEmpty else { return }
+        hdReclamationOwner = tile
         yieldedToHD.formUnion(candidates)
         deferredTiles.formUnion(candidates)
         retire(Set(candidates), mustRetire: true)
     }
+    /// The hold belongs to one pending admission, not to a tile forever. Release only after HD
+    /// owns a reservation (so coarse cannot steal it), or that request is explicitly abandoned.
+    func finishHDReclamation(for tile: DioramaTileID? = nil) {
+        guard hdReclamationOwner != nil, tile == nil || tile == hdReclamationOwner else { return }
+        deferredTiles.subtract(yieldedToHD)
+        yieldedToHD.removeAll(); hdReclamationOwner = nil
+        onChanged?()
+    }
+
     func trimForMemoryWarning() {
-        pauseLoading(); deferredTiles.removeAll(); yieldedToHD.removeAll()
+        pauseLoading(); deferredTiles.removeAll(); yieldedToHD.removeAll(); hdReclamationOwner = nil
         for group in retirements.values { group.task?.cancel() }
         retirements.removeAll()
         for tile in Array(residents.keys) where !visibleTiles.contains(tile) || tile != wantedTiles.first { remove(tile) }
@@ -211,7 +234,7 @@ final class DioramaContextTiles {
     func clear() {
         pauseLoading()
         for group in retirements.values { group.task?.cancel() }
-        retirements.removeAll(); yieldedToHD.removeAll()
+        retirements.removeAll(); yieldedToHD.removeAll(); hdReclamationOwner = nil
         for tile in Array(residents.keys) { remove(tile) }
         hdMasks.removeAll(); retryAfter.removeAll(); wantedTiles.removeAll(); visibleTiles.removeAll(); deferredTiles.removeAll()
     }
@@ -319,6 +342,7 @@ final class DioramaContextTiles {
     private func remove(_ tile: DioramaTileID) {
         residents[tile]?.arrival?.cancel()
         if let map {
+            DioramaLayerGroup.existing(for: map)?.detach(id(tile))
             for layer in [id(tile) + "-clip", id(tile)] where map.layerExists(withId: layer) { try? map.removeLayer(withId: layer) }
             if map.sourceExists(withId: id(tile) + "-source") { try? map.removeSource(withId: id(tile) + "-source") }
         }
@@ -369,7 +393,8 @@ final class DioramaContextTiles {
             abs(host.revealBounds.minimum.y), abs(host.revealBounds.maximum.y)) * (resident.lifecycle.w > 3.5 ? 3 : 1) + DioramaRevealStyle.support + 50
         resident.arrival = Task { [weak self, weak resident] in
             guard let self, let resident else { return }
-            let finished = await DioramaTileTransition.run(host: host, from: resident.lifecycle.z, to: extent, field: resident.lifecycle) {
+            let finished = await DioramaTileTransition.run(host: host, from: resident.lifecycle.z, to: extent, field: resident.lifecycle,
+                duration: self.hdPriority.contains(tile) ? 0.6 : 1.8) {
                 [weak self, weak resident] field, _ in
                 guard let self, let resident else { return }
                 let joinedFront = field.w > 3.5 && resident.lifecycle.z < DioramaRevealStyle.support
@@ -386,15 +411,12 @@ final class DioramaContextTiles {
             self.refreshNeighbours(of: tile); self.onReady?(tile); self.map?.triggerRepaint()
         }
     }
-    private func setSlot(_ id: String, on map: MapboxMap) throws {
-        try map.setLayerProperty(for: id, property: "slot", value: "middle")
-    }
     private func install(_ artifacts: DioramaResidentTile, config: DioramaConfig, revision expected: UInt, reservation: UUID) async {
         guard let map else { return }
         let tile = artifacts.tile
         let host = DioramaRenderLayer(resident: artifacts, groundRect: DioramaProjection(origin: tile.centre).rect(of: tile),
             visible: visible, timeOfDay: time, config: config, labels: [], displayScale: Float(UIScreen.main.scale), contextOnly: true)
-        let upload = Task.detached(priority: .utility) { await DioramaGPUUploadQueue.shared.prepare(host) }
+        let upload = Task.detached(priority: .userInitiated) { await DioramaGPUUploadQueue.shared.prepare(host) }
         await withTaskCancellationHandler { await upload.value } onCancel: { upload.cancel() }
         guard !Task.isCancelled, revision == expected, self.map === map, wantedTiles.contains(tile),
               UIApplication.shared.applicationState == .active else { return }
@@ -440,8 +462,7 @@ final class DioramaContextTiles {
         }
         residents[tile] = resident; applyCoverage(tile, resident: resident)
         do {
-            try map.addCustomLayer(withId: id(tile), layerHost: host, layerPosition: nil)
-            try setSlot(id(tile), on: map)
+            try DioramaLayerGroup.group(for: map).attach(host, id: id(tile), order: 0, map: map)
             var source = GeoJSONSource(id: id(tile) + "-source")
             source.data = .geometry(.polygon(Polygon([tile.outline])))
             try map.addSource(source)

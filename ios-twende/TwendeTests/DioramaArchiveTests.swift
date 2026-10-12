@@ -1,4 +1,5 @@
 import CryptoKit
+import simd
 import XCTest
 @testable import Twende
 
@@ -31,7 +32,15 @@ final class DioramaArchiveTests: XCTestCase {
         func digest<T>(_ values: [T]) -> Data {
             values.withUnsafeBytes { Data(SHA256.hash(data: Data($0))) }
         }
-        XCTAssertEqual(digest(candidate.vertices), digest(restored.vertices))
+        // Compact archives keep the GPU's own half-precision attributes and round positions to 1 mm.
+        XCTAssertEqual(candidate.vertices.count, restored.vertices.count)
+        for (a, b) in zip(candidate.vertices, restored.vertices) {
+            let pa = DioramaPackedVertex(a), pb = DioramaPackedVertex(b)
+            XCTAssertEqual(pa.normal, pb.normal)
+            XCTAssertEqual(pa.color, pb.color)
+            XCTAssertEqual(pa.position.w, pb.position.w)
+            XCTAssertLessThanOrEqual(simd_length(SIMD3(pa.position.x - pb.position.x, pa.position.y - pb.position.y, pa.position.z - pb.position.z)), 0.0009)
+        }
         XCTAssertEqual(candidate.indices, restored.indices)
         XCTAssertEqual(digest(candidate.allInstances), digest(restored.allInstances))
         XCTAssertEqual(candidate.groundImage?.rgba, restored.groundImage?.rgba)

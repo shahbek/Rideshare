@@ -55,7 +55,7 @@ nonisolated enum DioramaLettering {
         }
     }
 
-    private static func flattened(_ path: CGPath) -> [[DV2]] {
+    static func flattened(_ path: CGPath) -> [[DV2]] {
         var contours: [[DV2]] = []
         var current: [DV2] = []
         func point(_ p: CGPoint) -> DV2 { DV2(p.x, p.y) }

@@ -16,6 +16,15 @@ nonisolated final class DioramaProjectedShadow {
         let vertices: ObjectIdentifier
         let indices: ObjectIdentifier
         let count: Int
+
+        /// Within half a degree of light and 2 cm of receiver extent the 256² silhouette would move
+        /// less than one texel, so a moving/turning vehicle keeps its rendered caster.
+        func reusable(for next: Key) -> Bool {
+            vertices == next.vertices && indices == next.indices && count == next.count
+                && simd_dot(simd_normalize(sun), simd_normalize(next.sun)) > 0.99996
+                && simd_reduce_max(simd_abs(minimum - next.minimum)) < 0.02
+                && simd_reduce_max(simd_abs(maximum - next.maximum)) < 0.02
+        }
     }
     private struct ReceiverUniforms {
         var light: simd_float4x4
@@ -81,7 +90,7 @@ nonisolated final class DioramaProjectedShadow {
         var low = minimum, high = maximum
         for p in receiver { low = simd_min(low, SIMD3(p.x, p.y, p.z)); high = simd_max(high, SIMD3(p.x, p.y, p.z)) }
         let next = Key(sun: sun, minimum: low, maximum: high, vertices: ObjectIdentifier(vertices), indices: ObjectIdentifier(indices), count: count)
-        if key == next { return field }
+        if let key, key.reusable(for: next), let field { return field }
         let forward = -simd_normalize(sun)
         let helper = abs(sun.z) > 0.98 ? SIMD3<Float>(0, 1, 0) : SIMD3<Float>(0, 0, 1)
         let right = simd_normalize(simd_cross(helper, sun)), up = simd_normalize(simd_cross(sun, right))
@@ -134,7 +143,7 @@ nonisolated final class DioramaProjectedShadow {
     vertex float4 dioramaProjectedCasterVertex(uint id [[vertex_id]],
         const device DioramaInput *vertices [[buffer(0)]], constant float4x4 &light [[buffer(1)]]) {
         DioramaInput v = vertices[id];
-        if (v.appearance.y > 14.5 || v.appearance.w > 3.5 || (v.appearance.w > 0.5 && v.appearance.w < 1.5)) return float4(2,2,2,1);
+        if ((v.appearance.y > 8.5 && v.appearance.y < 9.5) || v.appearance.y > 14.5 || v.appearance.w > 3.5 || (v.appearance.w > 0.5 && v.appearance.w < 1.5)) return float4(2,2,2,1);
         return light * v.position;
     }
     vertex DioramaShadowReceiver dioramaProjectedReceiverVertex(uint id [[vertex_id]],

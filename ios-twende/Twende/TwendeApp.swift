@@ -9,6 +9,8 @@ struct TwendeApp: App {
 
     init() {
         TwendeFont.registerBundledFonts()
+        // Offline street/ward atlas for Zuri labels and household addresses; decoded off the main thread.
+        Task.detached(priority: .utility) { _ = DarAtlas.shared }
         // Public (pk.) Mapbox token provided by the project owner.
         MapboxOptions.accessToken = "pk.eyJ1Ijoic2hhaGJla21pcnUiLCJhIjoiY211YTBma2ZzMTloazJ3czdzeTQwZmxnZSJ9.-MJ4SGimPkMpq8itj76rVg"
         // Rendering and explicit downloads must use the same persistent TileStore.

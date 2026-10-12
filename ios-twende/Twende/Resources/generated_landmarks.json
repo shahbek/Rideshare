@@ -1,0 +1,24 @@
+[
+  {
+    "id": "harbour-tpa",
+    "resource": "harbour_tpa",
+    "modelID": "af1ca518-b536-4f2f-bdb8-236552ffcafc",
+    "conceptURL": "https://emy9ab9spipidt122yz59.rork.app/~assets/img/e46a4916-ecfb-4fd0-9596-7e3324c7cedb.png",
+    "localFrontAxis": "positiveZ",
+    "localUpAxis": "positiveY",
+    "frontBearing": 114.4951591,
+    "targetHeight": 162.0,
+    "placementApproved": false
+  },
+  {
+    "id": "harbour-mnf",
+    "resource": "harbour_mnf",
+    "modelID": "2bfe6307-9ffe-4014-9ab1-c346ebed4b57",
+    "conceptURL": "https://emy9ab9spipidt122yz59.rork.app/~assets/img/76269bff-9731-4810-b065-d44188de8ff1.png",
+    "localFrontAxis": "positiveZ",
+    "localUpAxis": "positiveY",
+    "frontBearing": 137.0,
+    "targetHeight": 145.0,
+    "placementApproved": false
+  }
+]

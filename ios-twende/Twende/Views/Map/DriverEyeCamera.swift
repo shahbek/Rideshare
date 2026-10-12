@@ -4,7 +4,11 @@ import UIKit
 /// Rear-facing chase tracking with vehicle heading and UI-aware projection.
 @MainActor
 final class DriverEyeCamera {
-    private(set) var isActive: Bool = false
+    private(set) var isActive: Bool = false {
+        didSet { if oldValue != isActive { onActiveChanged?(isActive) } }
+    }
+    /// Lets the map cap its render rate to the 30 Hz vehicle motion clock while tracking.
+    var onActiveChanged: ((Bool) -> Void)?
     private var savedCamera: CameraOptions?
     private var savedBounds: CameraBoundsOptions?
     private var lastHeading: Double?

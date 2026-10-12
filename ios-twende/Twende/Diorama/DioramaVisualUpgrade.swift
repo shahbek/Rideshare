@@ -5,7 +5,8 @@ import simd
 /// Serial, cancellable visual migration. Only local sources and small sidecars are used.
 actor DioramaVisualUpgrade {
     static let shared = DioramaVisualUpgrade()
-    private let revision = 3
+    nonisolated static let patchRevision = 3
+    private let revision = DioramaVisualUpgrade.patchRevision
     private var legacyLibrary: DioramaPropLibrary?
     private var currentLibrary: DioramaPropLibrary?
 

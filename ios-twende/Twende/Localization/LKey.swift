@@ -188,5 +188,5 @@ nonisolated enum LKey: Hashable, Sendable {
     case walletEnterCode, walletCodeSentTo, walletTestCode, walletDetectedAs, walletDetectedName, walletWrongNetwork, walletSwitchTo, walletUnknownNetwork, walletSendCode, walletResendCode, walletResendIn, walletEditNumber, walletVerifiedToast, walletNeedsVerify, walletOwnershipNote
 
     // Route editing, address lookup, ride chat
-    case yourRideNow, routeUpdated, changingThisStop, tapToChange, changeRoute, planYourTrip, searchPickup, newFare, updateRoute, findingAddress, chatWithDriver, chatAutoTranslate, chatEmpty, chatQuickComing, chatQuickHere, chatQuickFiveMin, chatQuickWhere, chatPlaceholder, chatSend, chatTranslated
+    case yourRideNow, routeUpdated, changingThisStop, tapToChange, changeRoute, planYourTrip, searchPickup, newFare, updateRoute, findingAddress, householdCode, metresAlongStreet, chatWithDriver, chatAutoTranslate, chatEmpty, chatQuickComing, chatQuickHere, chatQuickFiveMin, chatQuickWhere, chatPlaceholder, chatSend, chatTranslated
 }

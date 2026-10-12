@@ -57,13 +57,16 @@ final class DioramaState {
 final class DioramaTileManager {
     let config: DioramaConfig
     var setBasemapTerrainEnabled: ((Bool) -> Void)?
+    /// Turns Standard's native 3D buildings/trees/landmarks off while saved scenery covers the whole view.
+    var setNative3DEnabled: ((Bool) -> Void)?
+    private var native3DSuppressed: Bool = false
     var viewportBounds: (() -> CGRect)?
     var viewport = DioramaViewport()
     private let state: DioramaState
     private let styling: DioramaMapStyling
     private let contextTiles = DioramaContextTiles()
     private let hdTiles = DioramaHDTiles()
-    private let residency = DioramaResidencyBudget()
+    private let residency: DioramaResidencyBudget
     private var sceneryWasVisible: Bool = false
     private var hdWasRequested: Bool = false
     private var lastOutputPixels: Double = 0
@@ -87,7 +90,8 @@ final class DioramaTileManager {
         !reducesEffects && !UIAccessibility.isReduceMotionEnabled && UIApplication.shared.applicationState == .active
     }
 
-    init(config: DioramaConfig = .slipway, state: DioramaState? = nil) {
+    init(config: DioramaConfig = .slipway, state: DioramaState? = nil, residencyBudget: DioramaResidencyBudget? = nil) {
+        self.residency = residencyBudget ?? DioramaResidencyBudget()
         self.config = config; self.state = state ?? .shared
         styling = DioramaMapStyling(config: config)
         contextTiles.budget = residency; hdTiles.budget = residency
@@ -113,7 +117,7 @@ final class DioramaTileManager {
             observers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated {
                     guard let self else { return }
-                    if DioramaDownloadService.shared.isRunning {
+                    if DioramaDownloadService.isProcessing {
                         // Explicit local maintenance needs CPU mesh memory, not offscreen GPU
                         // residents waiting indefinitely for retirement frames behind Settings.
                         self.hdTiles.clear(); self.contextTiles.clear(); self.state.loadedTiles.removeAll()
@@ -121,13 +125,15 @@ final class DioramaTileManager {
                         self.exitRequested = false; self.reloadRequested = false
                         let completion = self.retractionCompletion; self.retractionCompletion = nil; completion?()
                     } else if name == UIApplication.willResignActiveNotification {
-                        self.hdTiles.clear(); self.contextTiles.clear(); self.suppressBasemapTerrain(false)
-                        Task { await DioramaOfflineStore.shared.releaseDecodedMemory() }
+                        self.hdTiles.clear(); self.contextTiles.clear(); self.suppressBasemapTerrain(false); self.suppressNative3D(false)
+                        DioramaPieceStreamer.shared.pause()
+                        Task { for region in DioramaRegion.allCases { await DioramaOfflineStore.store(for: region).releaseDecodedMemory() } }
                     } else if name == UIApplication.didReceiveMemoryWarningNotification {
                         self.residency.constrain()
-                        self.hdTiles.clear(); self.contextTiles.trimForMemoryWarning()
+                        self.hdTiles.clear(); self.contextTiles.trimForMemoryWarning(); self.suppressNative3D(false)
+                        DioramaPieceStreamer.shared.trimForMemoryWarning()
                         self.suppressBasemapTerrain(self.contextTiles.hasReadyCoverage(in: self.visibleTilePriority))
-                        Task { await DioramaOfflineStore.shared.releaseDecodedMemory() }
+                        Task { for region in DioramaRegion.allCases { await DioramaOfflineStore.store(for: region).releaseDecodedMemory() } }
                         self.hdSuspendedUntil = Date().addingTimeInterval(30)
                         print("[Diorama HD] memory warning; HD released, base trimmed to focus; conservative allowance; loading paused 30s")
                     }
@@ -138,10 +144,23 @@ final class DioramaTileManager {
     }
     private var hdSuspendedUntil: Date = .distantPast
 
-    func install(on map: MapboxMap) { self.map = map; installed = true; scheduleUpdate(delay: 0) }
+    func install(on map: MapboxMap) {
+        self.map = map; installed = true
+        DioramaSceneryStreamer.shared.onInstall = { [weak self] tile in
+            self?.contextTiles.packageArrived(tile); self?.hdTiles.packageArrived(tile)
+            self?.scheduleUpdate(delay: 0)
+        }
+        DioramaBakedLandmarks.shared.setTileCompletion { tile in
+            Task { @MainActor [weak self] in self?.hdTiles.landmarksReady(tile) }
+        }
+        DioramaPieceStreamer.shared.onChanged = { [weak self] in self?.scheduleUpdate(delay: 0.1) }
+        scheduleUpdate(delay: 0)
+    }
     func styleDidReload() {
         hdTiles.clear(); contextTiles.clear(); state.loadedTiles.removeAll()
+        DioramaPieceStreamer.shared.clear()
         installed = false; basemapTerrainSuppressed = false; exitRequested = false; reloadRequested = false
+        native3DSuppressed = false
         let completion = retractionCompletion; retractionCompletion = nil; completion?()
     }
     func remove() {
@@ -149,12 +168,39 @@ final class DioramaTileManager {
         for observer in observers { NotificationCenter.default.removeObserver(observer) }
         observers.removeAll()
         hdTiles.clear(); contextTiles.clear(); state.loadedTiles.removeAll()
+        DioramaPieceStreamer.shared.clear()
         if let map { styling.remove(from: map) }
-        suppressBasemapTerrain(false); installed = false
+        suppressBasemapTerrain(false); suppressNative3D(false); installed = false
     }
     private func suppressBasemapTerrain(_ suppress: Bool) {
         guard suppress != basemapTerrainSuppressed else { return }
         basemapTerrainSuppressed = suppress; setBasemapTerrainEnabled?(!suppress)
+    }
+    private func suppressNative3D(_ suppress: Bool) {
+        guard suppress != native3DSuppressed else { return }
+        native3DSuppressed = suppress; setNative3DEnabled?(!suppress)
+    }
+
+    /// True only when every ground point of the view, plus a band beyond its top edge (tall native
+    /// buildings just past it still project into view), lies on ready saved scenery. Native 3D there is
+    /// fully clipped anyway, so the SDK's model/extrusion work is pure waste. Any doubt keeps native 3D.
+    private func viewIsFullyOwned(on map: MapboxMap) -> Bool {
+        let bounds = viewportBounds?() ?? .zero
+        guard bounds.width > 1, bounds.height > 1, map.cameraState.pitch <= 62 else { return false }
+        let steps = 9, hd = Set(hdTiles.tiles)
+        for row in 0...steps {
+            for column in 0...steps {
+                let screen = CGPoint(x: bounds.minX + bounds.width * Double(column) / Double(steps),
+                    y: bounds.minY - bounds.height * 0.2 + bounds.height * 1.2 * Double(row) / Double(steps))
+                let c = map.coordinate(for: screen)
+                guard c.latitude.isFinite, c.longitude.isFinite, abs(c.latitude) <= 85 else { return false }
+                let back = map.point(for: c)
+                guard back.x.isFinite, back.y.isFinite, hypot(back.x - screen.x, back.y - screen.y) < 4 else { return false }
+                let tile = DioramaTileID(latitude: c.latitude, longitude: c.longitude, zoom: 16)
+                guard contextTiles.isReady(tile) || hd.contains(tile) || DioramaPieceStreamer.shared.covers(tile) else { return false }
+            }
+        }
+        return true
     }
     private func applyPolicy() {
         hdTiles.setPolicy(categories: state.visibleCategories, time: state.timeOfDay,
@@ -174,7 +220,7 @@ final class DioramaTileManager {
     }
     func groundHeight(at point: GeoPoint) -> Double? {
         guard state.isEnabled, !state.isBasemapOnly, !exitRequested else { return nil }
-        return hdTiles.groundHeight(at: point) ?? contextTiles.groundHeight(at: point)
+        return hdTiles.groundHeight(at: point) ?? contextTiles.groundHeight(at: point) ?? DioramaPieceStreamer.shared.groundHeight(at: point)
     }
     func scheduleUpdate(delay: Double) {
         let deadline = CACurrentMediaTime() + max(0, delay)
@@ -188,11 +234,33 @@ final class DioramaTileManager {
     }
     func update() {
         guard installed, let map, UIApplication.shared.applicationState == .active else { return }
-        guard state.isEnabled, !state.isBasemapOnly, DioramaDownloadService.shared.canView,
+        let pieces = DioramaPieceStreamer.shared
+        if state.isEnabled, !state.isBasemapOnly {
+            // Streamed regions fetch nearby pieces on demand; the native map shows until they arrive.
+            DioramaSceneryStreamer.shared.request(center: map.cameraState.center, zoom: map.cameraState.zoom,
+                minimumZoom: config.minimumZoom, fullDetailZoom: config.fullDetailMinimumZoom)
+            // Finished harbour pieces: view-dependent, drawn as received, independent of saved tiles.
+            if !DioramaDownloadService.isProcessing {
+                pieces.update(map: map, viewport: viewport, config: config, categories: state.visibleCategories, time: state.timeOfDay,
+                              wireframe: state.showsWireframe, reduced: reducesEffects, motion: motion)
+            }
+        } else if pieces.hasResidents {
+            pieces.clear()
+        }
+        guard state.isEnabled, !state.isBasemapOnly, !DioramaDownloadService.viewableTiles.isEmpty && !DioramaDownloadService.isProcessing,
               retractionCompletion == nil else {
             beginExit()
+            // No saved tiles: streamed pieces may still own the ground under the camera.
+            if state.isEnabled, !state.isBasemapOnly, retractionCompletion == nil, !DioramaDownloadService.isProcessing {
+                let anchor = DioramaTileID(latitude: map.cameraState.center.latitude, longitude: map.cameraState.center.longitude, zoom: config.tileZoom)
+                let owned = pieces.covers(anchor)
+                suppressNative3D(owned); suppressBasemapTerrain(owned)
+            }
             state.status = state.isBasemapOnly ? "Basemap-only comparison" :
-                (state.isEnabled ? "Download and prepare Masaki before viewing · open Offline maps" : "Masaki diorama disabled")
+                (state.isEnabled ? (pieces.isNearby && pieces.isPublished ? pieces.report + "\n" + pieces.status
+                    : DioramaSceneryStreamer.shared.isStreaming ? "Streaming nearby scenery · native map until it arrives"
+                    : !DioramaSceneryStreamer.shared.status.isEmpty ? DioramaSceneryStreamer.shared.status
+                    : "Download and prepare Masaki before viewing · open Offline maps") : "Masaki diorama disabled")
             return
         }
         let threshold = config.minimumZoom - (sceneryWasVisible ? 0.25 : 0)
@@ -206,7 +274,9 @@ final class DioramaTileManager {
         let bounds = viewportBounds?() ?? .zero
         let outputSize = CGSize(width: bounds.width * UIScreen.main.scale, height: bounds.height * UIScreen.main.scale)
         let pixels = outputSize.width * outputSize.height
-        if lastOutputPixels > 0, pixels > lastOutputPixels * 1.2 { hdTiles.clear() }
+        // A larger drawable only re-runs admission (effect targets are re-estimated); clearing HD here
+        // made panel/rotation changes drop and re-read every full-detail tile.
+        if lastOutputPixels > 0, pixels > lastOutputPixels * 1.2 { hdTiles.retryAdmission() }
         lastOutputPixels = pixels
         contextTiles.outputSize = outputSize; hdTiles.outputSize = outputSize
         let validViewport = refreshViewportInterest(on: map)
@@ -215,27 +285,38 @@ final class DioramaTileManager {
             state.status = "Waiting for map layout\n" + residency.report
             scheduleUpdate(delay: 0.1); return
         }
-        contextTiles.viewport = viewport
-        contextTiles.update(focus: tile, config: config, map: map, visible: state.visibleCategories,
-            time: state.timeOfDay, wireframe: state.showsWireframe, priorityTiles: visibleTilePriority,
-            pinnedTiles: hdTiles.tiles,
-            allowsLoading: Date() >= hdSuspendedUntil)
-        contextTiles.setReducedEffects(reducesEffects, waterMotion: motion)
-        suppressBasemapTerrain(contextTiles.hasReadyCoverage(in: visibleTilePriority))
         let wanted: [DioramaTileID]
         let hdThreshold = config.fullDetailMinimumZoom - (hdWasRequested ? 0.25 : 0)
-        if map.cameraState.zoom >= hdThreshold, let focus = viewportFocus, Date() >= hdSuspendedUntil {
-            let candidates = ([focus] + visibleTilePriority.filter { $0 != focus })
-                .filter { abs($0.x - focus.x) <= 1 && abs($0.y - focus.y) <= 1 && needsFullDetail($0, on: map) }
-            wanted = Array(candidates.prefix(residency.hdLimit))
+        if map.cameraState.zoom >= hdThreshold, let focus = hdFocus(on: map), Date() >= hdSuspendedUntil {
+            // What you are looking at: the tile under the camera's focal point first, then the
+            // visible tiles closest to it on the ground. No screen-area ranking or projected-size
+            // test, so HD follows focus immediately instead of after a deliberation.
+            let centre = map.cameraState.center
+            let ranked = Set(visibleTilePriority + [focus]).filter {
+                DioramaDownloadService.viewableTiles.contains($0) && abs($0.x - focus.x) <= 1 && abs($0.y - focus.y) <= 1
+            }.map { ($0, groundDistance(from: centre, to: $0)) }
+                .filter { $0.0 == focus || $0.1 <= 900 }
+                .sorted { ($0.0 == focus ? -1 : $0.1, $0.0.key) < ($1.0 == focus ? -1 : $1.1, $1.0.key) }
+            wanted = Array(ranked.map(\.0).prefix(residency.hdLimit))
             hdTiles.setRequestState(wanted.isEmpty ? "Distant/horizon scenery uses coarse detail" : "Close foreground HD requested")
         } else {
             wanted = []
             if Date() < hdSuspendedUntil { hdTiles.setRequestState("Memory recovery · base trimmed; conservative HD retry after cooldown") }
             else if map.cameraState.zoom < hdThreshold {
                 hdTiles.setRequestState("Coarse distance view · HD starts at z\(config.fullDetailMinimumZoom)")
-            } else { hdTiles.setRequestState("No prepared Masaki tile intersects the current view") }
+            } else { hdTiles.setRequestState("No prepared scenery tile intersects the current view") }
         }
+        // Resolve HD interest before coarse admission. Its prerequisite bases must be in the
+        // bounded working set even when viewport-area ranking/hysteresis chooses a different order.
+        let basePriority = wanted + visibleTilePriority.filter { !wanted.contains($0) }
+        contextTiles.hdPriority = Set(wanted)
+        contextTiles.viewport = viewport
+        contextTiles.update(focus: wanted.first ?? tile, config: config, map: map, visible: state.visibleCategories,
+            time: state.timeOfDay, wireframe: state.showsWireframe, priorityTiles: basePriority,
+            pinnedTiles: hdTiles.tiles, allowsLoading: Date() >= hdSuspendedUntil)
+        contextTiles.setReducedEffects(reducesEffects, waterMotion: motion)
+        suppressBasemapTerrain(contextTiles.hasReadyCoverage(in: visibleTilePriority) || pieces.hasResidents)
+        suppressNative3D(viewIsFullyOwned(on: map))
         hdWasRequested = !wanted.isEmpty
         hdTiles.update(wanted: wanted, visibleTiles: visibleTilePriority, map: map, base: contextTiles, viewport: viewport, config: config,
             categories: state.visibleCategories, time: state.timeOfDay, wireframe: state.showsWireframe,
@@ -250,22 +331,23 @@ final class DioramaTileManager {
         if hdSuspendedUntil > Date() { scheduleUpdate(delay: hdSuspendedUntil.timeIntervalSinceNow) }
     }
 
-    /// Detail follows ground distance and projected size, not pitch alone. A low horizon can
-    /// contain kilometres of scenery even at a high zoom; never give that horizon HD textures.
-    private func needsFullDetail(_ tile: DioramaTileID, on map: MapboxMap) -> Bool {
-        let origin = map.cameraState.center
-        let projection = DioramaProjection(origin: origin), rect = projection.rect(of: tile)
-        let nearest = DV2(min(rect.maxX, max(rect.minX, 0)), min(rect.maxY, max(rect.minY, 0)))
-        guard hypot(nearest.x, nearest.y) <= 450 else { return false }
-        let c = projection.coordinate(nearest), point = GeoPoint(latitude: c.latitude, longitude: c.longitude)
-        let a = map.point(for: point.coordinate)
-        let b = map.point(for: point.offset(eastMetres: 10, northMetres: 0).coordinate)
-        let d = map.point(for: point.offset(eastMetres: 0, northMetres: 10).coordinate)
-        let extent = max(hypot(b.x - a.x, b.y - a.y), hypot(d.x - a.x, d.y - a.y))
-        return extent.isFinite && extent >= 10
+    /// The saved tile under the camera's focal point (the centre the camera, chase and padding
+    /// target), falling back to the largest visible tile when the focus lies outside saved scenery.
+    private func hdFocus(on map: MapboxMap) -> DioramaTileID? {
+        let c = map.cameraState.center
+        let tile = DioramaTileID(latitude: c.latitude, longitude: c.longitude, zoom: config.tileZoom)
+        if DioramaDownloadService.viewableTiles.contains(tile) { return tile }
+        return viewportFocus
+    }
+    /// Ground metres from the camera focus to the nearest point of a tile (0 inside it). Distance,
+    /// not pitch, keeps a far horizon out of HD.
+    private func groundDistance(from centre: CLLocationCoordinate2D, to tile: DioramaTileID) -> Double {
+        let rect = DioramaProjection(origin: centre).rect(of: tile)
+        return hypot(min(rect.maxX, max(rect.minX, 0)), min(rect.maxY, max(rect.minY, 0)))
     }
 
     private func beginExit() {
+        suppressNative3D(false)
         if let map, refreshViewportInterest(on: map) {
             contextTiles.updateRetirementVisibility(visibleTilePriority)
             hdTiles.updateRetirementVisibility(visibleTilePriority)
@@ -315,7 +397,7 @@ final class DioramaTileManager {
             return value
         }
         if let current {
-            for candidate in DioramaOfflineStore.tiles {
+            for candidate in DioramaDownloadService.viewableTiles {
                 let ground = DioramaViewport.area(tile: candidate, snapshot: current, viewport: bounds)
                 let upper = DioramaViewport.area(tile: candidate, snapshot: current, viewport: bounds, height: 60)
                 let area = max(ground, upper * 0.15)
@@ -335,7 +417,7 @@ final class DioramaTileManager {
                 let projected = map.point(for: coordinate)
                 guard projected.x.isFinite, projected.y.isFinite, hypot(projected.x - screen.x, projected.y - screen.y) < 4 else { continue }
                 let observed = DioramaTileID(latitude: coordinate.latitude, longitude: coordinate.longitude, zoom: 16)
-                guard DioramaOfflineStore.tiles.contains(observed) else { continue }
+                guard DioramaDownloadService.viewableTiles.contains(observed) else { continue }
                 observedWeights[observed, default: 0] += sampleWeight
             }
         }
@@ -355,7 +437,7 @@ final class DioramaTileManager {
             // The camera anchor remains authoritative when SDK horizon/roundtrip probes yield no ground.
             // Only admit that one known viewed tile, never a speculative ring or the entire HD region.
             let anchor = DioramaTileID(latitude: camera.center.latitude, longitude: camera.center.longitude, zoom: 16)
-            if DioramaOfflineStore.tiles.contains(anchor) {
+            if DioramaDownloadService.viewableTiles.contains(anchor) {
                 weights[anchor] = sampleWeight
             }
         }

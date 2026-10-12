@@ -1,0 +1,106 @@
+{
+  "revision": 4,
+  "researchedAt": "2026-10-10",
+  "name": "Julius Nyerere International Airport",
+  "operator": "Tanzania Airports Authority",
+  "iata": "DAR",
+  "icao": "HTDA",
+  "geography": {
+    "source": "OpenStreetMap API 0.6 map snapshots",
+    "attribution": "© OpenStreetMap contributors",
+    "license": "ODbL 1.0",
+    "licenseURL": "https://www.openstreetmap.org/copyright",
+    "aerodromeWay": 135694174,
+    "terminal3Way": 597787841,
+    "terminal2Way": 23359828,
+    "terminal1Way": 1188629104,
+    "openSidedConnectionWay": 1237792404,
+    "controlTowerWay": 438449950,
+    "landsideOvalParkingWay": 23359832,
+    "snapshots": [
+      "https://api.openstreetmap.org/api/0.6/map?bbox=39.198,-6.883,39.213,-6.862",
+      "https://api.openstreetmap.org/api/0.6/map?bbox=39.213,-6.875,39.2223,-6.8582",
+      "https://api.openstreetmap.org/api/0.6/map?bbox=39.1907,-6.8901,39.213,-6.883",
+      "https://api.openstreetmap.org/api/0.6/map?bbox=39.1907,-6.883,39.198,-6.8582"
+    ],
+    "runways": [
+      {"osmWay": 157259598, "ref": "05/23", "taggedLengthMetres": 3000, "taggedWidthMetres": 46},
+      {"osmWay": 157259599, "ref": "14/32", "taggedLengthMetres": 1000, "taggedWidthMetres": 30}
+    ],
+    "limitations": "OSM is a contributed map, not an airport survey or authoritative aviation chart. Raw ways and tagged points are supported; relation-based multipolygon holes, every object and operational accuracy are not certified. Stand and jet-bridge ways are segments, not a verified physical-bridge count."
+  },
+  "operatorAndConstructionReferences": [
+    "https://www.jnia.taa.go.tz/pages/public-transport",
+    "https://www.bam.com/en/press/press-releases/2013/4/bam-wins-major-design-and-build-contract-for-terminal-3-at-nyerere",
+    "https://www.bam.com/en/press/press-releases/2015/10/bam-wins-second-phase-over-eu100-million-for-extension-international",
+    "https://www.bam.com/en/press/press-releases/2004/11/interbeton-to-renovate-airport-at-dar-es-salaam-tanzania"
+  ],
+  "inspectedPhotographs": [
+    "https://c8.alamy.com/comp/J2PFMH/air-traffic-control-tower-of-julius-nyerere-airport-dar-es-salaam-tanzania-J2PFMH.jpg",
+    "https://r2-pub.rork.com/attachments/kom6hw6xe9d97znm0suoh.jpg",
+    "https://r2-pub.rork.com/attachments/y5sjujd1um0eg9a31dwhd.jpg",
+    "https://r2-pub.rork.com/attachments/kxgcia6kp34mq8erihlql.jpg",
+    "https://r2-pub.rork.com/attachments/dmj0liheznbel8964afiz.jpg",
+    "https://intos.nl/wp-content/uploads/2023/06/IMG_1885-scaled.jpg",
+    "https://www.thecitizen.co.tz/resource/image/4183288/landscape_ratio16x9/1600/900/1f28395d94091f0851332d0227f33ec5/MX/jnia-pic.jpg",
+    "https://www.airport-technology.com/wp-content/uploads/sites/14/2017/10/2l-Image-12.jpg",
+    "https://aviationweek.com/sites/default/files/styles/crop_freeform/public/2021-04/img_5098.jpeg?itok=trgz1cZG",
+    "https://aviationweek.com/sites/default/files/styles/crop_freeform/public/2021-04/img_5085.jpeg?itok=84oZHAGL",
+    "https://832production.com/wp-content/uploads/2022/04/JNIAT3-49.jpg",
+    "https://832production.com/wp-content/uploads/2022/04/JNIAT3-1.jpg",
+    "https://832production.com/wp-content/uploads/2022/04/JNIAT3-3.jpg",
+    "https://832production.com/wp-content/uploads/2022/04/JNIAT3-10.jpg",
+    "https://r2-pub.rork.com/attachments/c90eqirwv9mwx086wd5nq.jpg",
+    "https://r2-pub.rork.com/attachments/tjvksye515qwogobasoaw.jpg",
+    "https://r2-pub.rork.com/attachments/wilwv7gceu2ft7f88ew45.jpeg",
+    "https://www.norebbo.com/wp-content/uploads/2015/01/a320_v2500_engines_sharklets.jpg",
+    "https://i.3dmodels.org/uploads/desertsage-digital-art/002_Airport_Baggage_Tractor_Low_Poly/Airport_Baggage_Tractor_Low_Poly_1000_0003.jpg",
+    "https://www.forkforce.com.au/wp-content/uploads/2025/02/FLGCXT55-08G1WS_ENF-5.5T-LPG-PETROL-CBAL-FLIFT_SIDE.jpg",
+    "https://constructionreviewonline.com/wp-content/uploads/2017/08/Tanzania-plans-to-expand-Terminal-II-of-the-Julius-Nyerere-International-Airport.png",
+    "https://media.gettyimages.com/id/2155198693/photo/julius-nyerere-international-airport-terminal-2-dar-es-salaam-tanzania.jpg?s=612x612&w=gi&k=20&c=xs64MqPVINAAa4vnu81szkBK1ZtqJ1X66U9GPdDYXd8="
+  ],
+  "inspectedAerial": "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/export?bbox=39.198,-6.876,39.216,-6.861&bboxSR=4326&imageSR=4326&size=1600,1400&format=jpg&f=image",
+  "aerialUse": "Research inspection only; aerial pixels are not bundled, traced as surveyed object coordinates, or used as app ground textures. Image acquisition date is unknown.",
+  "userEvidence": "User identifies Terminal 2 as the old domestic terminal and confirms an open-air walking path to Terminal 3, blue full-name terminal rooftop signage, two T3 floors and circular glass revolving-door arrivals/departures. Supplied T3 interior/exterior photos supersede the prior all-glass facade treatment. The latest red/blue/grey annotation supersedes the split entrance canopy and side slots: one extended hall/entrance roof silhouette with rising side shell, glass under the sweep wrapping the front corner, paved frontage and closed dimensional blue lettering at the forward roof edge. User requests dense entrance spots, airfield/parking lights and illustrative static airport activity.",
+  "controlTowerArchitecture": {
+    "photo": "https://c8.alamy.com/comp/J2PFMH/air-traffic-control-tower-of-julius-nyerere-airport-dar-es-salaam-tanzania-J2PFMH.jpg",
+    "mappedWay": 438449950,
+    "centreLongitudeLatitude": [39.2108373, -6.8745472],
+    "observedForm": "Pale octagonal vertical concrete shaft flaring beneath an outward-inclined dark glazed octagonal cab; projecting gallery with metal rails, broad pale flat roof and radio masts. Low adjacent building follows way 438449951.",
+    "authoredHeightMetres": 36,
+    "limitations": "Photo date/current as-built status and measured height are not verified. Eight mapped vertices anchor the plan; shaft/cab heights, gallery/mullion dimensions and unseen elevations are photographic estimates. Airport elevation 55.4 m is not tower height. This is a photo-led procedural reconstruction, not exact surveyed certification."
+  },
+  "spatialPreparation": {
+    "revision": "airport-spatial-v2",
+    "chunkMetres": 240,
+    "description": "Explicit local upgrade reuses saved terminals/props, replaces only the ground skin/paint and adds the tower, preserving originals. Checked smaller archives feed one shared effect renderer with view-dependent working-set residency and full-building ownership dependencies. Native fallback remains outside detailed coverage. Device triangle/frame/upload/memory/energy savings are unmeasured."
+  },
+  "terminal2Architecture": {
+    "account": "https://en.wikiarquitectura.com/building/dar-es-salaam-airport/",
+    "reportedGridMetres": 13,
+    "reportedArchitect": "Paul Andreu",
+    "observedForm": "Opaque concrete inverted-pyramid/umbrella roof plates, branching underside ribs, tree columns and set-back glazing.",
+    "limitations": "Grid alignment to the bundled footprint, canopy heights/thickness, rib sizing and mezzanine extent are authored estimates; the secondary architectural account is not an as-built structural survey."
+  },
+  "authoredEstimates": [
+    "Terminal elevations, roof pitch/module spacing, folded sail and umbrella profiles, canopy curvature/overhang/supports",
+    "Flat whole-airport ground datum supported at the existing native map origin; no surveyed airport elevation field",
+    "Untagged road/taxiway/stopway widths, inferred parking bays/aisles, runway threshold/aiming/centreline paint",
+    "Frontage planters, palms, bollard spacing, crown shape/species at mapped tree points",
+    "Gate widths and elevations; direction inferred from nearest mapped access road",
+    "Flood-mast positions/heights and point-light approximation, not photometric spotlight simulation",
+    "T3 floor tops at 0.32/5.7 m, open atrium/side galleries, floor-supported stairs/escalators/lifts/check-in/seats/queues and suspended acoustic panels; illustrative rather than as-built interior plans",
+    "Circular T3 entry drum radius/positions, static revolving door pose, supported blue rooftop sign sizes/locations and dusk/night emission",
+    "Joined mapped bridge envelope width/height and support spacing, cladding/glass proportions and 5.7 m floor datum shared with T3/T2; mapped segment paths preserved but not a physical-bridge count",
+    "Annotated T3 side-shell rise/profile, extended roof boundary and 18 m paved frontage are user-directed estimates rather than surveyed structure or kerbs",
+    "Runway/taxiway light spacing, lens colors, threshold/end patterns and parking-pole positions are illustrative airport scenery, not operationally certified aviation lighting",
+    "Unbranded procedural A320-class aircraft, forklift, baggage tractor/cart and parked-car placements are static illustration, not real aircraft fleets or live traffic positions",
+    "Unknown ordinary service-building heights and flat chamfered roofs; photographed barrel hangar details not yet recreated"
+  ],
+  "verification": {
+    "literalOneForOneEveryObject": false,
+    "liveMetalAdmissionAndAppearance": "pending",
+    "devicePerformance": "pending",
+    "remainingEvidence": "Current georeferenced survey/as-built site plans, kerbs/bays/plant/gate/light inventory, terminal elevations/sections and interior plans; runtime Day/night captures and actual source/GPU counts."
+  }
+}

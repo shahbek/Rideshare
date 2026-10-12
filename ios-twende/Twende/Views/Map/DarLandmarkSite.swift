@@ -3,7 +3,7 @@ import UIKit
 import simd
 
 /// Research provenance and unsimplified OSM geometry live in the bundled catalog, not Swift constants.
-nonisolated struct DarLandmarkSite: Decodable, Identifiable {
+nonisolated struct DarLandmarkSite: Decodable, Identifiable, Sendable {
     let id: String
     let name: String
     let kind: String
@@ -19,7 +19,7 @@ nonisolated struct DarLandmarkSite: Decodable, Identifiable {
     @MainActor static let all: [DarLandmarkSite] = {
         guard let url = Bundle.main.url(forResource: "dar_landmarks", withExtension: "json"),
               let data = try? Data(contentsOf: url), let catalog = try? JSONDecoder().decode(DarLandmarkCatalog.self, from: data) else { return [] }
-        return (catalog.sites + (MoroccoSquareData.bundled?.sites ?? [])).filter { $0.ring.count >= 4 && $0.ring.allSatisfy { $0.count == 2 && $0.allSatisfy(\.isFinite) } }
+        return (catalog.sites + (MoroccoSquareData.bundled?.sites ?? []) + (HarbourLandmarkData.bundled?.sites ?? [])).filter { $0.ring.count >= 4 && $0.ring.allSatisfy { $0.count == 2 && $0.allSatisfy(\.isFinite) } }
     }()
 
     @MainActor var geometry: Geometry {
@@ -44,9 +44,15 @@ nonisolated struct DarLandmarkSite: Decodable, Identifiable {
         return ring.filter { expanded.path.contains(CGPoint(x: $0.x, y: $0.y)) }.count >= max(3, Int(ceil(Double(ring.count) * 0.8)))
     }
 
+    @MainActor static var airportTerminalOutlines: [DarLandmarkSite] = []
+
     @MainActor static func isBespoke(_ geometry: Geometry) -> Bool {
         AirtelBuildingSite.matches(geometry) || all.contains { $0.matches(geometry) }
+            || airportTerminalOutlines.contains { $0.matches(geometry) }
     }
+
+    var isHarbourArchitecture: Bool { kind == "johari-rotana" || kind == "bandari-tower" }
+    var isBudgetedArchitecture: Bool { isHarbourArchitecture }
 
     /// x = screen-right from the front, y = into the building. Positive determinant, never mirrored.
     var right: SIMD2<Double> { let a = bearing * .pi / 180; return SIMD2(-cos(a), sin(a)) }

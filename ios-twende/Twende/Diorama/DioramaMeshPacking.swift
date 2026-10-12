@@ -20,8 +20,10 @@ nonisolated enum DioramaMeshPacking {
             case .tileClay: texture = 7
             case .muralBlue: texture = 8
             case .leafDark, .leafMid, .leafLight, .leafOlive, .leafBright, .hedge, .cypress: texture = 10
-            case .roofTeal, .roofRust, .roofSlate, .roofGreen, .roofTerracotta, .roofConcrete, .seaCliffRoof: texture = 11
-            case .whitewash, .cream, .paleYellow, .sage, .brick, .terracottaWall: texture = 12
+            case .roofTeal, .roofRust, .roofSlate, .roofGreen, .roofTerracotta, .roofConcrete, .seaCliffRoof,
+                 .roofMaroon, .roofCharcoal, .mabatiGrey: texture = 11
+            case .whitewash, .cream, .paleYellow, .sage, .brick, .terracottaWall, .salmonRender, .paleBlueRender,
+                 .mint, .dustyRose: texture = 12
             case .trunk, .palmTrunk, .pierWood, .deckWood, .doorWood: texture = 13
             default: texture = 0
             }

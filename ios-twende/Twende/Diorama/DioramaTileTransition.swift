@@ -6,7 +6,7 @@ import UIKit
 nonisolated enum DioramaTileTransition {
     @MainActor
     static func run(host: DioramaRenderLayer, from: Float, to: Float, lifecycle: Bool = true,
-                    field: SIMD4<Float> = SIMD4(0, 0, 0, 1),
+                    field: SIMD4<Float> = SIMD4(0, 0, 0, 1), duration: Double = 1.8,
                     pairedCompletion: (@MainActor (SIMD4<Float>) -> Bool)? = nil,
                     step: @MainActor (SIMD4<Float>, Float) -> Void) async -> Bool {
         var elapsed: Double = 0
@@ -35,7 +35,7 @@ nonisolated enum DioramaTileTransition {
             if completed {
                 if endpoint { return true }
                 elapsed += min(1.0 / 30, max(0, now - previous))
-                let progress = Float(min(1, elapsed / 1.8))
+                let progress = Float(min(1, elapsed / max(0.1, duration)))
                 let eased = progress * progress * (3 - 2 * progress)
                 current.z = from + (to - from) * eased
                 apply(current, progress: eased)

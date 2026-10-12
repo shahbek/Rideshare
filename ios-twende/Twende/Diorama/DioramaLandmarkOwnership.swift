@@ -7,15 +7,20 @@ nonisolated enum DioramaLandmarkOwnership {
     private struct Feature: Decodable { let geometry: Geometry }
     private struct Geometry: Decodable { let coordinates: [[[Double]]] }
     private struct Catalog: Decodable { let sites: [Site] }
-    private struct Site: Decodable { let id: String; let ring: [[Double]] }
-    private static let outlines: [Site] = {
+    struct Site: Decodable, Sendable { let id: String; let ring: [[Double]] }
+    /// Every bespoke footprint as (id, lon/lat ring); also the catalogue of landmarks baked into saved tiles.
+    static let outlines: [Site] = {
         var result: [Site] = []
         if let url = Bundle.main.url(forResource: "airtel_house", withExtension: "geojson"),
            let bytes = try? Data(contentsOf: url), let feature = try? JSONDecoder().decode(Feature.self, from: bytes),
            let ring = feature.geometry.coordinates.first { result.append(Site(id: "airtel", ring: ring)) }
-        if let url = Bundle.main.url(forResource: "morocco_square", withExtension: "json"),
-           let bytes = try? Data(contentsOf: url), let catalog = try? JSONDecoder().decode(Catalog.self, from: bytes) {
-            result.append(contentsOf: catalog.sites)
+        // Every bespoke POI owns its footprint in saved tiles: churches/PSPF (dar_landmarks), Morocco,
+        // harbour towers and the researched skyline towers (dar_skyline).
+        for resource in ["dar_landmarks", "morocco_square", "harbour_landmarks", "dar_skyline"] {
+            if let url = Bundle.main.url(forResource: resource, withExtension: "json"),
+               let bytes = try? Data(contentsOf: url), let catalog = try? JSONDecoder().decode(Catalog.self, from: bytes) {
+                result.append(contentsOf: catalog.sites)
+            }
         }
         return result.filter { $0.ring.count >= 4 && $0.ring.allSatisfy { $0.count == 2 && $0.allSatisfy(\.isFinite) } }
     }()

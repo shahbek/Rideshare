@@ -10,7 +10,8 @@ nonisolated final class DioramaFrameMetrics: @unchecked Sendable {
     private var triangles: [Int] = []
     private var lastPublished: Double = 0
 
-    func record(triangles count: Int, cpuMS: Double, gpuMS: Double?, drawCalls: Int = 0, unmergedDrawCalls: Int = 0) -> String? {
+    func record(triangles count: Int, cpuMS: Double, gpuMS: Double?, drawCalls: Int = 0, unmergedDrawCalls: Int = 0,
+                chunkCopiedBytes: Int = 0, chunkCacheHits: Int = 0, chunkFallbackDraws: Int = 0) -> String? {
         lock.lock(); defer { lock.unlock() }
         cpu.append(cpuMS)
         triangles.append(count)
@@ -27,9 +28,10 @@ nonisolated final class DioramaFrameMetrics: @unchecked Sendable {
             return String(format: "%.2f", ordered[min(ordered.count - 1, Int(Double(ordered.count - 1) * p))]) + " ms"
         }
         return "Main-pass triangles: \(count) (rolling max \(triangles.max() ?? count))\n"
-            + "Main-pass draws: \(drawCalls) (\(unmergedDrawCalls) before contiguous batching)\n"
+            + "Main geometry draws: \(drawCalls) (\(unmergedDrawCalls) visible bins before batching)\n"
+            + "Main chunk packing: \(chunkCopiedBytes / 1024) KiB copied · \(chunkCacheHits) cache hits · \(chunkFallbackDraws) fallback draws\n"
             + "Diorama CPU encode p50/p95: \(percentile(cpu, 0.5)) / \(percentile(cpu, 0.95))\n"
             + "Shared map command GPU p50/p95: \(percentile(gpu, 0.5)) / \(percentile(gpu, 0.95))\n"
-            + "\(cpu.count) recent samples; excludes triangle counts for shadow/AO/reflection passes."
+            + "\(cpu.count) recent samples; geometry counts exclude fullscreen effects/labels and shadow/AO/reflection passes."
     }
 }

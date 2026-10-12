@@ -127,6 +127,11 @@ struct SetOnMapView: View {
                         Spacer()
                     }
 
+                    if !isMoving && !isResolving, let household {
+                        HouseholdAddressChip(address: household)
+                            .transition(.opacity.combined(with: .move(edge: .bottom)))
+                    }
+
                     if !previewPlace.isInServiceZone {
                         Label(L(.outOfZoneShort), systemImage: "exclamationmark.triangle.fill")
                             .font(TwendeFont.caption)
@@ -176,6 +181,12 @@ struct SetOnMapView: View {
 
     private var isResolving: Bool {
         !isMoving && resolved == nil && lookupFinishedFor != resolveKey
+    }
+
+    /// Zuri household address under the pin (offline, cached; nil only outside the atlas).
+    private var household: ZuriAddress? {
+        guard previewPlace.isInServiceZone else { return nil }
+        return ZuriAddressService.address(for: env.flow.mapCentre)
     }
 
     /// Street address under the pin when Apple knows it, otherwise the nearest landmark.

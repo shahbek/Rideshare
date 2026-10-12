@@ -163,6 +163,14 @@ extension TripMapView {
         private var puckVisible: Bool = false
         private var activeGestures: Set<String> = []
         private var cameraSettlement: Task<Void, Never>? = nil
+        /// Camera events are coalesced into one pass per main-loop turn (at most one per display
+        /// frame); landmark/billboard admission runs at most every 150 ms while moving and at settle.
+        private var cameraPassScheduled: Bool = false
+        private var lastSceneryPass: CFTimeInterval = 0
+        private var cameraEventCount: Int = 0
+        private var cameraPassCount: Int = 0
+        private var sceneryPassCount: Int = 0
+        private var cameraStatsSince: CFTimeInterval = 0
         private var lastReportedSelection: GeoPoint? = nil
         private var cancelables: Set<AnyCancelable> = []
         private var settingsCancelables: Set<AnyCancellable> = []
@@ -184,12 +192,20 @@ extension TripMapView {
         private let tanzaniteBridge = TanzaniteBridgeLandmark()
         private let airtelHouse = AirtelBuildingLandmark()
         private let cityLandmarks = DarCityLandmarks()
+        private let mapResidency = DioramaResidencyBudget()
         private let billboards: [BillboardLandmark] = BillboardCatalogue.all.map { BillboardLandmark(ad: $0) }
         private let billboardTeasers: [BillboardTeaser] = BillboardCatalogue.all.map { BillboardTeaser(ad: $0) }
         /// Procedural Slipway diorama; created only while `DioramaState.shared.isEnabled`.
         private var diorama: DioramaTileManager? = nil
         /// True while the diorama tile is on screen and Standard's 3D terrain must stay off.
         private var dioramaOwnsGround: Bool = false
+        private var dioramaHidesNative3D: Bool = false
+
+        /// Standard's 3D buildings/trees/landmarks are skipped only while saved scenery covers the whole view.
+        private func applyNative3D() {
+            guard let map = mapView?.mapboxMap else { return }
+            try? map.setStyleImportConfigProperty(for: "basemap", config: "show3dObjects", value: !dioramaHidesNative3D)
+        }
         private var dioramaRegenerate: Int = 0
         private var dioramaFly: Int = 0
         func removeLandmarks() {
@@ -213,7 +229,8 @@ extension TripMapView {
         /// Tilt so the Standard style's 3D buildings and the vehicle models read as objects, not decals.
         static let cameraPitch: CGFloat = 45
 
-        /// Native POIs use Mapbox's real place data and collision-aware ranking, not invented hotspots.
+        /// Keep Twende's custom 3D trip markers/fleet; suppress every native Mapbox label and marker.
+        /// Place, street, sea and country names are Zuri's own (`ZuriMapLabels`, offline atlas).
         /// Only `theme` and `lightPreset` follow the Settings picker; every other entry is fixed so the
         /// 3D scene, POI visibility and building selection colours are identical in all map styles.
         static func standardConfig(for style: MapStyleOption) -> [String: Any] {
@@ -227,20 +244,21 @@ extension TripMapView {
 
         private static let baseConfig: [String: Any] = [
             "show3dObjects": true,
-            "showPlaceLabels": true,
-            "showRoadLabels": true,
-            "showPointOfInterestLabels": true,
+            "showPlaceLabels": false,
+            "showRoadLabels": false,
+            "showPointOfInterestLabels": false,
             "densityPointOfInterestLabels": 5,
             "colorModePointOfInterestLabels": "default",
             "backgroundPointOfInterestLabels": "none",
-            "showLandmarkIcons": true,
-            "showLandmarkIconLabels": true,
+            "showLandmarkIcons": false,
+            "showLandmarkIconLabels": false,
             "showTransitLabels": false,
             "colorBuildingSelect": "#D3B07E",
             "colorBuildingHighlight": "#D3B07E",
         ]
 
         private let viewport = DioramaViewport()
+        private let zuriLabels = ZuriMapLabels()
         private lazy var fleet = DioramaFleetRenderLayer(viewport: viewport)
         private static let fleetLayerID = "zuri-live-fleet"
         private var nearbyVehicles: [String: Vehicle] = [:]
@@ -268,21 +286,26 @@ extension TripMapView {
         }
 
         func observe(_ mapView: MapView) {
+            zuriLabels.attach(to: mapView)
             viewport.setOnSurfaceChange { [weak self] in
                 Task { @MainActor [weak self] in
                     self?.refreshRouteElevation(); self?.mapView?.mapboxMap.triggerRepaint()
                 }
             }
             viewport.setOnRefresh { [weak self] in
-                Task { @MainActor [weak self] in self?.diorama?.scheduleUpdate(delay: 0.08) }
+                Task { @MainActor [weak self] in
+                    self?.diorama?.scheduleUpdate(delay: 0.08)
+                    if let self, let map = self.mapView?.mapboxMap { self.cityLandmarks.update(on:map) }
+                }
             }
             for name in [ProcessInfo.thermalStateDidChangeNotification, Notification.Name.NSProcessInfoPowerStateDidChange] {
                 NotificationCenter.default.publisher(for: name).sink { [weak self] _ in self?.applyFrameRatePolicy() }
                     .store(in: &settingsCancelables)
             }
+            driverEyeCamera.onActiveChanged = { [weak self] _ in self?.applyFrameRatePolicy() }
             applyFrameRatePolicy()
             NotificationCenter.default.publisher(for: DioramaState.renderSettingsChanged)
-                .sink { [weak self] _ in self?.updateDiorama() }
+                .sink { [weak self] _ in self?.applyNativeLights(force: false); self?.updateDiorama() }
                 .store(in: &settingsCancelables)
             mapView.mapboxMap.onMapLoaded.observe { [weak self] _ in
                 self?.refreshBuildingHighlight(immediately: true)
@@ -294,9 +317,20 @@ extension TripMapView {
                 guard self.activeGestures.isEmpty else { return }
                 self.reportSelectionCoordinate()
                 self.refreshBuildingHighlight(immediately: true)
-                if let map = self.mapView?.mapboxMap { self.airtelHouse.update(on: map, settled: true) }
+                if let map = self.mapView?.mapboxMap {
+                    self.airtelHouse.update(on: map, settled: true)
+                    self.cityLandmarks.update(on: map)
+                }
                 self.refreshRouteElevation()
                 self.diorama?.scheduleUpdate(delay: 0.05)
+                if let map = self.mapView?.mapboxMap {
+                    self.requestHarbourStream(on: map)
+                    self.tanzaniteBridge.update(on: map)
+                    for billboard in self.billboards { billboard.update(on: map) }
+                }
+                if let mapView = self.mapView, self.parent.onBillboardTap != nil {
+                    for teaser in self.billboardTeasers { teaser.update(on: mapView) }
+                }
             }.store(in: &cancelables)
             mapView.mapboxMap.onStyleLoaded.observe { [weak self] _ in
                 guard let self else { return }
@@ -330,22 +364,22 @@ extension TripMapView {
             }.store(in: &cancelables)
             mapView.mapboxMap.onCameraChanged.observe { [weak self] _ in
                 guard let self, let map = self.mapView?.mapboxMap else { return }
+                // Screen-anchored overlays follow every camera event so they never lag a frame.
                 if let mapView = self.mapView {
                     for banner in self.banners.values { banner.layout(on: mapView) }
+                    self.zuriLabels.layout(on: mapView)
+                    self.fleet.setViewportSize(mapView.bounds.size)
                 }
                 if !self.searchPulse.needsFrames { self.searchPulse.tick(on: map) }
-                self.refreshBuildingHighlight()
-                self.tanzaniteBridge.update(on: map)
-                self.airtelHouse.update(on: map)
-                self.cityLandmarks.update(on: map)
-                for billboard in self.billboards { billboard.update(on: map) }
-                if let mapView = self.mapView, self.parent.onBillboardTap != nil {
-                    for teaser in self.billboardTeasers { teaser.update(on: mapView) }
-                }
-                if let mapView = self.mapView { self.fleet.setViewportSize(mapView.bounds.size) }
                 self.viewport.invalidate()
-                self.diorama?.scheduleUpdate(delay: 0.08)
-                self.scheduleCameraSettlement()
+                self.cameraEventCount += 1
+                guard !self.cameraPassScheduled else { return }
+                self.cameraPassScheduled = true
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    self.cameraPassScheduled = false
+                    self.runCameraPass()
+                }
             }.store(in: &cancelables)
             mapView.gestures.onMapTap.observe { [weak self] context in
                 guard let self, let handler = self.parent.onBillboardTap, let map = self.mapView?.mapboxMap else { return }
@@ -366,14 +400,58 @@ extension TripMapView {
             tanzaniteBridge.updateLighting(); airtelHouse.updateLighting(); cityLandmarks.updateLighting()
             let reduced = ProcessInfo.processInfo.isLowPowerModeEnabled
                 || ProcessInfo.processInfo.thermalState.rawValue >= ProcessInfo.ThermalState.serious.rawValue
-            mapView?.preferredFrameRateRange = reduced
+            // Chase/forward tracking moves the camera from the 30 Hz vehicle motion clock, so
+            // rendering faster only re-shades identical camera poses. Free browsing keeps 60 Hz.
+            let tracking = driverEyeCamera.isActive
+            mapView?.preferredFrameRateRange = reduced || tracking
                 ? CAFrameRateRange(minimum: 15, maximum: 30, preferred: 30)
                 : CAFrameRateRange(minimum: 30, maximum: 60, preferred: 60)
+        }
+
+        private var appliedNativeLights: DioramaTimeOfDay? = nil
+
+        /// Lights the basemap's own 3D buildings, trees and terrain with the same Apple Maps-style rig as
+        /// the diorama, so native and custom scenery share one sky. Theme colours stay with the map style.
+        func applyNativeLights(force: Bool = true) {
+            guard let map = mapView?.mapboxMap else { return }
+            let state = DioramaState.shared
+            let time: DioramaTimeOfDay = state.isEnabled && !state.isBasemapOnly ? state.timeOfDay
+                : DioramaTimeOfDay(rawValue: AppSettings.shared.mapStyle.lightPreset) ?? .dusk
+            zuriLabels.setNight(time != .day)
+            guard force || appliedNativeLights != time else { return }
+            let preset = DioramaLightingPreset.preset(for: time)
+            func color(_ c: SIMD3<Float>) -> StyleColor {
+                StyleColor(UIColor(red: CGFloat(c.x), green: CGFloat(c.y), blue: CGFloat(c.z), alpha: 1))
+            }
+            var ambient = AmbientLight(id: "twende-ambient")
+            ambient.color = .constant(color(preset.nativeAmbient))
+            ambient.intensity = .constant(preset.nativeAmbientIntensity)
+            var directional = DirectionalLight(id: "twende-sun")
+            directional.color = .constant(color(preset.nativeDirectional))
+            directional.intensity = .constant(preset.nativeDirectionalIntensity)
+            directional.direction = .constant(preset.nativeDirection)
+            directional.castShadows = .constant(true)
+            directional.shadowIntensity = .constant(preset.nativeShadowIntensity)
+            do {
+                try map.setLights(ambient: ambient, directional: directional)
+                appliedNativeLights = time
+            } catch {
+                print("[TripMapView] basemap lights unavailable: \(error.localizedDescription)")
+            }
         }
 
         private func configureStandardStyle() {
             guard let map = mapView?.mapboxMap else { return }
             tanzaniteBridge.viewport = viewport; airtelHouse.viewport = viewport; cityLandmarks.viewport = viewport
+            cityLandmarks.budget = mapResidency
+            cityLandmarks.viewportBounds = { [weak mapView] in mapView?.bounds ?? .zero }
+            cityLandmarks.onAirportGroundOwnershipChanged = { [weak self] _ in
+                guard let self else { return }
+                self.viewport.invalidate()
+                self.applyTerrain()
+                self.refreshRouteElevation()
+                self.mapView?.mapboxMap.triggerRepaint()
+            }
             let style = AppSettings.shared.mapStyle
             appliedStyle = style
             for (key, value) in Self.standardConfig(for: style) {
@@ -384,6 +462,8 @@ extension TripMapView {
                 }
             }
             applyTerrain()
+            applyNativeLights()
+            if dioramaHidesNative3D { applyNative3D() }
             if !map.layerExists(withId: Self.fleetLayerID) {
                 do { try map.addCustomLayer(withId: Self.fleetLayerID, layerHost: fleet, layerPosition: nil) }
                 catch { print("[Fleet map] layer installation unavailable") }
@@ -398,10 +478,12 @@ extension TripMapView {
         /// Real elevation under Standard's 3D buildings. DEM tiles stop at z14 and are cached in the
         /// shared TileStore (and included in offline areas). Keep the datum stable in Low Power;
         /// the diorama instead reduces reflections and stops its animation clock. While the Slipway
-        /// diorama is shown it owns the ground, so the terrain stays off until it hides.
+        /// diorama owns ground or the camera is in the airport area, terrain stays off. Airport
+        /// flattening does not wait for source loading, validation or GPU initialization.
+        /// Mapbox terrain is map-wide; restore it only after every ground policy has cleared.
         func applyTerrain() {
             guard let map = mapView?.mapboxMap else { return }
-            guard !dioramaOwnsGround else {
+            guard !dioramaOwnsGround, !cityLandmarks.shouldFlattenAirport(on: map) else {
                 map.removeTerrain()
                 return
             }
@@ -485,6 +567,36 @@ extension TripMapView {
             parent.onCameraMoved?(selectedPoint)
         }
 
+        /// Everything a camera move triggers, once per main-loop turn: scenery scheduling, highlight,
+        /// harbour pieces, and (rate-limited) landmark and billboard admission.
+        private func runCameraPass() {
+            guard let map = mapView?.mapboxMap else { return }
+            cameraPassCount += 1
+            refreshBuildingHighlight()
+            diorama?.scheduleUpdate(delay: 0.08)
+            requestHarbourStream(on: map)
+            scheduleCameraSettlement()
+            let now = CACurrentMediaTime()
+            if now - lastSceneryPass >= 0.15 {
+                lastSceneryPass = now
+                sceneryPassCount += 1
+                tanzaniteBridge.update(on: map)
+                airtelHouse.update(on: map)
+                cityLandmarks.update(on: map)
+                for billboard in billboards { billboard.update(on: map) }
+                if let mapView, parent.onBillboardTap != nil {
+                    for teaser in billboardTeasers { teaser.update(on: mapView) }
+                }
+            }
+            #if DEBUG
+            if cameraStatsSince == 0 { cameraStatsSince = now }
+            if now - cameraStatsSince >= 1 {
+                print("[Camera] \(cameraEventCount) camera events → \(cameraPassCount) passes, \(sceneryPassCount) landmark/billboard updates in \(String(format: "%.1f", now - cameraStatsSince)) s")
+                cameraEventCount = 0; cameraPassCount = 0; sceneryPassCount = 0; cameraStatsSince = now
+            }
+            #endif
+        }
+
         /// Camera quietness, not tile/network idleness, controls the picker pin's landing.
         private func scheduleCameraSettlement() {
             cameraSettlement?.cancel()
@@ -545,13 +657,18 @@ extension TripMapView {
             tanzaniteBridge.updateLighting(); airtelHouse.updateLighting(); cityLandmarks.updateLighting()
             mapView.mapboxMap.triggerRepaint()
             if state.isEnabled, diorama == nil {
-                let manager = DioramaTileManager()
+                let manager = DioramaTileManager(residencyBudget: mapResidency)
                 manager.viewport = viewport
                 manager.viewportBounds = { [weak mapView] in mapView?.bounds ?? .zero }
                 manager.setBasemapTerrainEnabled = { [weak self] enabled in
                     guard let self else { return }
                     self.dioramaOwnsGround = !enabled
                     self.applyTerrain()
+                }
+                manager.setNative3DEnabled = { [weak self] enabled in
+                    guard let self, self.dioramaHidesNative3D == enabled else { return }
+                    self.dioramaHidesNative3D = !enabled
+                    self.applyNative3D()
                 }
                 diorama = manager
                 if styleReady { manager.install(on: mapView.mapboxMap) }
@@ -580,11 +697,26 @@ extension TripMapView {
             diorama.scheduleUpdate(delay: 0.05)
         }
 
+        /// Harbour streaming runs straight from the camera, independent of whether the diorama
+        /// manager has installed its layers yet, so nothing upstream can silently stop it.
+        func requestHarbourStream(on map: MapboxMap) {
+            let state = DioramaState.shared
+            let streamer = DioramaSceneryStreamer.shared
+            guard state.isEnabled, !state.isBasemapOnly else {
+                streamer.noteDisabled(near: map.cameraState.center)
+                return
+            }
+            let config = DioramaConfig.slipway
+            streamer.request(center: map.cameraState.center, zoom: map.cameraState.zoom,
+                             minimumZoom: config.minimumZoom, fullDetailZoom: config.fullDetailMinimumZoom)
+        }
+
         func removeDiorama() {
             diorama?.remove()
             diorama = nil
             dioramaOwnsGround = false
             applyTerrain()
+            if dioramaHidesNative3D { dioramaHidesNative3D = false; applyNative3D() }
         }
 
         // MARK: Camera

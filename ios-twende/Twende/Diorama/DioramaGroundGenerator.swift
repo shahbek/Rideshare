@@ -165,12 +165,40 @@ nonisolated struct DioramaGroundGenerator {
             guard ring.count >= 3, DioramaPolygon.area(ring) > 40 else { continue }
             painter.fill(ring, .lawn)
         }
+        // Mapped beaches and sand: sand grain code, so the shader blends it softly into the turf.
+        for area in data.landuse where area.kind == "sand" || area.kind == "beach" || area.tags["natural"] == "beach" {
+            guard area.rings.first.map({ $0.count >= 3 }) == true else { continue }
+            painter.fill(area.rings.map { DioramaPolygon.clipPolygon($0, to: data.rect) }, .earth)
+        }
+        golf()
+    }
+
+    /// Golf: course turf, mown hole corridors, tees and greens (striped in the shader), then sand bunkers.
+    private func golf() {
+        let areas = data.landuse.filter { DarGolf.kinds.contains($0.kind) }
+        guard !areas.isEmpty else { return }
+        for course in areas where course.kind == "golfCourse" {
+            painter.fill(course.rings.map { DioramaPolygon.clipPolygon($0, to: data.rect) }, .grass)
+        }
+        painter.materialOverride = .mown
+        let fairways = areas.filter { $0.kind == "golf_fairway" }.compactMap(\.rings.first)
+        if !fairways.isEmpty { painter.fillPieces(fairways, .lawn) }
+        for area in areas where area.kind == "golf_tee" || area.kind == "golf_green" {
+            if let ring = area.rings.first { painter.fill(ring, .pitchGreen) }
+        }
+        painter.materialOverride = nil
+        for area in areas where area.kind == "golf_bunker" {
+            if let ring = area.rings.first { painter.fill(ring, .earth) }
+        }
     }
 
     private func compoundGround(_ compounds: [DioramaCompound]) {
+        // All plot lawns first, then every drive: drives always cross lawns, and compact tiles keep
+        // one raster epoch here instead of one per compound.
         for compound in compounds {
-            let plot = DioramaPolygon.offset(compound.ring, by: -0.35) ?? compound.ring
-            painter.fill(plot, .lawn)
+            painter.fill(DioramaPolygon.offset(compound.ring, by: -0.35) ?? compound.ring, .lawn)
+        }
+        for compound in compounds {
             if let gate = compound.gate {
                 let entrance = compound.building.entrance + compound.building.entranceOut * 0.4
                 painter.stroke([gate.point, entrance], width: config.gateWidth - 0.3, .paving, cap: .butt)

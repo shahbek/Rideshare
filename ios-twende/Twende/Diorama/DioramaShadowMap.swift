@@ -65,7 +65,7 @@ nonisolated final class DioramaShadowMap {
                 ranges: [DioramaRenderLayer.Range], groups: [DioramaInstanceGroup],
                 focus: (SIMD3<Float>, SIMD3<Float>)?,
                 sun: SIMD3<Float>, preset: DioramaTimeOfDay, landmarkPresent: Set<String> = [],
-                lod: DioramaLODSelector? = nil, timing: DioramaPassTimer.Frame? = nil) -> simd_float4x4? {
+                chunks: DioramaGeometryChunks, lod: DioramaLODSelector? = nil, timing: DioramaPassTimer.Frame? = nil) -> simd_float4x4? {
         let casters = ranges.filter { !$0.category.isEmissive && $0.category != .water && !$0.translucent }
         let castingGroups = groups.filter { !$0.category.isEmissive }
         let snap: Float = 8
@@ -123,12 +123,7 @@ nonisolated final class DioramaShadowMap {
         let texelSelector = lod?.orthographic(0.5 * min(span.x, span.y) / 2048)
         let lodIndices = lod?.table.indexBuffer ?? indices
         let shadowRanges = DioramaDrawPlan.ranges(DioramaDrawPlan.levels(casters.filter { $0.intersects(candidate) }, selector: texelSelector))
-        timing?.count("Shadow", triangles: shadowRanges.reduce(0) { $0 + $1.count / 3 })
-        for range in shadowRanges {
-            encoder.setCullMode(range.doubleSided ? .none : .back)
-            encoder.drawIndexedPrimitives(type: .triangle, indexCount: range.count, indexType: .uint32,
-                                          indexBuffer: range.usesLODBuffer ? lodIndices : indices, indexBufferOffset: range.start * MemoryLayout<UInt32>.stride)
-        }
+        var submission = chunks.drawRanges(shadowRanges, encoder: encoder, command: command, indices: indices, lodIndices: lodIndices)
         if let instances, !castingGroups.isEmpty {
             encoder.setRenderPipelineState(instancedPipeline)
             encoder.setVertexBuffer(instances, offset: 0, index: 3)
@@ -138,15 +133,11 @@ nonisolated final class DioramaShadowMap {
                     minimum: $0.minimum, maximum: $0.maximum).intersects(candidate)
             }
             let shadowGroups = DioramaDrawPlan.instances(retained, selector: texelSelector)
-            timing?.count("Shadow", triangles: shadowGroups.reduce(0) { $0 + $1.count / 3 * $1.instanceCount })
-            for group in shadowGroups {
-                encoder.setCullMode(group.doubleSided ? .none : .back)
-                encoder.drawIndexedPrimitives(type: .triangle, indexCount: group.count, indexType: .uint32,
-                    indexBuffer: group.usesLODBuffer ? lodIndices : indices, indexBufferOffset: group.start * MemoryLayout<UInt32>.stride,
-                    instanceCount: group.instanceCount, baseVertex: 0, baseInstance: group.firstInstance)
-            }
+            submission.add(chunks.drawInstances(shadowGroups, encoder: encoder, command: command,
+                indices: indices, lodIndices: lodIndices, instances: instances))
         }
         encoder.endEncoding()
+        timing?.count("Shadow", triangles: submission.triangles, draws: submission.draws, inputDraws: submission.inputDraws)
         matrix = candidate
         cachedKey = key
         return matrix

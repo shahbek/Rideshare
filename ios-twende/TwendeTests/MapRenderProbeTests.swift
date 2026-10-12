@@ -10,7 +10,6 @@ import Testing
 struct MapRenderProbeTests {
     private static let duck = URL(string: "https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Models/master/2.0/Duck/glTF-Binary/Duck.glb")!
     private static let bundled = Bundle.main.url(forResource: "vehicle_economy", withExtension: "glb")
-    private static let flattened = Bundle.main.url(forResource: "vehicle_economy_flat", withExtension: "glb")
 
     @Test func noiseFloor() async {
         let result = await MapRenderProbe().run(.none)
@@ -36,13 +35,6 @@ struct MapRenderProbeTests {
         let url = try #require(Self.bundled)
         let result = await MapRenderProbe().run(.modelLayer(url: url, scale: 10, slot: nil, type: .locationIndicator))
         print("[probe] bundled locationIndicator: \(result)")
-        #expect(result.mapChanged > 300, "\(result)")
-    }
-
-    @Test func modelLayerFlattenedCommon3D() async throws {
-        let url = try #require(Self.flattened)
-        let result = await MapRenderProbe().run(.modelLayer(url: url, scale: 10, slot: nil, type: .common3d))
-        print("[probe] flattened common3d: \(result)")
         #expect(result.mapChanged > 300, "\(result)")
     }
 

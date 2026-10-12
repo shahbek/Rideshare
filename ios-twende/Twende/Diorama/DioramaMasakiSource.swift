@@ -32,7 +32,7 @@ nonisolated enum DioramaMasakiSource {
             }
             return data
         }
-        guard DioramaOfflineStore.tiles.contains(tile),
+        guard DioramaOfflineStore.allTiles.contains(tile),
               let features = await DioramaMapboxData.load(tile: tile, token: token, offline: offline, includesEnvironment: true),
               !Task.isCancelled else { return nil }
         let projection = DioramaProjection(origin: tile.centre)
@@ -77,6 +77,8 @@ nonisolated enum DioramaMasakiSource {
                 if kind == "water" { data.water.append(area) } else { data.landuse.append(area) }
             }
         }
+        // Bundled OSM golf geography (greens, bunkers, tees, hole corridors) on its own addressed tiles.
+        data.landuse += DarGolf.areas(projection: projection, rect: rect)
         data = DioramaSeaCliffSite.merge(into: data)
         data = DioramaPoolRecognition.merge(features, into: data)
         data = DioramaMapboxData.merge(features, into: data)
@@ -95,7 +97,7 @@ nonisolated enum DioramaMasakiSource {
         components.queryItems = [URLQueryItem(name: "access_token", value: token)]
         guard let url = components.url else { return nil }
         do {
-            let bytes = try await DioramaSourceStore.shared.data(url: url, key: "terrain-\(z)-\(parentX)-\(parentY).png", offline: offline)
+            let bytes = try await DioramaSourceStore.store(for: tile).data(url: url, key: "terrain-\(z)-\(parentX)-\(parentY).png", offline: offline)
             guard let raster = DioramaElevationRaster(data: bytes) else { return nil }
             // Share the two pixels on either side of a parent-PNG boundary. Independent clamp
             // sampling gives adjacent children different edge heights even without the old ramp.
@@ -105,11 +107,11 @@ nonisolated enum DioramaMasakiSource {
             for dx in xs {
                 for dy in ys where dx != 0 || dy != 0 {
                     let px = parentX + dx, py = parentY + dy
-                    guard DioramaOfflineStore.tiles.contains(where: { $0.x / divisor == px && $0.y / divisor == py }) else { continue }
+                    guard DioramaOfflineStore.allTiles.contains(where: { $0.x / divisor == px && $0.y / divisor == py }) else { continue }
                     guard var neighbourURL = URLComponents(string: "https://api.mapbox.com/v4/mapbox.terrain-rgb/\(z)/\(px)/\(py).pngraw") else { return nil }
                     neighbourURL.queryItems = [URLQueryItem(name: "access_token", value: token)]
                     guard let url = neighbourURL.url else { return nil }
-                    let bytes = try await DioramaSourceStore.shared.data(url: url, key: "terrain-\(z)-\(px)-\(py).png", offline: offline)
+                    let bytes = try await DioramaSourceStore.store(for: tile).data(url: url, key: "terrain-\(z)-\(px)-\(py).png", offline: offline)
                     guard let neighbour = DioramaElevationRaster(data: bytes), neighbour.width == raster.width,
                           neighbour.height == raster.height else { return nil }
                     neighbours["\(dx),\(dy)"] = neighbour
