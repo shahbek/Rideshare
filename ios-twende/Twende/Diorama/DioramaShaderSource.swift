@@ -990,6 +990,7 @@ nonisolated enum DioramaShaderSource {
         // Clay: the scene is coloured by its vertices and shaped by its smooth normals; no texture
         // (ground raster, material layers, grain, grade field, occlusion) is read anywhere below.
         bool clay = u.style.z > 0.5;
+        int debugOff = int(u.style.w + 0.5);
         float3 albedo = in.color.rgb;
         float3 surfacePosition = in.worldPosition;
         float3 surfaceNormal = n;
@@ -1029,7 +1030,7 @@ nonisolated enum DioramaShaderSource {
         // Clay ground never reads the raster: everything not covered by a vector finish is natural
         // ground, and the vector layers (asphalt, pavements, paving, clay courts) composite over it.
         bool clayGround = clay && paintedGround && !analyticAirport;
-        bool hybridFinish = paintedGround && (u.materialFrame.w > 1.5 || clayGround) && !airportHD;
+        bool hybridFinish = paintedGround && (u.materialFrame.w > 1.5 || clayGround) && !airportHD && (debugOff & 2) == 0;
         float4 rasterEpochs = float4(0.0);
         float2 rasterF = float2(0.0);
         // Organic breakup is only evaluated where a pixel is small enough to see it (no far aliasing).
@@ -1441,7 +1442,7 @@ nonisolated enum DioramaShaderSource {
         DioramaFacadeSample facade;
         facade.albedo = albedo; facade.normal = detailNormal; facade.emissive = float3(0.0);
         facade.glass = 0.0; facade.sunMask = 1.0; facade.occlusion = 1.0;
-        bool facadeWall = in.appearance.y > 31.5 && code < 0.5 && in.appearance.z > 50.0;
+        bool facadeWall = in.appearance.y > 31.5 && code < 0.5 && in.appearance.z > 50.0 && (debugOff & 1) == 0;
         if (facadeWall) {
             facade = dioramaFacade(surfacePosition, surfaceNormal, in.appearance.y, in.appearance.z, code,
                                    albedo, view, u.sunDirection.xyz, glow);

@@ -677,6 +677,8 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost, @unchecke
         let airportDetailRect = self.airportGroundDetailRect
         let airportPaint = self.airportGroundPaint
         lock.unlock()
+        let debug = DioramaDebugSwitches.shared.flags
+        let hostID = ObjectIdentifier(self)
         let analyticAirport = airportPaint != nil || hasAnalyticAirportGround
         let scenePaint = airportPaint?.paintBuffer ?? paintBuffer
         let scenePaintTable = airportPaint?.paintTableBuffer ?? paintTableBuffer
@@ -811,6 +813,7 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost, @unchecke
         var uniforms = DioramaLighting.uniforms(for: timeOfDay, eye: eye)
         uniforms.groundColor.w = surfaceTexture == nil ? 0 : 1
         uniforms.style.z = DioramaConfig.clayRendering ? 1 : 0
+        uniforms.style.w = (debug.facadeShader ? 0 : 1) + (debug.groundPaint ? 0 : 2)
         uniforms.reveal = reveal
         uniforms.lifecycleReveal = lifecycleReveal
         uniforms.tileBounds = SIMD4(Float(groundRect.minX), Float(groundRect.minY), Float(groundRect.maxX), Float(groundRect.maxY))
@@ -830,7 +833,7 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost, @unchecke
         }
         uniforms.materialFrame = materialFrame
         uniforms.materialFrame.w = analyticAirport ? 1 : (hasVectorFinishes ? 2 : 0)
-        uniforms.lightGrid = SIMD4<Float>(lightGrid.minX, lightGrid.minY, lightGrid.cellSize, Float(lightGrid.cells))
+        uniforms.lightGrid = SIMD4<Float>(lightGrid.minX, lightGrid.minY, lightGrid.cellSize, debug.pointLights ? Float(lightGrid.cells) : 0)
         // The baked fields depend only on the fixed ground rectangle and material frame: encode once.
         if !gradeBaked, let gradeField, let gradeBakePipeline, groundRect.width > 0, groundRect.height > 0 {
             let pass = MTLRenderPassDescriptor()
@@ -881,7 +884,7 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost, @unchecke
             viewLow = simd_min(viewLow, group.minimum); viewHigh = simd_max(viewHigh, group.maximum)
         }
         let castingGroups = eligibleCasters
-        if reveal.w < 0.5, lifecycleReveal.w < 0.5, unionState.x < 0.5, let shadowMap, let shadowMatrix = shadowMap.update(command: mtlCommandBuffer, vertices: vertexBuffer, indices: indexBuffer, instances: instanceBuffer,
+        if debug.shadows, reveal.w < 0.5, lifecycleReveal.w < 0.5, unionState.x < 0.5, let shadowMap, let shadowMatrix = shadowMap.update(command: mtlCommandBuffer, vertices: vertexBuffer, indices: indexBuffer, instances: instanceBuffer,
             ranges: drawn, groups: castingGroups, focus: viewLow.x.isFinite && viewHigh.x > viewLow.x ? (viewLow, viewHigh) : nil,
             sun: SIMD3(uniforms.sunDirection.x, uniforms.sunDirection.y, uniforms.sunDirection.z), preset: timeOfDay, landmarkPresent: landmarks,
             chunks: geometryChunks, lod: lodBase, timing: timing) {
@@ -891,7 +894,7 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost, @unchecke
 
         uniforms.water = SIMD4<Float>(waterHeight, 0, Float(texture.width), Float(texture.height))
         var reflected: MTLTexture?
-        if !reducedEffects, !wireframe, mainRanges.contains(where: { $0.category == .water }), let reflectionPass {
+        if debug.reflections, !reducedEffects, !wireframe, mainRanges.contains(where: { $0.category == .water }), let reflectionPass {
             let reflectionGroups = eligibleGroups
             // Mirrored points sit between the reflected tallest visible geometry and the real one.
             let top = Double(viewHigh.z.isFinite ? min(viewHigh.z, waterHeight + 80) : waterHeight + 30)
@@ -916,7 +919,7 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost, @unchecke
         // Clay keeps no screen-space occlusion: that pass re-drew every opaque triangle into a
         // position/normal buffer each time the camera moved more than a texel.
         let aoStrength: Float = effectsOn && hasOpaque && !DioramaConfig.clayRendering ? postSettings.ao : 0
-        let bloomStrength: Float = effectsOn && glowOn && hasEmission ? postSettings.bloom : 0
+        let bloomStrength: Float = debug.bloom && effectsOn && glowOn && hasEmission ? postSettings.bloom : 0
         uniforms.post = SIMD4<Float>(aoStrength, bloomStrength, postSettings.grade, postSettings.haze)
         let lodDistance: Float = 140
         let lodSelector = lodBase
@@ -1055,7 +1058,7 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost, @unchecke
             postProcess.composite(bloomLevels, into: encoder, strength: bloomStrength, targetWidth: texture.width, targetHeight: texture.height)
         }
         let labelIDs: Set<UInt64>
-        if visible.contains(.buildings), !wireframe {
+        if debug.labels, visible.contains(.buildings), !wireframe {
             labelIDs = labelRenderer?.draw(encoder: encoder, matrix: matrix, width: texture.width, height: texture.height, zoom: parameters.zoom, uniforms: uniforms) ?? []
         } else { labelIDs = [] }
         publishLabels(labelIDs)
@@ -1070,10 +1073,26 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost, @unchecke
         let cpuMS = (CACurrentMediaTime() - encodeStarted) * 1000
         let metrics = frameMetrics
         let callback = onFrameReport
+        var perCategory: [DioramaCategory: Int] = [:]
+        for r in selectedRangeDraws { perCategory[r.category, default: 0] += r.count / 3 }
+        for g in selectedInstanceDraws { perCategory[g.category, default: 0] += g.count / 3 * g.instanceCount }
+        var casterTriangles = 0
+        if uniforms.shadowParams.x > 0.5 {
+            for r in drawn where !r.category.isEmissive && r.category != .water { casterTriangles += r.count / 3 }
+            for g in castingGroups { casterTriangles += g.fullCount / 3 * g.instances.count }
+        }
+        let reflectionOn = reflected != nil
+        let labelCount = labelIDs.count
+        let lightCount = debug.pointLights ? lightGrid.lights.count : 0
+        DioramaDebugSwitches.shared.record(hostID) { stats in
+            stats.triangles = perCategory; stats.drawCalls = drawCalls; stats.shadowTriangles = casterTriangles
+            stats.reflectionPass = reflectionOn; stats.labels = labelCount; stats.lights = lightCount
+        }
         mtlCommandBuffer.addCompletedHandler { [weak self] command in
             guard command.status == .completed else { return }
             self?.didComplete(reveal, lifecycle: lifecycleReveal, union: unionState)
             let gpuMS = command.gpuEndTime > command.gpuStartTime ? (command.gpuEndTime - command.gpuStartTime) * 1000 : nil
+            DioramaDebugSwitches.shared.record(hostID) { $0.gpuMS = gpuMS }
             if let report = metrics.record(triangles: triangles, cpuMS: cpuMS, gpuMS: gpuMS, drawCalls: drawCalls,
                 unmergedDrawCalls: unmergedDrawCalls, chunkCopiedBytes: chunkCopiedBytes,
                 chunkCacheHits: chunkCacheHits, chunkFallbackDraws: chunkFallbackDraws) { callback?(report) }
@@ -1081,6 +1100,7 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost, @unchecke
     }
 
     func renderingWillEnd() {
+        DioramaDebugSwitches.shared.remove(ObjectIdentifier(self))
         DioramaFleetLighting.shared.remove(host: self)
         publishWaterVisibility(false)
         preparedFormats = nil
