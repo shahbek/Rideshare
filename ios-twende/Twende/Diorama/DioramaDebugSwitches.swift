@@ -16,8 +16,6 @@ nonisolated final class DioramaDebugSwitches: @unchecked Sendable {
         var facadeShader: Bool = true
         /// Sun shadow map (re-draws every caster from the sun).
         var shadows: Bool = true
-        /// Water reflection pass (re-draws the scene mirrored).
-        var reflections: Bool = true
         /// Screen-space bloom on lit windows and lamps.
         var bloom: Bool = true
     }
@@ -27,7 +25,6 @@ nonisolated final class DioramaDebugSwitches: @unchecked Sendable {
         var triangles: [DioramaCategory: Int] = [:]
         var drawCalls: Int = 0
         var shadowTriangles: Int = 0
-        var reflectionPass: Bool = false
         var labels: Int = 0
         var lights: Int = 0
         var gpuMS: Double?

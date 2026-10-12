@@ -160,21 +160,72 @@ nonisolated struct DioramaStreetSurface: Sendable {
         return patches
     }
 
-    /// Capsules preserve centreline locations; curved joins are tessellated below 0.1 m chord error.
-    static func corridor(_ road: DioramaRoadFeature, extra: Double, rect: DioramaRect? = nil) -> [[DV2]] {
+    /// Straight-edged road outline: one rectangle per segment, a mitred wedge on the outside of
+    /// every bend (clipped past 1.2 × the half width) and, with `caps`, square ends extended by the
+    /// half width so arms meeting at a junction fill its centre with straight edges. No round
+    /// discs: bends and junctions read as crisp asphalt, and each road is a handful of quads.
+    static func corridor(_ road: DioramaRoadFeature, extra: Double, rect: DioramaRect? = nil, caps: Bool = true) -> [[DV2]] {
         var result: [[DV2]] = []
         let half = road.width / 2 + extra
-        let line = rect.map { continuation(road.line, halfWidth: half, rect: $0) } ?? road.line
-        for (a, b) in zip(line, line.dropFirst()) where a.distance(to: b) > 0.001 {
-            let n = (b - a).normalized.left * half
-            result.append([a - n, b - n, b + n, a + n])
+        let source = rect.map { continuation(road.line, halfWidth: half, rect: $0) } ?? road.line
+        var line: [DV2] = []
+        for p in source where line.last.map({ $0.distance(to: p) > 0.001 }) ?? true { line.append(p) }
+        guard line.count >= 2, half > 0 else { return result }
+        for (i, (a, b)) in zip(line, line.dropFirst()).enumerated() {
+            let d = (b - a).normalized, n = d.left * half
+            let start = caps && i == 0 ? a - d * half : a
+            let end = caps && i == line.count - 2 ? b + d * half : b
+            result.append([start - n, end - n, end + n, start + n])
         }
-        for p in line {
-            let count = max(24, Int(ceil(half * 5)))
-            result.append((0..<count).map { k in
-                let angle = Double(k) / Double(count) * 2 * Double.pi
-                return p + DV2(cos(angle), sin(angle)) * half
-            })
+        for i in 1..<(line.count - 1) {
+            let p = line[i], d1 = (p - line[i - 1]).normalized, d2 = (line[i + 1] - p).normalized
+            let turn = d1.cross(d2)
+            guard abs(turn) > 1e-4 || d1.dot(d2) < 0 else { continue }
+            // Outer side of the bend: right of a left turn, left of a right turn.
+            let side: Double = turn > 0 ? -1 : 1
+            let o1 = p + d1.left * (half * side), o2 = p + d2.left * (half * side)
+            let angle = acos(max(-1, min(1, d1.dot(d2))))
+            let reach = min(half * tan(min(angle, 3.0) / 2), half * 1.2)
+            var wedge = [p, o1, o1 + d1 * reach]
+            let back = o2 - d2 * reach
+            if back.distance(to: wedge[2]) > 0.002 { wedge.append(back) }
+            wedge.append(o2)
+            result.append(wedge)
+        }
+        return result
+    }
+
+    /// Joins OSM ways that simply continue one another (exactly two ends meeting, same width and
+    /// paving) into one polyline, so a street split into several ways gets mitred bends instead
+    /// of two overlapping square ends.
+    static func chained(_ roads: [DioramaRoadFeature]) -> [DioramaRoadFeature] {
+        func key(_ p: DV2) -> String { "\(Int((p.x * 2).rounded())):\(Int((p.y * 2).rounded()))" }
+        var ends: [String: [Int]] = [:]
+        for (i, r) in roads.enumerated() where r.line.count >= 2 {
+            ends[key(r.line[0]), default: []].append(i)
+            ends[key(r.line[r.line.count - 1]), default: []].append(i)
+        }
+        var used = Set<Int>()
+        var result: [DioramaRoadFeature] = []
+        for i in roads.indices where !used.contains(i) && roads[i].line.count >= 2 {
+            used.insert(i)
+            var line = roads[i].line
+            let width = roads[i].width, paved = roads[i].isPaved
+            func partner(_ p: DV2) -> Int? {
+                guard let list = ends[key(p)], list.count == 2 else { return nil }
+                return list.first { $0 != i && !used.contains($0) && abs(roads[$0].width - width) < 0.5 && roads[$0].isPaved == paved }
+            }
+            for forward in [true, false] {
+                while let last = forward ? line.last : line.first, let j = partner(last) {
+                    used.insert(j)
+                    var next = roads[j].line
+                    if key(next[0]) != key(last) { next.reverse() }
+                    if forward { line += next.dropFirst() } else { line = Array(next.reversed().dropLast()) + line }
+                }
+            }
+            let r = roads[i]
+            result.append(DioramaRoadFeature(id: r.id, line: line, roadClass: r.roadClass, isPaved: r.isPaved, width: r.width,
+                                             name: r.name, oneWay: r.oneWay))
         }
         return result
     }

@@ -77,8 +77,9 @@ actor DioramaOfflineStore {
         return DarGolf.tiles.filter { !taken.contains($0) }
     }()
     static let harbour = DioramaOfflineStore(region: .harbour)
-    /// First generator whose harbour buildings come from the stylized-map-renderer skill.
-    nonisolated static let harbourSkillGenerator = 40
+    /// First harbour generator in the current look: skill buildings with the designed landmarks'
+    /// footprints left free, solid puff trees and palms, mitred roads and lane paint, no raster.
+    nonisolated static let harbourSkillGenerator = 42
     static let golf = DioramaOfflineStore(region: .golf)
     nonisolated static func store(for tile: DioramaTileID) -> DioramaOfflineStore {
         store(for: DioramaRegion.of(tile))

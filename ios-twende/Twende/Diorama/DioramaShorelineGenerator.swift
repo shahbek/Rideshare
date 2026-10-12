@@ -218,7 +218,14 @@ nonisolated struct DioramaShorelineGenerator {
                         }
                     }
                 }
-                props.instance(library.rocks[index % 3], DioramaTransform(scale: DV3(0.5, 0.5, 0.5), translation: DV3(p - out * 0.5, terrain.waterLevel + 0.12)))
+                // A small cluster of boulders at the waterline, half sunk in the sand.
+                for k in 0..<(index % 2 == 0 ? 3 : 2) {
+                    let size = rng.range(0.45...0.95) * (k == 0 ? 1.2 : 0.8)
+                    let q = p - out * rng.range(0.2...1.1) + out.right * (Double(k) * 0.7 - 0.5)
+                    props.instance(library.rocks[(index + k) % library.rocks.count],
+                                   DioramaTransform(rotation: rng.range(0...(2 * .pi)), scale: DV3(size, size, size * rng.range(0.8...1.1)),
+                                                    translation: DV3(q, max(terrain.waterLevel, terrain.floorHeight(q)) + size * 0.04)))
+                }
                 for k in 0..<5 {
                     let weed = p - out * 1.5 + out.right * (Double(k) * 0.4)
                     let height = terrain.waterLevel + (top - terrain.waterLevel) * 1.5 / max(0.1, config.beachWidth * 0.65)

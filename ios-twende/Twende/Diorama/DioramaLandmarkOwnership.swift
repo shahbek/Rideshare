@@ -7,7 +7,14 @@ nonisolated enum DioramaLandmarkOwnership {
     private struct Feature: Decodable { let geometry: Geometry }
     private struct Geometry: Decodable { let coordinates: [[[Double]]] }
     private struct Catalog: Decodable { let sites: [Site] }
-    struct Site: Decodable, Sendable { let id: String; let ring: [[Double]] }
+    struct Site: Decodable, Sendable {
+        let id: String
+        let ring: [[Double]]
+        var osmWay: Int? = nil
+        /// Set after decoding: the researched skyline catalogue (not a bespoke landmark).
+        var skyline: Bool = false
+        private enum CodingKeys: String, CodingKey { case id, ring, osmWay }
+    }
     /// Every bespoke footprint as (id, lon/lat ring); also the catalogue of landmarks baked into saved tiles.
     static let outlines: [Site] = {
         var result: [Site] = []
@@ -19,13 +26,30 @@ nonisolated enum DioramaLandmarkOwnership {
         for resource in ["dar_landmarks", "morocco_square", "harbour_landmarks", "dar_skyline"] {
             if let url = Bundle.main.url(forResource: resource, withExtension: "json"),
                let bytes = try? Data(contentsOf: url), let catalog = try? JSONDecoder().decode(Catalog.self, from: bytes) {
-                result.append(contentsOf: catalog.sites)
+                result.append(contentsOf: catalog.sites.map { var s = $0; s.skyline = resource == "dar_skyline"; return s })
             }
         }
-        // Harbour buildings come only from the stylized-map-renderer skill: no bespoke owner there.
+        // In the harbour the skill draws ordinary and skyline buildings; only the bespoke landmarks
+        // (Johari Rotana, Bandari Tower, the cathedrals, PSPF) keep their own designed models.
         return result.filter { $0.ring.count >= 4 && $0.ring.allSatisfy { $0.count == 2 && $0.allSatisfy(\.isFinite) } }
-            .filter { !DioramaRegion.isHarbour(ring: $0.ring) }
+            .filter { !$0.skyline || !DioramaRegion.isHarbour(ring: $0.ring) }
     }()
+
+    /// Johari's inland podium is part of the Johari Rotana model but mapped as its own way.
+    private static let extraLandmarkWays: Set<UInt64> = [688369868]
+
+    /// Bespoke harbour landmarks whose footprint the skill buildings must leave empty.
+    private static let harbourLandmarks: [(way: UInt64, ring: [DV2])] = outlines
+        .filter { !$0.skyline && DioramaRegion.isHarbour(ring: $0.ring) }
+        .map { (UInt64(max(0, $0.osmWay ?? 0)), $0.ring.map { DV2($0[0], $0[1]) }) }
+
+    /// True when an OSM building is one of the designed landmarks (by way id or by its centroid
+    /// falling inside a landmark outline).
+    static func isLandmark(osmWay: UInt64, longitude: Double, latitude: Double) -> Bool {
+        if extraLandmarkWays.contains(osmWay) { return true }
+        let p = DV2(longitude, latitude)
+        return harbourLandmarks.contains { $0.way == osmWay || DioramaPolygon.contains($0.ring, p) }
+    }
 
     private struct Mask {
         let id: String

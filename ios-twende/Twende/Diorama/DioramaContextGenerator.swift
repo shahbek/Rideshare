@@ -8,7 +8,8 @@ nonisolated enum DioramaContextGenerator {
         try Task.checkCancellation()
         let started = Date()
         let terrain = (data.sourceTerrain ?? DioramaTerrain.load(rect: data.rect, config: config)).resolvingSurfaces(in: data)
-        guard let painter = DioramaGroundPainter(rect: data.rect, size: 512, config: config) else { throw CancellationError() }
+        // Context tiles use the same exact vector roads as full tiles (no raster is ever sampled).
+        guard let painter = DioramaGroundPainter(rect: data.rect, size: 512, config: config, hybridFinishes: config.vectorFinishes) else { throw CancellationError() }
         let roads = DioramaRoadIndex(roads: data.roads, pavementWidth: config.pavementWidth)
         var ground = DioramaMesh(), water = DioramaMesh(), buildings = DioramaMesh(), unusedGlow = DioramaMesh()
         DioramaGroundGenerator(config: config, data: data, roads: roads, terrain: terrain, painter: painter)

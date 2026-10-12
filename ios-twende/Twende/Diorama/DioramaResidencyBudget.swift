@@ -87,19 +87,17 @@ final class DioramaResidencyBudget {
         onLandmarkAvailable?()
     }
 
-    /// Per-host screen targets: half-resolution G-buffer/depth/AO, two bloom levels, capped reflection,
+    /// Per-host screen targets: half-resolution G-buffer/depth/AO, two bloom levels,
     /// 2048² shadow depth and label textures, plus each host's bounded geometry chunk cache.
     /// Coarse hosts allocate only the chunk cache allowance, not the screen/shadow effects.
     nonisolated static func effectBytes(context: Bool, labelTitles: [String], size: CGSize, scale: Float) -> Int {
-        // Clay allocates no grade field and shares label plates process-wide (counted once below).
-        let grade = DioramaConfig.clayRendering ? 0 : DioramaRenderLayer.gradeFieldSize(context: context)
-        let chunks = DioramaGeometryChunks.reservationBytes(context: context) + grade * grade * 8
+        // No grade field; label plates are shared process-wide (counted once below).
+        let chunks = DioramaGeometryChunks.reservationBytes(context: context)
         guard !context else { return chunks }
         let w = Int(max(1, size.width)), h = Int(max(1, size.height))
         let hw = max(1, w / 2), hh = max(1, h / 2)
         let screen = hw * hh * 30 + max(1, hw / 2) * max(1, hh / 2) * 16 + max(1, hw / 4) * max(1, hh / 4) * 16
-        let reflection = max(1, min(768, w / 4)) * max(1, min(768, h / 4)) * 8
-        return chunks + 16 * 1_048_576 + screen + reflection + DioramaLabelRenderer.estimatedTextureBytes(titles: labelTitles, scale: scale)
+        return chunks + 16 * 1_048_576 + screen + DioramaLabelRenderer.estimatedTextureBytes(titles: labelTitles, scale: scale)
     }
 
     /// Saved tiles decode straight into shared Metal storage (unified memory): one copy, packed
@@ -116,9 +114,8 @@ final class DioramaResidencyBudget {
         let indices = plan.indexCapacity * 4
         let instances = plan.instanceCount * MemoryLayout<DioramaInstanceData>.stride
         let groupCPU = plan.groupInstances * MemoryLayout<DioramaInstanceData>.stride
-        // Clay never uploads the saved raster: no texture, no mip chain, no decode scratch for it.
-        let ground = DioramaConfig.clayRendering ? 0 : plan.imageSize * plan.imageSize * 4 * 4 / 3
-        let gpu = vertices + indices + instances + ground + plan.paintBytes + plan.lightBytes + plan.lodBytes
+        // The saved raster is never uploaded: no texture, no mip chain, no decode scratch for it.
+        let gpu = vertices + indices + instances + plan.paintBytes + plan.lightBytes + plan.lodBytes
         // Painted-ground lookup grid: offsets plus at most a few cell references per triangle.
         let groundGrid = min(plan.indexCapacity / 3 * 8, 4 * 1_048_576)
         let retained = gpu + groupCPU + plan.lightBytes + groundGrid + (plan.ownershipCopy ? indices : 0)

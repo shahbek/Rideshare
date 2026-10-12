@@ -55,20 +55,9 @@ ZOOM = 16
 OSM_SNAPSHOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "harbour_osm.json")
 EARTH = 6_378_137.0
 
-# Hero towers: hand-authored skill tower specs (references/landmarks.md §6, region profile §4).
-JOHARI_TOWER, JOHARI_PODIUM, BANDARI = 635183901, 688369868, 368888931
-HEROES = {
-    # Johari Rotana / Mwalimu Nyerere Foundation Square: 145 m, cream grid over grey-green glass,
-    # pale pyramidal crown, on an inland podium.
-    JOHARI_TOWER: {"type": "tower", "style": "classic", "height": 145.0, "facade": "grid",
-                   "wall": "#6F8F8A", "stone": "#EADBC2", "roof": "#E9E3D6", "crown": "pyramid",
-                   "setbacks": [(0.84, 1.8)], "floor_h": 4.0, "podium": True},
-    JOHARI_PODIUM: {"style": "dar_apartment", "levels": 7},
-    # TPA / Bandari Tower: 162 m, teal curtain glass, cream structure, stepped top and mast.
-    BANDARI: {"type": "tower", "style": "dar_glass", "height": 162.0, "facade": "curtain",
-              "wall": "#4F8FA0", "stone": "#F0E9DA", "crown": "antenna",
-              "setbacks": [(0.62, 1.6), (0.86, 2.2)], "radius": 1.0},
-}
+# Designed landmarks (Johari Rotana + podium, Bandari Tower, the cathedrals, PSPF) are drawn by the
+# app's own landmark models; the skill leaves their footprints empty.
+LANDMARK_WAYS = {635183901, 688369868, 368888931, 688369839, 368909370, 688369315, 688369331}
 
 KINDS = {"tower": 1, "mosque": 2, "church": 3, "pagoda": 4}
 
@@ -158,13 +147,7 @@ def main():
         lat, lon = proj.inverse(c.x, c.y)
         return any(b[0] <= lat < b[2] and b[1] <= lon < b[3] for b in bounds)
 
-    specs = [s for s in specs if inside(s)]
-    for s in specs:
-        hero = HEROES.get(int(s["id"][3:]))
-        if hero:
-            for k in ("style", "type", "levels", "height", "extras"):
-                s.pop(k, None)
-            s.update(hero)
+    specs = [s for s in specs if inside(s) and int(s["id"][3:]) not in LANDMARK_WAYS]
 
     glass = glass_colours()
     used, module_index = [], {}

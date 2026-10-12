@@ -10,8 +10,7 @@ import simd
 ///
 /// Directional shadows are cached. Spatial batches outside the camera frustum never draw;
 /// permanent exposed tile edges blend at rest; paired full/coarse coverage owns disjoint pixels.
-/// Water samples a cached,
-/// reduced-resolution reflected scene.
+/// Water is shaded analytically (no reflection pass).
 nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost, @unchecked Sendable {
     nonisolated struct Range: Sendable {
         let category: DioramaCategory
@@ -149,13 +148,10 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost, @unchecke
         drawRevision &+= 1; selectionTransform = nil
         lock.unlock()
     }
-    private var surfaceTexture: MTLTexture?
     /// Shared tiling roof/wall material array (texture 7).
-    private var buildingMaterials: MTLTexture?
     private var paintBuffer: MTLBuffer?
     private var paintTableBuffer: MTLBuffer?
     private var paintIndexBuffer: MTLBuffer?
-    private var reflectionPass: DioramaReflection?
     /// Whether the water animates (false when Reduce Motion is on: waves then freeze mid-roll).
     private let contextOnly: Bool
     /// Stylised bake: lighting lives in the vertex colours and ground image; the fragment only samples.
@@ -187,10 +183,6 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost, @unchecke
     /// Pre-baked low-frequency ground grade fields (broad moisture, lawn patches, asphalt weathering)
     /// over this renderer's ground rectangle. Fragments whose pixel covers more than one baked texel
     /// sample it; closer fragments evaluate the same fields live, so close-up ground is unchanged.
-    private var gradeField: MTLTexture?
-    private var gradeBakePipeline: MTLRenderPipelineState?
-    private var gradeBaked: Bool = false
-    nonisolated static func gradeFieldSize(context: Bool) -> Int { context ? 384 : 768 }
     private var shadowMap: DioramaShadowMap?
     private var postProcess: DioramaPostProcess?
     private let postSettings: (ao: Float, aoRadius: Float, bloom: Float, grade: Float, haze: Float)
@@ -325,7 +317,6 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost, @unchecke
     private var postEmissionGroups: [DioramaDrawPlan.Instance] = []
     private var postRangeDraws: [Range] = []
     private var postInstanceDraws: [DioramaDrawPlan.Instance] = []
-    private var reflectionSignature: String = ""
     /// Camera at which the cached AO/bloom outputs were rendered, and the plan revision they used.
     private var effectTransform: simd_double4x4?
     /// Heights the last culling plan's drift is measured on; the camera transform of the previous frame.
@@ -471,7 +462,6 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost, @unchecke
     /// Called only before registration, while the SDK cannot concurrently render this host.
     func prepareOutputSize(width: Int, height: Int) {
         postProcess?.prepareSize(width: width, height: height)
-        reflectionPass?.prepareSize(width: width, height: height)
     }
 
     func renderingWillStart(_ metalDevice: MTLDevice, colorPixelFormat: UInt, depthStencilPixelFormat: UInt) {
@@ -489,7 +479,7 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost, @unchecke
               let library = DioramaShaderSource.library(for: metalDevice),
               let vertex = library.makeFunction(name: "dioramaVertex"),
               let instancedVertex = library.makeFunction(name: "dioramaInstancedVertex"),
-              let fragment = library.makeFunction(name: stylised ? "dioramaStylisedFragment" : "dioramaFragment"),
+              let fragment = library.makeFunction(name: "dioramaFragment"),
               let colorFormat = MTLPixelFormat(rawValue: colorPixelFormat),
               let depthFormat = MTLPixelFormat(rawValue: depthStencilPixelFormat) else {
             setDiagnostic(resident.map { $0.device !== metalDevice } == true ? "failed: scenery decoded on a different Metal device" : "missing geometry or shader resources")
@@ -524,29 +514,11 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost, @unchecke
             instancedGlowPipeline = try DioramaPipelineCache.shared.state(device: metalDevice, descriptor: descriptor(color: colorFormat, depth: depthFormat, stencil: true, blended: true, instanced: true))
             if !contextOnly {
                 passTimer = DioramaPassTimer(device: metalDevice)
-                reflectionPass = DioramaReflection(device: metalDevice, library: library)
                 shadowMap = DioramaShadowMap(device: metalDevice, library: library, bounds: resident?.shadowBounds ?? Self.casterBounds(vertices, instances))
                 postProcess = DioramaPostProcess(device: metalDevice, library: library, colorFormat: colorFormat, depthFormat: depthFormat)
             }
             depthState = metalDevice.makeDepthStencilState(descriptor: depth)
             noWriteDepthState = metalDevice.makeDepthStencilState(descriptor: noWrite)
-            // Optional: a failure here only means every ground fragment keeps computing its grade live.
-            // Clay and stylised scenes never read the grade field: no bake pass, no texture.
-            if !stylised, !DioramaConfig.clayRendering, let fullscreen = library.makeFunction(name: "dioramaFullscreenVertex"),
-               let bake = library.makeFunction(name: "dioramaGradeBakeFragment") {
-                let d = MTLRenderPipelineDescriptor()
-                d.label = "Diorama ground grade bake"
-                d.vertexFunction = fullscreen; d.fragmentFunction = bake
-                d.colorAttachments[0].pixelFormat = .rgba16Float
-                gradeBakePipeline = try? DioramaPipelineCache.shared.state(device: metalDevice, descriptor: d)
-                let size = Self.gradeFieldSize(context: contextOnly)
-                let t = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba16Float, width: size, height: size, mipmapped: false)
-                t.usage = [.renderTarget, .shaderRead]; t.storageMode = .private
-                gradeField = gradeBakePipeline == nil ? nil : metalDevice.makeTexture(descriptor: t)
-                gradeField?.label = "Diorama ground grade field"
-                gradeBaked = false
-            }
-
             func upload<T>(_ items: [T], fallback: T) -> MTLBuffer? {
                 // Metal rejects zero-length buffers, so always upload at least one slot.
                 let data = items.isEmpty ? [fallback] : items
@@ -556,10 +528,6 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost, @unchecke
                 }
             }
             geometryChunks = DioramaGeometryChunks(device: metalDevice, context: contextOnly)
-            // Clay: no grain or material layers exist; the fragment binding keeps its declared type
-            // through a 1×1 neutral array that is never sampled.
-            surfaceTexture = DioramaConfig.clayRendering ? nil : DioramaSurfaceTexture.texture(device: metalDevice)
-            buildingMaterials = DioramaConfig.clayRendering ? DioramaBuildingMaterials.neutral(device: metalDevice) : DioramaBuildingMaterials.texture(device: metalDevice)
             lightBuffer = upload(lightGrid.lights, fallback: DioramaShaderLight(position: .zero, color: .zero))
             lightTableBuffer = upload(lightGrid.table, fallback: SIMD2<UInt32>(0, 0))
             lightIndexBuffer = upload(lightGrid.indices, fallback: UInt32(0))
@@ -584,27 +552,6 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost, @unchecke
             print("[Diorama material] legacy_foliage_vertices=\(materialCounts.x) legacy_architecture_vertices=\(materialCounts.y) preset=\(timeOfDay.rawValue) color_format=\(colorPixelFormat) vertex=packed32 resident=\(resident != nil)")
             #endif
 
-            if resident == nil, !DioramaConfig.clayRendering, let groundImage {
-                let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba8Unorm, width: groundImage.size, height: groundImage.size, mipmapped: true)
-                descriptor.usage = [.shaderRead]
-                descriptor.storageMode = .shared
-                if let texture = metalDevice.makeTexture(descriptor: descriptor) {
-                    groundImage.rgba.withUnsafeBytes { bytes in
-                        if let base = bytes.baseAddress {
-                            texture.replace(region: MTLRegionMake2D(0, 0, groundImage.size, groundImage.size), mipmapLevel: 0, withBytes: base, bytesPerRow: groundImage.size * 4)
-                        }
-                    }
-                    if let queue = metalDevice.makeCommandQueue(), let command = queue.makeCommandBuffer(), let blit = command.makeBlitCommandEncoder() {
-                        blit.generateMipmaps(for: texture)
-                        blit.endEncoding()
-                        command.commit()
-                        // Registration follows preparation; the SDK uses a different queue.
-                        command.waitUntilCompleted()
-                    }
-                    groundTexture = texture
-                }
-            }
-
             let blank = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm, width: 4, height: 4, mipmapped: false)
             blank.usage = [.shaderRead]
             blankReflection = metalDevice.makeTexture(descriptor: blank)
@@ -622,8 +569,7 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost, @unchecke
             guard vertexBuffer != nil, indexBuffer != nil, instanceBuffer != nil,
                   lightBuffer != nil, lightTableBuffer != nil, lightIndexBuffer != nil,
                   paintBuffer != nil, paintTableBuffer != nil, paintIndexBuffer != nil,
-                  depthState != nil, noWriteDepthState != nil, blankReflection != nil,
-                  DioramaConfig.clayRendering || (resident == nil ? groundImage == nil : resident?.groundTexture == nil) || groundTexture != nil else {
+                  depthState != nil, noWriteDepthState != nil, blankReflection != nil else {
                 setDiagnostic("GPU resource allocation failed")
                 onInitializationFailed?()
                 return
@@ -698,7 +644,6 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost, @unchecke
             eligibleGroups = groups.filter { !$0.instances.isEmpty && visible.contains($0.category) && (!$0.category.isEmissive || glowOn)
                 && (!$0.landmarkPlaceholder || !landmarks.contains($0.landmarkID ?? "airtel")) }
             eligibleCasters = eligibleGroups.filter { !$0.category.isEmissive }
-            reflectionSignature = visible.map(\.rawValue).sorted().joined() + landmarks.sorted().joined(separator: "/")
             selectionVisible = visible; selectionGlow = glowOn; selectionLandmarks = landmarks; selectionTransform = nil
         }
         let drawn = eligibleRanges
@@ -811,7 +756,7 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost, @unchecke
         publishWaterVisibility(mainRanges.contains { $0.category == .water } || poolVisible)
 
         var uniforms = DioramaLighting.uniforms(for: timeOfDay, eye: eye)
-        uniforms.groundColor.w = surfaceTexture == nil ? 0 : 1
+        uniforms.groundColor.w = 0
         uniforms.style.z = DioramaConfig.clayRendering ? 1 : 0
         uniforms.style.w = (debug.facadeShader ? 0 : 1) + (debug.groundPaint ? 0 : 2)
         uniforms.reveal = reveal
@@ -834,31 +779,6 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost, @unchecke
         uniforms.materialFrame = materialFrame
         uniforms.materialFrame.w = analyticAirport ? 1 : (hasVectorFinishes ? 2 : 0)
         uniforms.lightGrid = SIMD4<Float>(lightGrid.minX, lightGrid.minY, lightGrid.cellSize, debug.pointLights ? Float(lightGrid.cells) : 0)
-        // The baked fields depend only on the fixed ground rectangle and material frame: encode once.
-        if !gradeBaked, let gradeField, let gradeBakePipeline, groundRect.width > 0, groundRect.height > 0 {
-            let pass = MTLRenderPassDescriptor()
-            pass.colorAttachments[0].texture = gradeField
-            pass.colorAttachments[0].loadAction = .dontCare
-            pass.colorAttachments[0].storeAction = .store
-            if let e = mtlCommandBuffer.makeRenderCommandEncoder(descriptor: pass) {
-                e.label = "Diorama ground grade bake"
-                e.setRenderPipelineState(gradeBakePipeline)
-                var bakeUniforms = uniforms
-                e.setFragmentBytes(&bakeUniforms, length: MemoryLayout<DioramaShaderUniforms>.stride, index: 0)
-                e.setFragmentBuffer(scenePaint, offset: 0, index: 1)
-                e.setFragmentBuffer(scenePaintTable, offset: 0, index: 2)
-                e.setFragmentBuffer(scenePaintIndices, offset: 0, index: 3)
-                e.setFragmentTexture(groundTexture ?? blankReflection, index: 0)
-                e.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
-                e.endEncoding()
-                gradeBaked = true
-                mtlCommandBuffer.addCompletedHandler { [weak self] command in
-                    guard command.status != .completed else { return }
-                    DispatchQueue.main.async { self?.gradeBaked = false }
-                }
-            }
-        }
-        let gradeTexture: MTLTexture? = gradeBaked ? gradeField : nil
         // Idle SDK/vehicle frames keep exactly the last water phase. Bound the step when the
         // camera resumes so a long pause never jumps the shoreline or animates at rest.
         let now = CACurrentMediaTime()
@@ -893,23 +813,6 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost, @unchecke
         }
 
         uniforms.water = SIMD4<Float>(waterHeight, 0, Float(texture.width), Float(texture.height))
-        var reflected: MTLTexture?
-        if debug.reflections, !reducedEffects, !wireframe, mainRanges.contains(where: { $0.category == .water }), let reflectionPass {
-            let reflectionGroups = eligibleGroups
-            // Mirrored points sit between the reflected tallest visible geometry and the real one.
-            let top = Double(viewHigh.z.isFinite ? min(viewHigh.z, waterHeight + 80) : waterHeight + 30)
-            reflected = reflectionPass.encode(command: mtlCommandBuffer, width: texture.width, height: texture.height,
-                transform: transform, driftPlanes: SIMD2(2 * Double(waterHeight) - top, top),
-                depthRange: (Double(parameters.depthRange.min), Double(parameters.depthRange.max)), matrix: matrix, uniforms: uniforms,
-                signature: timeOfDay.rawValue + reflectionSignature,
-                vertices: vertexBuffer, indices: indexBuffer, instances: instanceBuffer,
-                fragmentBuffers: [lightBuffer, lightTableBuffer, lightIndexBuffer, scenePaint, scenePaintTable, scenePaintIndices,
-                    airportDetail?.paintBuffer ?? scenePaint, airportDetail?.paintTableBuffer ?? scenePaintTable, airportDetail?.paintIndexBuffer ?? scenePaintIndices],
-                textures: [blankReflection, shadowMap?.texture, groundTexture ?? blankReflection, blankReflection, surfaceTexture ?? blankReflection, airportDetail?.groundTexture ?? groundTexture ?? blankReflection, gradeTexture ?? blankReflection, buildingMaterials], ranges: drawn, groups: reflectionGroups,
-                chunks: geometryChunks, lod: lodBase?.scaled(4), timing: timing)
-        }
-        uniforms.water.y = reflected == nil ? 0 : 1
-
         // Screen-space passes first: occlusion the main pass samples, bloom added at the end.
         // Reduced effects (Low Power, thermal) drop them entirely; geometry is unchanged.
         let effectsOn = !reducedEffects && !wireframe
@@ -987,8 +890,8 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost, @unchecke
         if aoStrength > 0, postProcess?.occlusion == nil { uniforms.post.x = 0 }
         DioramaFleetLighting.shared.publish(host: self, snapshot: .init(origin: origin, uniforms: uniforms,
             buffers: [lightBuffer, lightTableBuffer, lightIndexBuffer, paintBuffer, paintTableBuffer, paintIndexBuffer],
-            textures: [reflected ?? blankReflection, shadowMap?.texture, groundTexture ?? blankReflection,
-                       postProcess?.occlusion ?? blankReflection, surfaceTexture ?? blankReflection], fullDetail: !contextOnly,
+            textures: [blankReflection, shadowMap?.texture, blankReflection,
+                       postProcess?.occlusion ?? blankReflection, blankReflection], fullDetail: !contextOnly,
             viewportID: viewport.map(ObjectIdentifier.init)))
 
         let lodIndices: MTLBuffer = resident?.lod?.indexBuffer ?? indexBuffer
@@ -1016,17 +919,8 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost, @unchecke
         encoder.setFragmentBuffer(scenePaint, offset: 0, index: 4)
         encoder.setFragmentBuffer(scenePaintTable, offset: 0, index: 5)
         encoder.setFragmentBuffer(scenePaintIndices, offset: 0, index: 6)
-        encoder.setFragmentTexture(reflected ?? blankReflection, index: 0)
         encoder.setFragmentTexture(shadowMap?.texture, index: 1)
-        encoder.setFragmentTexture(groundTexture ?? blankReflection, index: 2)
         encoder.setFragmentTexture(postProcess?.occlusion ?? blankReflection, index: 3)
-        encoder.setFragmentTexture(surfaceTexture ?? blankReflection, index: 4)
-        encoder.setFragmentTexture(airportDetail?.groundTexture ?? groundTexture ?? blankReflection, index: 5)
-        encoder.setFragmentTexture(gradeTexture ?? blankReflection, index: 6)
-        encoder.setFragmentTexture(buildingMaterials, index: 7)
-        encoder.setFragmentBuffer(airportDetail?.paintBuffer ?? paintBuffer, offset: 0, index: 7)
-        encoder.setFragmentBuffer(airportDetail?.paintTableBuffer ?? paintTableBuffer, offset: 0, index: 8)
-        encoder.setFragmentBuffer(airportDetail?.paintIndexBuffer ?? paintIndexBuffer, offset: 0, index: 9)
         // Batch only inside an identical pipeline/depth phase. Culling and LOD already ran on
         // the original spatial bins; chunking never submits culled geometry or changes vertices.
         var submission = DioramaGeometryChunks.Statistics()
@@ -1081,12 +975,11 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost, @unchecke
             for r in drawn where !r.category.isEmissive && r.category != .water { casterTriangles += r.count / 3 }
             for g in castingGroups { casterTriangles += g.fullCount / 3 * g.instances.count }
         }
-        let reflectionOn = reflected != nil
         let labelCount = labelIDs.count
         let lightCount = debug.pointLights ? lightGrid.lights.count : 0
         DioramaDebugSwitches.shared.record(hostID) { stats in
             stats.triangles = perCategory; stats.drawCalls = drawCalls; stats.shadowTriangles = casterTriangles
-            stats.reflectionPass = reflectionOn; stats.labels = labelCount; stats.lights = lightCount
+            stats.labels = labelCount; stats.lights = lightCount
         }
         mtlCommandBuffer.addCompletedHandler { [weak self] command in
             guard command.status == .completed else { return }
@@ -1120,13 +1013,9 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost, @unchecke
         lightTableBuffer = nil
         lightIndexBuffer = nil
         blankReflection = nil
-        gradeField = nil; gradeBakePipeline = nil; gradeBaked = false
         groundTexture = nil
         lock.lock(); airportGroundDetail = nil; airportGroundDetailRect = nil; lock.unlock()
-        surfaceTexture = nil
-        buildingMaterials = nil
         paintBuffer = nil; paintTableBuffer = nil; paintIndexBuffer = nil
-        reflectionPass = nil
         passTimer = nil
         shadowMap = nil
         postProcess = nil

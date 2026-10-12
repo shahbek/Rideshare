@@ -29,7 +29,9 @@ nonisolated struct DioramaRoadMarkings {
             if road.width >= 6 {
                 for side in [-1.0, 1.0] {
                     let offset = (road.width / 2 - 0.38) * side
-                    painter.stroke(run.map { $0.point + $0.direction.right * offset }, width: 0.25, .signYellow, cap: .butt)
+                    // Mitred offset of the simplified centreline: continuous through bends.
+                    let centre = DioramaLinearGeometry.simplified(run.map(\.point))
+                    painter.stroke(DioramaGroundPainter.mitredOffset(centre, by: offset), width: 0.25, .signYellow, cap: .butt)
                 }
             }
         }

@@ -111,19 +111,36 @@ nonisolated struct DioramaRoadGenerator {
         })
         var spans: [(DV2, DV2)] = []
         let shaderKerbs = painter.paintsKerbs
-        for edge in layout.carriageway.boundary() {
+        let boundary = layout.carriageway.boundary()
+        // Re-entrant (inside) corners: the two kerb bands would leave an unpainted wedge there, so
+        // each band runs on past the corner by its own width; the shader averages the overlap.
+        func key(_ p: DV2) -> String { "\(Int64((p.x * 1000).rounded())):\(Int64((p.y * 1000).rounded()))" }
+        var incoming: [String: DV2] = [:], outgoing: [String: DV2] = [:]
+        for edge in boundary {
+            incoming[key(edge.b)] = (edge.b - edge.a).normalized
+            outgoing[key(edge.a)] = (edge.b - edge.a).normalized
+        }
+        let band = DioramaGroundPainter.kerbBand
+        for edge in boundary {
             let mid = (edge.a + edge.b) * 0.5
             guard isPaved(near: mid) else { continue }
+            let along = (edge.b - edge.a).normalized
+            let reflexStart = incoming[key(edge.a)].map { $0.cross(along) < -0.05 } ?? false
+            let reflexEnd = outgoing[key(edge.b)].map { along.cross($0) < -0.05 } ?? false
             for segment in obstacles.outsideSegments(edge.a, edge.b, within: data.rect.expanded(by: -0.3)) {
                 let line = DioramaPolygon.densify([segment.0, segment.1], maxStep: 0.75)
                 // Carriageway rings are counter-clockwise: the road is on the left of every edge.
                 let inward = (segment.1 - segment.0).normalized.left
                 var run: DV2? = nil, runEnd = line[0]
+                func flush() {
+                    guard let start = run else { return }
+                    let before = reflexStart && start.distance(to: edge.a) < 0.01 ? band : 0.12
+                    let after = reflexEnd && runEnd.distance(to: edge.b) < 0.01 ? band : 0.12
+                    painter.kerb(start, runEnd, inward: inward, startExtra: before, endExtra: after)
+                    run = nil
+                }
                 for (a, b) in zip(line, line.dropFirst()) {
-                    guard !ramps.contains(where: { $0.covers((a + b) * 0.5) }) else {
-                        if let start = run { painter.kerb(start, runEnd, inward: inward); run = nil }
-                        continue
-                    }
+                    guard !ramps.contains(where: { $0.covers((a + b) * 0.5) }) else { flush(); continue }
                     if shaderKerbs {
                         if run == nil { run = a }
                         runEnd = b
@@ -131,7 +148,7 @@ nonisolated struct DioramaRoadGenerator {
                         spans.append((a, b))
                     }
                 }
-                if let start = run { painter.kerb(start, runEnd, inward: inward) }
+                flush()
             }
         }
         // Compact tiles paint kerbs in the shader; geometry only where vector paint is unavailable.

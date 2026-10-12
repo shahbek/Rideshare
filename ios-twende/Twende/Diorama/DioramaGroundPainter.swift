@@ -100,8 +100,12 @@ nonisolated final class DioramaGroundPainter {
         return rings.dropFirst().contains { $0.first.map { DioramaPolygon.contains(outer, $0) } ?? false }
     }
 
-    init?(rect: DioramaRect, size: Int, config: DioramaConfig, analyticFinishes: Bool = false, hybridFinishes: Bool = false, rasterOnly: Bool = false) {
-        guard rect.width > 0, rect.height > 0, size >= 64,
+    init?(rect: DioramaRect, size requested: Int, config: DioramaConfig, analyticFinishes: Bool = false, hybridFinishes: Bool = false, rasterOnly: Bool = false) {
+        // The renderer never samples a ground raster any more (procedural turf + exact vector
+        // finishes, lane paint and kerbs). Only a 64 px placeholder is kept so archive formats and
+        // readers stay unchanged; nothing large is painted, stored or uploaded.
+        let size = min(requested, 64)
+        guard rect.width > 0, rect.height > 0, requested >= 64,
               let color = CGContext(data: nil, width: size, height: size, bitsPerComponent: 8, bytesPerRow: size * 4,
                                     space: CGColorSpaceCreateDeviceRGB(),
                                     bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue),
@@ -219,40 +223,32 @@ nonisolated final class DioramaGroundPainter {
             let clean = DioramaLinearGeometry.simplified(line)
             let dash = dashes?.filter { $0 > 0 } ?? []
             let period = dash.reduce(0, +)
-            var station = 0.0
-            for (a, b) in zip(clean, clean.dropFirst()) {
-                let length = a.distance(to: b), dir = (b - a).normalized
-                var d = 0.0
-                while d < length - 0.00001 {
-                    var run = length - d
-                    var visible = true
-                    if period > 0 {
-                        var t = (station + d + phase).truncatingRemainder(dividingBy: period)
-                        if t < 0 { t += period }
-                        var index = 0
-                        while index < dash.count - 1 && t >= dash[index] { t -= dash[index]; index += 1 }
-                        run = min(run, max(0.00001, dash[index] - t)); visible = index % 2 == 0
-                    }
-                    if visible {
-                        let p = a + dir * d, q = a + dir * (d + run), n = dir.right * (width / 2)
-                        record([p - n, p + n, q + n, q - n], swatch)
-                    }
-                    d += run
+            let total = DioramaPolygon.length(clean)
+            // Visible station intervals along the whole line (dashes run across vertices).
+            var intervals: [(Double, Double)] = []
+            if period > 0 {
+                var s = 0.0
+                while s < total - 0.00001 {
+                    var t = (s + phase).truncatingRemainder(dividingBy: period)
+                    if t < 0 { t += period }
+                    var index = 0
+                    while index < dash.count - 1 && t >= dash[index] { t -= dash[index]; index += 1 }
+                    let run = min(total - s, max(0.00001, dash[index] - t))
+                    if index % 2 == 0 { intervals.append((s, s + run)) }
+                    s += run
                 }
-                station += length
+            } else {
+                intervals = [(0, total)]
+            }
+            for (s0, s1) in intervals {
+                for quad in Self.mitredStrip(Self.subline(clean, from: s0, to: s1), halfWidth: width / 2) { record(quad, swatch) }
             }
             return
         }
         if analyticFinishes || (isHybridFinish(swatch) && (dashes ?? []).isEmpty) {
             let clean = DioramaLinearGeometry.simplified(line)
             let road = DioramaRoadFeature(id: 0, line: clean, roadClass: "service", isPaved: true, width: width)
-            var pieces = DioramaStreetSurface.corridor(road, extra: 0)
-            if cap == .butt, clean.count >= 2 {
-                // Corridor order is nondegenerate rectangles, then round joints. Runway ends stay square.
-                let rectangles = zip(clean, clean.dropFirst()).filter { $0.0.distance(to: $0.1) > 0.001 }.count
-                pieces.remove(at: rectangles + clean.count - 1)
-                pieces.remove(at: rectangles)
-            }
+            let pieces = DioramaStreetSurface.corridor(road, extra: 0, caps: cap != .butt)
             if hybridFinishes { recordHybrid(pieces, swatch); return }
             recordFinish(pieces, swatch)
         }
@@ -271,6 +267,56 @@ nonisolated final class DioramaGroundPainter {
             context.addPath(path)
             context.strokePath()
         }
+    }
+
+    /// The part of `line` between two stations (metres from its start).
+    static func subline(_ line: [DV2], from s0: Double, to s1: Double) -> [DV2] {
+        var result: [DV2] = []
+        var station = 0.0
+        for (a, b) in zip(line, line.dropFirst()) {
+            let length = a.distance(to: b)
+            defer { station += length }
+            guard length > 1e-6, station + length >= s0, station <= s1 else { continue }
+            let t0 = max(0, (s0 - station) / length), t1 = min(1, (s1 - station) / length)
+            let p = a + (b - a) * t0, q = a + (b - a) * t1
+            if result.last.map({ $0.distance(to: p) > 1e-4 }) ?? true { result.append(p) }
+            if q.distance(to: p) > 1e-4 { result.append(q) }
+        }
+        return result
+    }
+
+    /// A polyline offset sideways with mitred corners (clipped to 3× the offset on hairpins).
+    static func mitredOffset(_ line: [DV2], by offset: Double) -> [DV2] {
+        guard line.count >= 2 else { return line }
+        return line.indices.map { i in
+            let before = i > 0 ? (line[i] - line[i - 1]).normalized : nil
+            let after = i < line.count - 1 ? (line[i + 1] - line[i]).normalized : nil
+            let n0 = before?.right ?? after?.right ?? DV2(0, 0), n1 = after?.right ?? n0
+            let sum = n0 + n1
+            guard sum.length > 1e-6 else { return line[i] + n0 * offset }
+            let bisector = sum.normalized
+            let scale = min(3, 1 / max(bisector.dot(n0), 1e-3))
+            return line[i] + bisector * (offset * scale)
+        }
+    }
+
+    /// Quads of a mitred stroke. Consecutive quads share their joint edge exactly, so the
+    /// shader's summed coverage is seamless across bends (no wedge gaps, no doubled overlaps).
+    static func mitredStrip(_ line: [DV2], halfWidth: Double) -> [[DV2]] {
+        guard line.count >= 2 else { return [] }
+        let left = mitredOffset(line, by: -halfWidth), right = mitredOffset(line, by: halfWidth)
+        var quads: [[DV2]] = []
+        for i in 0..<(line.count - 1) {
+            let quad = [left[i], right[i], right[i + 1], left[i + 1]]
+            // A hairpin can fold a joint; fall back to a plain rectangle for that segment only.
+            if (quad[1] - quad[0]).cross(quad[2] - quad[1]) * (quad[3] - quad[2]).cross(quad[0] - quad[3]) > 0 {
+                quads.append(quad)
+            } else {
+                let n = (line[i + 1] - line[i]).normalized.right * halfWidth
+                quads.append([line[i] - n, line[i] + n, line[i + 1] + n, line[i + 1] - n])
+            }
+        }
+        return quads
     }
 
     /// Axis-aligned-to-direction rectangle stroke: a short bar centred on `p` of `length` along `along`.
@@ -369,11 +415,11 @@ nonisolated final class DioramaGroundPainter {
     /// True when kerbs can be drawn by the shader (compact vector tiles).
     var paintsKerbs: Bool { hybridFinishes && !rasterOnly }
 
-    func kerb(_ a: DV2, _ b: DV2, inward: DV2) {
+    func kerb(_ a: DV2, _ b: DV2, inward: DV2, startExtra: Double = 0.12, endExtra: Double = 0.12) {
         guard paintsKerbs, a.distance(to: b) > 0.05 else { return }
         var dir = (b - a).normalized
-        // Overlap neighbouring spans slightly so bends never open a wedge; the shader averages overlaps.
-        var p0 = a - dir * 0.12, p1 = b + dir * 0.12
+        // Overlap neighbouring spans so bends never open a wedge; the shader averages overlaps.
+        var p0 = a - dir * startExtra, p1 = b + dir * endExtra
         if dir.left.dot(inward) < 0 { swap(&p0, &p1); dir = -dir }
         let band = dir.left * Self.kerbBand
         let p1w = p1 + band, p0w = p0 + band

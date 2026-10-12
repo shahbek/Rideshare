@@ -2,8 +2,11 @@ import Foundation
 import simd
 
 /// Stylised vegetation after the stylized-map-renderer skill (`make_tree.py`, style-spec §3).
-///  - A canopy is a cluster of icosphere puffs (80 faces close, 20 far). Faces buried inside a
-///    neighbouring puff are dropped, so a crown costs only its visible shell.
+///  - A canopy is a cluster of icosphere puffs (320 faces close, 80 far). A face is dropped only
+///    when all three corners are buried inside a neighbouring puff, so the seams between puffs
+///    always overlap and the crown is a closed, solid shell with no see-through gaps.
+///  - Every puff vertex is pushed in or out by a few percent (stable hash), so a crown reads as a
+///    lumpy volume of leaf clumps rather than a smooth balloon, at no extra triangle cost.
 ///  - Canopy normals: each vertex normal is blended 55 % toward the crown centre, so the whole
 ///    cluster shades as one soft cloud with no facets and no extra triangles.
 ///  - Colour is a dark-bottom → bright-top gradient in the vertex colour (smoothstep in height);
@@ -61,11 +64,27 @@ nonisolated enum DioramaPuffKit {
         return q.length < factor
     }
 
-    /// One puff cluster with canopy normals and a height gradient.
+    /// Stable lump in [-1, 1] for a unit-sphere vertex and a puff index.
+    static func lump(_ v: DV3, _ salt: Int) -> Double {
+        var h = UInt64(bitPattern: Int64((v.x * 977).rounded())) &* 0x9E37_79B9_7F4A_7C15
+        h ^= UInt64(bitPattern: Int64((v.y * 613).rounded())) &* 0xC2B2_AE3D_27D4_EB4F
+        h ^= UInt64(bitPattern: Int64((v.z * 431).rounded())) &* 0x1656_67B1_9E37_79F9
+        h ^= UInt64(salt) &* 0x27D4_EB2F_1656_67C5
+        h ^= h >> 29
+        h = h &* 0xBF58_476D_1CE4_E5B9
+        h ^= h >> 32
+        return Double(h & 0xFFFF) / 32767.5 - 1
+    }
+
+    /// One puff cluster with canopy normals and a height gradient. `detail` picks the icosphere
+    /// (2 = 320 faces, 1 = 80); by default 320 close and 80 far.
     static func canopy(_ m: inout DioramaMesh, _ blobs: [Blob], _ gradient: Gradient, light: Bool,
-                       swatch: DioramaSwatch = .leafMid, blend: Double = 0.55) {
+                       swatch: DioramaSwatch = .leafMid, blend: Double = 0.55, detail: Int? = nil, lumpiness: Double = 0.06) {
         guard !blobs.isEmpty else { return }
-        let shape = light ? DioramaIcosphere.level0 : DioramaIcosphere.level1
+        let level = detail ?? (light ? 1 : 2)
+        let shape = level >= 2 ? DioramaIcosphere.level2 : (level == 1 ? DioramaIcosphere.level1 : DioramaIcosphere.level0)
+        // Neighbours may dent inward by `lumpiness`; only faces safely below that dent are hidden.
+        let buried = 1 - lumpiness - 0.025
         var weight = 0.0
         var centre = DV3(0, 0, 0)
         for b in blobs {
@@ -82,11 +101,16 @@ nonisolated enum DioramaPuffKit {
         m.surface = SIMD2(10, 0)
         defer { m.tint = savedTint; m.surface = savedSurface }
         for (i, b) in blobs.enumerated() {
-            func world(_ v: DV3) -> DV3 { b.centre + DV3(v.x * b.radii.x, v.y * b.radii.y, v.z * b.radii.z) }
-            let kept = shape.faces.filter { f in
-                let q = (world(shape.vertices[Int(f.x)]) + world(shape.vertices[Int(f.y)]) + world(shape.vertices[Int(f.z)])) * (1.0 / 3.0)
-                return !blobs.indices.contains { $0 != i && inside(q, blobs[$0], 0.97) }
+            func world(_ v: DV3) -> DV3 {
+                let s = 1 + lumpiness * lump(v, i)
+                return b.centre + DV3(v.x * b.radii.x * s, v.y * b.radii.y * s, v.z * b.radii.z * s)
             }
+            var hidden = [Bool](repeating: false, count: shape.vertices.count)
+            for (vi, v) in shape.vertices.enumerated() {
+                let p = world(v)
+                hidden[vi] = blobs.indices.contains { $0 != i && inside(p, blobs[$0], buried) }
+            }
+            let kept = shape.faces.filter { f in !(hidden[Int(f.x)] && hidden[Int(f.y)] && hidden[Int(f.z)]) }
             guard !kept.isEmpty else { continue }
             m.reserve(shape.vertices.count)
             var remap: [UInt32: UInt32] = [:]
@@ -216,8 +240,9 @@ nonisolated enum DioramaPuffKit {
         return m
     }
 
-    /// Coconut palm (~110 triangles close): curved 4-segment trunk, eight drooping blade fronds
-    /// (one thin double-sided sheet each, softly shaded), a small crown knot.
+    /// Coconut palm: curved trunk, ten drooping fronds and a coconut knot. Each frond is a closed
+    /// solid with a folded cross-section (raised midrib, leaflets drooping to both edges, a keel
+    /// underneath), so it has real thickness from every angle and never shows through.
     static func palm(seed: UInt64, lean: Double, light: Bool) -> DioramaMesh {
         var m = DioramaMesh()
         var rng = DioramaRandom(seed: seed, salt: 0x50_41_4C)
@@ -235,34 +260,102 @@ nonisolated enum DioramaPuffKit {
             limb(&m, from: k == 0 ? points[0] - DV3(0, 0, 0.05) : points[k], to: points[k + 1], r0: r0, r1: r1, light: light, .palmTrunk)
         }
         let top = points[segments]
-        m.sphere(centre: top - DV3(0, 0, 0.2), radii: DV3(0.34, 0.34, 0.32), .coconut, detail: -1)
+        // Coconut cluster: three nuts tucked under the crown.
+        for k in 0..<(light ? 1 : 3) {
+            let a = Double(k) / 3 * 2 * Double.pi + heading
+            let offset = light ? DV3(0, 0, -0.25) : DV3(cos(a) * 0.2, sin(a) * 0.2, -0.32)
+            m.sphere(centre: top + offset, radii: DV3(0.2, 0.2, 0.22), .coconut, detail: light ? -1 : 0)
+        }
         let lo = rgb(frond.bottom), hi = rgb(frond.top)
         let uv = DioramaAtlas.uv(.leafMid, dark: false)
-        let savedTint = m.tint, savedSurface = m.surface, savedSided = m.doubleSided
+        let savedTint = m.tint, savedSurface = m.surface
         m.surface = SIMD2(10, 0)
-        m.doubleSided = true
-        defer { m.tint = savedTint; m.surface = savedSurface; m.doubleSided = savedSided }
-        let count = light ? 6 : 8
+        defer { m.tint = savedTint; m.surface = savedSurface }
+        let count = light ? 7 : 10
+        let frondSegments = light ? 3 : 5
         for i in 0..<count {
-            let a = Double(i) / Double(count) * 2 * Double.pi + rng.range(-0.2...0.2)
+            let a = Double(i) / Double(count) * 2 * Double.pi + rng.range(-0.18...0.18)
             let u = DV2(cos(a), sin(a)), side = u.left
-            let length = rng.range(3.1...3.9)
-            let spine: [DV3] = [top, top + DV3(u * (length * 0.45), 0.55), top + DV3(u * (length * 0.85), -0.35), top + DV3(u * length, -1.3)]
-            let widths = [0.06, 0.6, 0.42, 0.02]
-            m.reserve(8)
-            var rows: [(UInt32, UInt32, DV3)] = []
-            for (k, p) in spine.enumerated() {
-                let normal = (DV3.up - DV3(u * (0.2 + 0.25 * Double(k)), 0)).normalized
-                let t = Float(k) / 3
-                m.tint = savedTint * tint(hi + (lo - hi) * t, over: .leafMid)
-                let w = DV3(side * widths[k], 0)
-                rows.append((m.vertex(p - w, normal, uv), m.vertex(p + w, normal, uv), normal))
+            let length = rng.range(3.2...4.0)
+            // Upper fronds arch up before drooping; lower ones fall away sooner.
+            let rise = i % 2 == 0 ? rng.range(0.55...0.85) : rng.range(0.15...0.4)
+            let droop = i % 2 == 0 ? rng.range(1.2...1.6) : rng.range(1.7...2.3)
+            for k in 0..<frondSegments {
+                // Spine sample s and the next one; each frond segment is four strips with their own normals.
+                func section(_ s: Double) -> (p: DV3, w: Double, t: DV3) {
+                    let along = u * (length * s)
+                    let z = 4 * rise * s * (1 - s) - droop * s * s * s
+                    let dz = 4 * rise * (1 - 2 * s) - 3 * droop * s * s
+                    let w = 0.06 + 0.62 * sin(min(1, s * 1.15) * Double.pi) * (1 - 0.35 * s)
+                    return (top + DV3(along, z), w, DV3(u * length, dz).normalized)
+                }
+                let s0 = Double(k) / Double(frondSegments), s1 = Double(k + 1) / Double(frondSegments)
+                let a0 = section(s0), a1 = section(s1)
+                func corners(_ c: (p: DV3, w: Double, t: DV3)) -> [DV3] {
+                    let up = DV3.up
+                    let rib = c.p + up * (0.05 + c.w * 0.1)
+                    let left = c.p - DV3(side * c.w, 0) - up * (c.w * 0.42)
+                    let right = c.p + DV3(side * c.w, 0) - up * (c.w * 0.42)
+                    let keel = c.p - up * (0.04 + c.w * 0.16)
+                    return [rib, right, keel, left]
+                }
+                let r0 = corners(a0), r1 = corners(a1)
+                let t0 = Float(s0), t1 = Float(s1)
+                for strip in 0..<4 {
+                    let j = (strip + 1) % 4
+                    let edge = r0[j] - r0[strip]
+                    let outward = a0.t.cross(edge).normalized
+                    var n = outward
+                    let upper = strip == 0 || strip == 3
+                    // Undersides lean up so the shaded leaf stays green, never black.
+                    if n.z < 0 { n = (n + DV3.up * 0.9).normalized }
+                    m.reserve(4)
+                    m.tint = savedTint * tint(hi + (lo - hi) * t0, over: .leafMid) * (upper ? 1 : 0.8)
+                    let p0 = m.vertex(r0[strip], n, uv), p1 = m.vertex(r0[j], n, uv)
+                    m.tint = savedTint * tint(hi + (lo - hi) * t1, over: .leafMid) * (upper ? 1 : 0.8)
+                    let p2 = m.vertex(r1[j], n, uv), p3 = m.vertex(r1[strip], n, uv)
+                    m.face(p0, p1, p2, outward: outward)
+                    m.face(p0, p2, p3, outward: outward)
+                }
             }
-            for k in 0..<3 {
-                let (l0, r0, n0) = rows[k], (l1, r1, _) = rows[k + 1]
-                m.face(l0, r0, r1, outward: n0)
-                m.face(l0, r1, l1, outward: n0)
+        }
+        return m
+    }
+
+    /// Rounded boulder (style-spec rocks): an 80-face icosphere (20 far) with a stable lumpy
+    /// displacement, a flattened, buried base and a dark-bottom → sun-bleached-top gradient.
+    /// Five variants: round, slab, tall, split pair and a small cluster.
+    static func rock(variant: Int, _ swatch: DioramaSwatch, light: Bool) -> DioramaMesh {
+        var m = DioramaMesh()
+        let shape = light ? DioramaIcosphere.level0 : DioramaIcosphere.level1
+        let uv = DioramaAtlas.uv(swatch, dark: false)
+        let savedTint = m.tint
+        defer { m.tint = savedTint }
+        let blobs: [(DV3, DV3)]
+        switch variant % 5 {
+        case 0: blobs = [(DV3(0, 0, 0.12), DV3(0.55, 0.48, 0.42))]
+        case 1: blobs = [(DV3(0, 0, 0.06), DV3(0.68, 0.46, 0.26))]
+        case 2: blobs = [(DV3(0, 0, 0.22), DV3(0.4, 0.36, 0.6))]
+        case 3: blobs = [(DV3(-0.22, 0, 0.12), DV3(0.42, 0.36, 0.4)), (DV3(0.34, 0.12, 0.06), DV3(0.3, 0.28, 0.26))]
+        default: blobs = [(DV3(0, 0, 0.1), DV3(0.44, 0.4, 0.36)), (DV3(0.42, -0.2, 0.0), DV3(0.24, 0.22, 0.2)),
+                          (DV3(-0.3, 0.36, 0.0), DV3(0.2, 0.18, 0.17))]
+        }
+        for (bi, blob) in blobs.enumerated() {
+            let (c, r) = blob
+            m.reserve(shape.vertices.count)
+            let base = UInt32(m.positions.count)
+            for v in shape.vertices {
+                // Two octaves of lumps: broad bulges and smaller chips; the base is pressed flat.
+                let s = 1 + 0.16 * lump(v, variant * 7 + bi) + 0.06 * lump(v * 2.3, variant * 13 + bi)
+                var p = DV3(v.x * r.x * s, v.y * r.y * s, v.z * r.z * s)
+                if p.z < -r.z * 0.35 { p.z = -r.z * 0.35 - (p.z + r.z * 0.35) * 0.15 }
+                let world = c + p
+                let n = (DV3(p.x / (r.x * r.x), p.y / (r.y * r.y), p.z / (r.z * r.z)).normalized * 0.7 + v * 0.3).normalized
+                let t = Float(min(max((world.z + 0.1) / 0.9, 0), 1))
+                m.tint = savedTint * SIMD3(repeating: 0.66 + 0.46 * t)
+                _ = m.vertex(world, n, uv)
             }
+            for f in shape.faces { m.face(base + f.x, base + f.y, base + f.z) }
         }
         return m
     }
@@ -291,7 +384,7 @@ nonisolated enum DioramaPuffKit {
             let a = rng.range(0...Double.pi * 2), r = rng.range(0.1...0.5)
             blooms.append(Blob(DV3(cos(a) * r, sin(a) * r, 0.95 - r * 0.5), 0.2, squash: 0.85))
         }
-        for b in blooms { canopy(&m, [b], bloom, light: true, swatch: .flowerPink) }
+        for b in blooms { canopy(&m, [b], bloom, light: true, swatch: .flowerPink, detail: 0, lumpiness: 0) }
         return m
     }
 

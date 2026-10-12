@@ -19,9 +19,10 @@ nonisolated struct DarLandmarkSite: Decodable, Identifiable, Sendable {
     @MainActor static let all: [DarLandmarkSite] = {
         guard let url = Bundle.main.url(forResource: "dar_landmarks", withExtension: "json"),
               let data = try? Data(contentsOf: url), let catalog = try? JSONDecoder().decode(DarLandmarkCatalog.self, from: data) else { return [] }
-        // Harbour buildings are generated only by the stylized-map-renderer skill; no bespoke site there.
-        return (catalog.sites + (MoroccoSquareData.bundled?.sites ?? [])).filter { $0.ring.count >= 4 && $0.ring.allSatisfy { $0.count == 2 && $0.allSatisfy(\.isFinite) } }
-            .filter { !DioramaRegion.isHarbour(ring: $0.ring) }
+        // Designed landmarks everywhere, harbour included (Johari Rotana, Bandari Tower, the cathedrals);
+        // the skill buildings leave their footprints empty.
+        return (catalog.sites + (MoroccoSquareData.bundled?.sites ?? []) + (HarbourLandmarkData.bundled?.sites ?? []))
+            .filter { $0.ring.count >= 4 && $0.ring.allSatisfy { $0.count == 2 && $0.allSatisfy(\.isFinite) } }
     }()
 
     @MainActor var geometry: Geometry {

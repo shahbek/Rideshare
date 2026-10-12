@@ -42,7 +42,6 @@ struct DioramaPerformancePanel: View {
                 flag("Ground painting", \.groundPaint)
                 flag("Facade shader", \.facadeShader)
                 flag("Sun shadows", \.shadows)
-                flag("Reflections", \.reflections)
                 flag("Glow", \.bloom)
             }
         }
@@ -90,7 +89,6 @@ struct DioramaPerformancePanel: View {
             lines.append(String(format: "%@ %@  %4.0f%%", c.rawValue.padding(toLength: 12, withPad: " ", startingAt: 0), fmt(n).padding(toLength: 7, withPad: " ", startingAt: 0), pct))
         }
         lines.append("Shadow pass: " + (shadow > 0 ? "up to \(fmt(shadow)) tris re-drawn" : "off"))
-        lines.append("Reflection pass: " + (hosts.contains(where: \.reflectionPass) ? "on (re-draws scene)" : "off"))
         lines.append("Labels: \(hosts.reduce(0) { $0 + $1.labels }) · lights: \(hosts.reduce(0) { $0 + $1.lights })")
         return lines.joined(separator: "\n")
     }

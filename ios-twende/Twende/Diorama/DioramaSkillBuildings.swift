@@ -132,7 +132,10 @@ nonisolated struct DioramaSkillBuildings: Sendable {
 
     /// Buildings whose footprint centroid lies in `tile`; each building belongs to exactly one tile.
     func buildings(in tile: DioramaTileID) -> [Building] {
-        buildings.filter { DioramaTileID(latitude: $0.latitude, longitude: $0.longitude, zoom: tile.z) == tile }
+        buildings.filter {
+            DioramaTileID(latitude: $0.latitude, longitude: $0.longitude, zoom: tile.z) == tile
+                && !DioramaLandmarkOwnership.isLandmark(osmWay: $0.id, longitude: $0.longitude, latitude: $0.latitude)
+        }
     }
 
     /// Footprint of `building` in the tile frame of `projection`.

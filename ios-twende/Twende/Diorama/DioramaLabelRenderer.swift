@@ -103,12 +103,13 @@ nonisolated final class DioramaLabelRenderer {
     }
 
     /// A title's plate, rasterised on first use and shared process-wide (bounded, oldest evicted).
-    private func image(for title: String) -> Image? {
+    /// `allowRaster` false only returns an existing plate (frames spread new rasterisation).
+    private func image(for title: String, allowRaster: Bool = true) -> Image? {
         let key = ImageKey(device: ObjectIdentifier(device), title: title, scale: scale)
         Self.lock.lock()
         defer { Self.lock.unlock() }
         if let cached = Self.sharedImages[key] { return cached }
-        guard let image = Self.raster(title, device: device, scale: scale) else { return nil }
+        guard allowRaster, let image = Self.raster(title, device: device, scale: scale) else { return nil }
         Self.sharedImages[key] = image
         Self.sharedOrder.append(key)
         if Self.sharedOrder.count > Self.sharedLimit {
@@ -177,8 +178,18 @@ nonisolated final class DioramaLabelRenderer {
         encoder.setTriangleFillMode(.fill)
         var occupied: [CGRect] = []
         let w = Float(width), h = Float(height)
+        // New plates are rasterised at most three per frame, so a camera move that reveals many
+        // names never stalls one frame; the rest appear over the next few frames.
+        var rastersLeft = 3
         for label in labels {
-            guard label.isNamed || zoom >= 17.8, occupied.count < 18, let image = image(for: label.title) else { continue }
+            // Labels are sorted named-first: once 18 are placed (or unnamed ones are not shown) stop.
+            guard occupied.count < 18, label.isNamed || zoom >= 17.8 else { break }
+            // Cheap projection and on-screen test first; reveal coverage and plates only for candidates.
+            let roof = matrix * SIMD4(label.anchor, 1)
+            let lift: Float = label.isNamed ? 5.5 : 3.5
+            let p = matrix * SIMD4(label.anchor + SIMD3(0, 0, lift), 1)
+            guard roof.w > 0.001, p.w > 0.001, p.x.isFinite, p.y.isFinite, p.z.isFinite,
+                  abs(p.x / p.w) < 1.1, abs(p.y / p.w) < 1.1 else { continue }
             let revealed = DioramaRevealStyle.sceneCoverage(label.anchor, reveal: uniforms.reveal,
                 bounds: uniforms.tileBounds, edges: uniforms.focusEdges, state: uniforms.tileState, frame: uniforms.materialFrame)
                 * DioramaRevealStyle.coverage(label.anchor, reveal: uniforms.lifecycleReveal, bounds: uniforms.tileBounds)
@@ -186,11 +197,10 @@ nonisolated final class DioramaLabelRenderer {
             var coverage: Float = min(1, max(0, (revealed - 0.55) / 0.45))
             coverage = coverage * coverage * (3 - 2 * coverage)
             guard coverage > 0.001 else { continue }
-            encoder.setFragmentBytes(&coverage, length: MemoryLayout<Float>.stride, index: 0)
-            let roof = matrix * SIMD4(label.anchor, 1)
-            let lift: Float = label.isNamed ? 5.5 : 3.5
-            let p = matrix * SIMD4(label.anchor + SIMD3(0, 0, lift), 1)
-            guard roof.w > 0.001, p.w > 0.001, p.x.isFinite, p.y.isFinite, p.z.isFinite else { continue }
+            let cached = image(for: label.title, allowRaster: false)
+            let made = cached ?? (rastersLeft > 0 ? image(for: label.title) : nil)
+            if cached == nil, made != nil { rastersLeft -= 1 }
+            guard let image = made else { continue }
             let x = (p.x / p.w + 1) * w * 0.5, y = (1 - p.y / p.w) * h * 0.5
             let rect = CGRect(x: CGFloat(x - image.width / 2), y: CGFloat(y - image.height), width: CGFloat(image.width), height: CGFloat(image.height))
             guard rect.minX >= 8 * CGFloat(scale), rect.maxX < CGFloat(width) - 8 * CGFloat(scale),
@@ -198,35 +208,29 @@ nonisolated final class DioramaLabelRenderer {
                   !occupied.contains(where: { $0.intersects(rect.insetBy(dx: -6 * CGFloat(scale), dy: -4 * CGFloat(scale))) }) else { continue }
             occupied.append(rect)
             accepted.insert(label.id)
+            encoder.setFragmentBytes(&coverage, length: MemoryLayout<Float>.stride, index: 0)
             encoder.setFragmentTexture(image.texture, index: 0)
-            // Perspective-correct leader: each end has its own world height/depth.
+            // Perspective-correct leader stem plus a solid 12-sided endpoint dot, in one draw.
             let delta = SIMD2((p.x / p.w - roof.x / roof.w) * w, (p.y / p.w - roof.y / roof.w) * h)
             let length = simd_length(delta)
             let normal = length > 0.01 ? SIMD2(-delta.y, delta.x) / length : SIMD2<Float>(1, 0)
-            for (thickness, uv) in [(1.25 * scale, Float(-1))] {
-                func end(_ point: SIMD4<Float>, _ side: Float) -> Vertex {
-                    Vertex(position: SIMD4(point.x + normal.x * thickness * side / w * point.w, point.y + normal.y * thickness * side / h * point.w, point.z, point.w), uv: SIMD2(uv, 0))
-                }
-                var stem = [end(roof, -1), end(roof, 1), end(p, 1), end(roof, -1), end(p, 1), end(p, -1)]
-                stem.withUnsafeMutableBytes { bytes in
-                    if let base = bytes.baseAddress { encoder.setVertexBytes(base, length: bytes.count, index: 0) }
-                }
-                encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6)
+            let thickness = 1.25 * scale
+            func end(_ point: SIMD4<Float>, _ side: Float) -> Vertex {
+                Vertex(position: SIMD4(point.x + normal.x * thickness * side / w * point.w, point.y + normal.y * thickness * side / h * point.w, point.z, point.w), uv: SIMD2(-1, 0))
             }
-            // Solid attached endpoint, with no contrasting outline around dot or stem.
-            var dot: [Vertex] = []
             func dotVertex(_ angle: Float, radius: Float) -> Vertex {
                 Vertex(position: SIMD4(roof.x + cos(angle) * radius * 2 / w * roof.w,
                                        roof.y + sin(angle) * radius * 2 / h * roof.w, roof.z, roof.w), uv: SIMD2(-1, 0))
             }
-            for i in 0..<20 {
-                dot += [dotVertex(0, radius: 0), dotVertex(Float(i) * .pi / 10, radius: 3 * scale),
-                        dotVertex(Float(i + 1) * .pi / 10, radius: 3 * scale)]
+            var marker = [end(roof, -1), end(roof, 1), end(p, 1), end(roof, -1), end(p, 1), end(p, -1)]
+            for i in 0..<12 {
+                marker += [dotVertex(0, radius: 0), dotVertex(Float(i) * .pi / 6, radius: 3 * scale),
+                           dotVertex(Float(i + 1) * .pi / 6, radius: 3 * scale)]
             }
-            dot.withUnsafeMutableBytes { bytes in
+            marker.withUnsafeMutableBytes { bytes in
                 if let base = bytes.baseAddress { encoder.setVertexBytes(base, length: bytes.count, index: 0) }
             }
-            encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: dot.count)
+            encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: marker.count)
             func v(_ dx: Float, _ dy: Float, _ u: Float, _ t: Float) -> Vertex {
                 Vertex(position: SIMD4(p.x + dx * 2 / w * p.w, p.y + dy * 2 / h * p.w, p.z, p.w), uv: SIMD2(u, t))
             }
@@ -236,7 +240,6 @@ nonisolated final class DioramaLabelRenderer {
             vertices.withUnsafeMutableBytes { bytes in
                 if let base = bytes.baseAddress { encoder.setVertexBytes(base, length: bytes.count, index: 0) }
             }
-            encoder.setFragmentTexture(image.texture, index: 0)
             encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6)
         }
         return accepted

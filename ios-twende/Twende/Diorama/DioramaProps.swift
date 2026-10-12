@@ -87,7 +87,7 @@ nonisolated struct DioramaPropLibrary: Sendable {
         bench = make(Self.makeBench())
         parasol = config.canopyColors.map { make(Self.makeParasol($0)) }
         lounger = make(Self.makeLounger())
-        rocks = [DioramaSwatch.rockWarm, .rockGrey, .rockPale].enumerated().map { i, swatch in
+        rocks = [DioramaSwatch.rockWarm, .rockGrey, .rockPale, .rockGrey, .rockWarm].enumerated().map { i, swatch in
             make(Self.makeRock(i, swatch), light: Self.makeRock(i, swatch, light: true))
         }
         prototypes = registry
@@ -188,11 +188,9 @@ nonisolated struct DioramaPropLibrary: Sendable {
         DioramaPuffKit.cypressTree(light: light)
     }
 
-    /// Smooth shoreline rock: 20 smooth-shaded faces; the normals carry the roundness.
+    /// Rounded lumpy boulder from the skill kit (round, slab, tall, split pair, cluster).
     private static func makeRock(_ i: Int, _ swatch: DioramaSwatch, light: Bool = false) -> DioramaMesh {
-        var m = DioramaMesh()
-        m.sphere(centre: DV3(0, 0, 0), radii: DV3(0.5, 0.42 + Double(i) * 0.04, 0.36 + Double(i) * 0.035), swatch, detail: -1)
-        return m
+        DioramaPuffKit.rock(variant: i, swatch, light: light)
     }
 
     /// Coconut palm from the skill kit: curved 4-segment trunk, eight blade fronds (~110 triangles).
