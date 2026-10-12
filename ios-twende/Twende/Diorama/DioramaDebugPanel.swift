@@ -1,143 +1,59 @@
 import SwiftUI
 
-/// Settings-only diorama controls. The containing MenuScreen owns scrolling and navigation.
-struct DioramaDebugPanel: View {
+/// Live cost readout plus layer and effect switches. Works for every scenery source (bundled
+/// harbour, downloads), so it is never hidden behind a download.
+struct DioramaPerformancePanel: View {
     @Bindable var state: DioramaState
-    @State private var isExpanded: Bool = true
     @State private var flags: DioramaDebugSwitches.Flags = DioramaDebugSwitches.shared.flags
 
+    private let columns: [GridItem] = [GridItem(.flexible()), GridItem(.flexible())]
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Button {
-                Haptics.tap()
-                withAnimation(.spring(duration: 0.3)) { isExpanded.toggle() }
-            } label: {
-                HStack(spacing: 10) {
-                    Image(systemName: "cube.transparent")
-                        .font(.system(size: 15, weight: .semibold))
-                    Text(L(.masakiDiorama))
-                        .font(TwendeFont.headline)
-                    Spacer(minLength: 8)
-                    Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(TwendeColor.inkSecondary)
-                }
-                .foregroundStyle(TwendeColor.ink)
-                .padding(.horizontal, 14)
-                .frame(height: 48)
+        VStack(alignment: .leading, spacing: 14) {
+            TimelineView(.periodic(from: .now, by: 1)) { _ in
+                Text(liveStats)
+                    .font(.system(size: 12, design: .monospaced))
+                    .foregroundStyle(TwendeColor.ink)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+                    .padding(12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(TwendeColor.ink.opacity(0.05), in: .rect(cornerRadius: 12))
             }
-            .buttonStyle(.pressableCard)
+            Text("Turn one switch off at a time and watch GPU frame time. Resets on restart.")
+                .font(TwendeFont.caption)
+                .foregroundStyle(TwendeColor.inkSecondary)
 
-            if !DioramaDownloadService.shared.canView {
-                DioramaDownloadView().padding(.vertical, 14)
-            } else if isExpanded {
-                Group {
-                  VStack(alignment: .leading, spacing: 12) {
-                    RowDivider(leading: 0)
-                    Text("Prepared offline detail with up to eight coarse neighbours (64 MiB packed budget). No network fetches or geometry generation during viewing. Idle water animation is off.")
-                        .font(TwendeFont.label)
-                        .foregroundStyle(TwendeColor.inkSecondary)
-                    Picker("Time of day", selection: $state.timeOfDay) {
-                        ForEach(DioramaTimeOfDay.allCases) { time in
-                            Text(time.rawValue.capitalized).tag(time)
-                        }
-                    }
-                    .pickerStyle(.segmented)
+            Text("Layers").font(TwendeFont.label).foregroundStyle(TwendeColor.inkSecondary)
+            LazyVGrid(columns: columns, spacing: 8) {
+                layer("Buildings", .buildings)
+                layer("Roads", .roads)
+                layer("Objects", .props)
+                layer("Trees", .vegetation)
+                layer("Walls", .walls)
+                layer("Ground", .ground)
+                layer("Water", .water)
+            }
 
-                    LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
-                        toggle("Buildings", .buildings)
-                        toggle("Compound walls", .walls)
-                        toggle("Vegetation", .vegetation)
-                        toggle("Props", .props)
-                        toggle("Ground", .ground)
-                        toggle("Roads", .roads)
-                        toggle("Water", .water)
-                        toggle("Shoreline types", .shorelineDebug)
-                        Toggle("Wireframe", isOn: $state.showsWireframe)
-                            .font(TwendeFont.label).toggleStyle(.button).tint(TwendeColor.primary)
-                        Toggle("Basemap only", isOn: $state.isBasemapOnly)
-                            .font(TwendeFont.label).toggleStyle(.button).tint(TwendeColor.primary)
-                        Toggle(isOn: $state.showsDebugOverlay) {
-                            Text("Tile bounds").font(TwendeFont.label)
-                        }
-                        .toggleStyle(.button)
-                        .tint(TwendeColor.primary)
-                    }
-
-                    Text("Effects (turn off one at a time and watch GPU time)")
-                        .font(TwendeFont.label).foregroundStyle(TwendeColor.inkSecondary)
-                    LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
-                        flag("3D labels", \.labels)
-                        flag("Lights", \.pointLights)
-                        flag("Ground painting", \.groundPaint)
-                        flag("Facade shader", \.facadeShader)
-                        flag("Sun shadows", \.shadows)
-                        flag("Reflections", \.reflections)
-                        flag("Glow", \.bloom)
-                    }
-                    TimelineView(.periodic(from: .now, by: 1)) { _ in
-                        Text(liveStats)
-                            .font(.system(size: 12, design: .monospaced))
-                            .foregroundStyle(TwendeColor.ink)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .textSelection(.enabled)
-                    }
-
-                    HStack(spacing: 8) {
-                        Button("Reload saved tile") {
-                            Haptics.tap()
-                            state.regenerateRequest += 1
-                        }
-                        .buttonStyle(.twendeSecondary)
-                        Button("Fly to Slipway") {
-                            Haptics.tap()
-                            state.inspectionTarget = nil
-                            state.cameraFlyRequest += 1
-                        }
-                        .buttonStyle(.twendeSecondary)
-                    }
-
-                    if state.visibleCategories.contains(.shorelineDebug) {
-                        Text("Yellow: beach · red: seawall · orange: rocks · blue: deck · green: natural")
-                            .font(TwendeFont.label).foregroundStyle(TwendeColor.inkSecondary)
-                    }
-                    Button("Inspect beach section") {
-                        state.inspectionTarget = .beach
-                        state.cameraFlyRequest += 1
-                    }
-                    .buttonStyle(.twendeSecondary)
-                    DisclosureGroup("Shoreline classification report") {
-                        Text(state.loadedTiles.values.flatMap(\.shorelineReport).joined(separator: "\n"))
-                            .font(TwendeFont.label).foregroundStyle(TwendeColor.inkSecondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    .font(TwendeFont.label)
-                    DisclosureGroup("Instancing savings and generation timings") {
-                        Text(optimizationSummary)
-                            .font(TwendeFont.label).foregroundStyle(TwendeColor.inkSecondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .textSelection(.enabled)
-                        ShareLink(item: summary + "\n\n" + optimizationSummary) {
-                            Label("Share performance report", systemImage: "square.and.arrow.up")
-                        }
-                    }
-                    .font(TwendeFont.label)
-                    Text(summary)
-                        .font(TwendeFont.label)
-                        .foregroundStyle(TwendeColor.inkSecondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                  }
-                  .padding(.vertical, 14)
-                }
-                .transition(.opacity.combined(with: .move(edge: .top)))
+            Text("Effects").font(TwendeFont.label).foregroundStyle(TwendeColor.inkSecondary)
+            LazyVGrid(columns: columns, spacing: 8) {
+                flag("3D labels", \.labels)
+                flag("Lights", \.pointLights)
+                flag("Ground painting", \.groundPaint)
+                flag("Facade shader", \.facadeShader)
+                flag("Sun shadows", \.shadows)
+                flag("Reflections", \.reflections)
+                flag("Glow", \.bloom)
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private func toggle(_ title: String, _ category: DioramaCategory) -> some View {
-        Toggle(isOn: Binding(get: { state.visibleCategories.contains(category) }, set: { _ in state.toggle(category) })) {
-            Text(title).font(TwendeFont.label)
+    private func layer(_ title: String, _ category: DioramaCategory) -> some View {
+        Toggle(isOn: Binding(get: { state.visibleCategories.contains(category) }, set: { _ in
+            Haptics.tap()
+            state.toggle(category)
+        })) {
+            Text(title).font(TwendeFont.label).frame(maxWidth: .infinity)
         }
         .toggleStyle(.button)
         .tint(TwendeColor.primary)
@@ -150,16 +66,16 @@ struct DioramaDebugPanel: View {
             DioramaDebugSwitches.shared.flags = flags
             NotificationCenter.default.post(name: DioramaState.renderSettingsChanged, object: state)
         })) {
-            Text(title).font(TwendeFont.label)
+            Text(title).font(TwendeFont.label).frame(maxWidth: .infinity)
         }
         .toggleStyle(.button)
         .tint(TwendeColor.primary)
     }
 
-    /// Live totals across every scenery layer on screen, so each toggle's effect is measurable.
+    /// Live totals across every scenery layer on screen, so each switch's effect is measurable.
     private var liveStats: String {
         let hosts = DioramaDebugSwitches.shared.liveHosts()
-        guard !hosts.isEmpty else { return "Open the map over the scenery to see live counts." }
+        guard !hosts.isEmpty else { return "Open the map over 3D scenery to see live counts." }
         var byCategory: [DioramaCategory: Int] = [:]
         for host in hosts { for (c, n) in host.triangles { byCategory[c, default: 0] += n } }
         let total = byCategory.values.reduce(0, +)
@@ -178,6 +94,92 @@ struct DioramaDebugPanel: View {
         lines.append("Labels: \(hosts.reduce(0) { $0 + $1.labels }) · lights: \(hosts.reduce(0) { $0 + $1.lights })")
         return lines.joined(separator: "\n")
     }
+}
+
+/// Developer tools and reports, collapsed by default.
+struct DioramaDebugPanel: View {
+    @Bindable var state: DioramaState
+    @State private var isExpanded: Bool = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Button {
+                Haptics.tap()
+                withAnimation(.spring(duration: 0.3)) { isExpanded.toggle() }
+            } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: "wrench.and.screwdriver")
+                        .font(.system(size: 15, weight: .semibold))
+                    Text("Tools and reports").font(TwendeFont.bodyMedium)
+                    Spacer(minLength: 8)
+                    Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(TwendeColor.inkSecondary)
+                }
+                .foregroundStyle(TwendeColor.ink)
+                .padding(.horizontal, 14)
+                .frame(height: 48)
+            }
+            .buttonStyle(.pressableCard)
+
+            if isExpanded {
+                VStack(alignment: .leading, spacing: 12) {
+                    LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
+                        button("Wireframe", $state.showsWireframe)
+                        button("Basemap only", $state.isBasemapOnly)
+                        button("Tile bounds", $state.showsDebugOverlay)
+                        Toggle(isOn: Binding(get: { state.visibleCategories.contains(.shorelineDebug) },
+                                             set: { _ in state.toggle(.shorelineDebug) })) {
+                            Text("Shoreline types").font(TwendeFont.label).frame(maxWidth: .infinity)
+                        }
+                        .toggleStyle(.button).tint(TwendeColor.primary)
+                    }
+                    if state.visibleCategories.contains(.shorelineDebug) {
+                        Text("Yellow: beach · red: seawall · orange: rocks · blue: deck · green: natural")
+                            .font(TwendeFont.label).foregroundStyle(TwendeColor.inkSecondary)
+                    }
+                    HStack(spacing: 8) {
+                        Button("Reload tile") { Haptics.tap(); state.regenerateRequest += 1 }
+                            .buttonStyle(.twendeSecondary)
+                        Button("Fly to Slipway") {
+                            Haptics.tap(); state.inspectionTarget = nil; state.cameraFlyRequest += 1
+                        }
+                        .buttonStyle(.twendeSecondary)
+                        Button("Beach") {
+                            Haptics.tap(); state.inspectionTarget = .beach; state.cameraFlyRequest += 1
+                        }
+                        .buttonStyle(.twendeSecondary)
+                    }
+                    DisclosureGroup("Shoreline report") {
+                        Text(state.loadedTiles.values.flatMap(\.shorelineReport).joined(separator: "\n"))
+                            .font(TwendeFont.label).foregroundStyle(TwendeColor.inkSecondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .font(TwendeFont.label)
+                    DisclosureGroup("Performance report") {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text(summary + "\n\n" + optimizationSummary)
+                                .font(TwendeFont.label).foregroundStyle(TwendeColor.inkSecondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .textSelection(.enabled)
+                            ShareLink(item: summary + "\n\n" + optimizationSummary) {
+                                Label("Share report", systemImage: "square.and.arrow.up")
+                            }
+                        }
+                    }
+                    .font(TwendeFont.label)
+                }
+                .padding(.vertical, 14)
+                .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func button(_ title: String, _ binding: Binding<Bool>) -> some View {
+        Toggle(isOn: binding) { Text(title).font(TwendeFont.label).frame(maxWidth: .infinity) }
+            .toggleStyle(.button).tint(TwendeColor.primary)
+    }
 
     private var optimizationSummary: String {
         ([state.frameReport, state.passReport] + state.loadedTiles.sorted { $0.key.key < $1.key.key }.flatMap { _, artifacts in
@@ -187,7 +189,7 @@ struct DioramaDebugPanel: View {
     }
 
     private var summary: String {
-        var lines = [state.status, state.passReport]
+        var lines = [state.status]
         for (tile, artifacts) in state.loadedTiles.sorted(by: { ($0.key.x, $0.key.y) < ($1.key.x, $1.key.y) }) {
             lines.append("v\(DioramaConfig.slipway.generatorVersion) · \(tile)")
             lines.append("\(artifacts.totalTriangles.formatted()) unique tris · \(artifacts.totalInstances.formatted()) instances")
