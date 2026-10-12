@@ -159,11 +159,21 @@ extension DioramaMesh {
         }
         reserve(points.count + width * 2)
         let start = UInt32(positions.count)
+        let savedTint = tint, savedSurface = surface
+        // Hedges take the skill's foliage gradient (dark foot → bright top) and canopy grain.
+        let hedgeBottom = DioramaPuffKit.rgb(DioramaPuffKit.hedge.bottom), hedgeTop = DioramaPuffKit.rgb(DioramaPuffKit.hedge.top)
+        if foliage { surface = SIMD2(10, 0) }
         for i in points.indices {
             let q = profile[i % width]
-            let color: DioramaSwatch = foliage ? (q.y > height * 0.75 ? .leafLight : (q.y < height * 0.2 ? .leafDark : .hedge)) : swatch
-            vertex(points[i], normals[i].normalized, DioramaAtlas.uv(color, dark: false))
+            if foliage {
+                var t = min(max(q.y / height, 0), 1)
+                t = t * t * (3 - 2 * t)
+                tint = savedTint * DioramaPuffKit.tint(hedgeBottom + (hedgeTop - hedgeBottom) * Float(t), over: swatch)
+            }
+            vertex(points[i], normals[i].normalized, DioramaAtlas.uv(swatch, dark: false))
         }
+        tint = savedTint
+        surface = savedSurface
         for (a, b, c) in faces { face(start + UInt32(a), start + UInt32(b), start + UInt32(c)) }
         if !closed {
             for end in [0, count - 1] {

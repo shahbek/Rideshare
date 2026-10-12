@@ -354,6 +354,38 @@ nonisolated final class DioramaGroundPainter {
         if let materialData = material.data?.assumingMemoryBound(to: UInt8.self) {
             for i in 0..<count { rgba[i * 4 + 3] = materialData[i] }
         }
-        return DioramaGroundImage(size: size, rgba: rgba, paint: DioramaVectorPaint(rings: paintRings, rect: rect, layers: paintLayers, epochs: hybridFinishes ? paintEpochs : []))
+        return DioramaGroundImage(size: size, rgba: rgba, paint: DioramaVectorPaint(rings: paintRings, rect: rect, layers: paintLayers,
+                                                                                    epochs: hybridFinishes ? paintEpochs : [], kerbs: kerbRecords))
+    }
+
+    // MARK: Shader kerbs
+
+    /// Kerbs are paint, not geometry (skill: "a shader bevel on the sidewalk polygon border"). Each
+    /// exposed carriageway span becomes a 0.7 m band inside the asphalt; the fragment shader turns
+    /// the distance from the road edge into a pale kerb top, a sun-lit kerb face and a soft gutter
+    /// shadow. Two records per span (color.w 3: distance from edge0; 4: band width minus it).
+    static let kerbBand: Double = 0.7
+    private var kerbRecords: [(DioramaPaintTriangle, DioramaRect)] = []
+    /// True when kerbs can be drawn by the shader (compact vector tiles).
+    var paintsKerbs: Bool { hybridFinishes && !rasterOnly }
+
+    func kerb(_ a: DV2, _ b: DV2, inward: DV2) {
+        guard paintsKerbs, a.distance(to: b) > 0.05 else { return }
+        var dir = (b - a).normalized
+        // Overlap neighbouring spans slightly so bends never open a wedge; the shader averages overlaps.
+        var p0 = a - dir * 0.12, p1 = b + dir * 0.12
+        if dir.left.dot(inward) < 0 { swap(&p0, &p1); dir = -dir }
+        let band = dir.left * Self.kerbBand
+        let p1w = p1 + band, p0w = p0 + band
+        var colour = DioramaAtlas.color(.kerb, dark: false, config: config)
+        func edge(_ u: DV2, _ v: DV2) -> SIMD4<Float> {
+            let n = (v - u).normalized.left
+            return SIMD4(Float(n.x), Float(n.y), Float(-n.dot(u)), 0)
+        }
+        let bounds = DioramaRect.bounding([p0, p1, p1w, p0w])
+        colour.w = 3
+        kerbRecords.append((DioramaPaintTriangle(edge0: edge(p0, p1), edge1: edge(p1, p1w), edge2: edge(p1w, p0), color: colour), bounds))
+        colour.w = 4
+        kerbRecords.append((DioramaPaintTriangle(edge0: edge(p1w, p0w), edge1: edge(p0w, p0), edge2: edge(p0, p1w), color: colour), bounds))
     }
 }

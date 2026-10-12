@@ -71,7 +71,7 @@ nonisolated enum DioramaSwatch: Int, CaseIterable, Sendable {
         .carWhite: 0xEDEDE8, .hullWood: 0x7A4E2C, .deckWood: 0xB48A5E, .sailCream: 0xF2E8D2,
         .canopyRed: 0xD9443A, .canopyYellow: 0xF2B630, .canopyBlue: 0x2F7EC4, .canopyGreen: 0x3E9A5C,
         .lampPole: 0x3A3B40,
-        .windowGlow: 0xFFB548, .lampGlow: 0xFFE3A6, .kioskGlow: 0xFFC870, .shopGlow: 0xFFD08A,
+        .windowGlow: 0xFFA526, .lampGlow: 0xFFC860, .kioskGlow: 0xFFAA3A, .shopGlow: 0xFFB650,
     ]
 }
 
@@ -138,7 +138,7 @@ nonisolated struct DioramaConfig: Sendable {
     /// parallax reveals instead of modelled recesses. Replaces 7-16 quads per window per floor.
     static let shaderFacades = true
     /// Bump to invalidate every cached tile.
-    var generatorVersion: Int = 40
+    var generatorVersion: Int = 41
     /// Reuse full-detail architectural primitives without changing their tessellation.
     var instancesArchitecture: Bool = true
     /// Drape the plate/ground overlays over the bundled height snapshot used by roads and foundations.

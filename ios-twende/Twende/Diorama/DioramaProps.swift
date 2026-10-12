@@ -183,158 +183,56 @@ nonisolated struct DioramaPropLibrary: Sendable {
         return m
     }
 
-    /// Italian cypress column for driveways and compound corners.
+    /// Italian cypress column for driveways and compound corners (skill lathe spindle).
     private static func makeCypress(light: Bool = false) -> DioramaMesh {
-        var m = DioramaMesh()
-        m.tube(from: DV3(0, 0, 0), to: DV3(0, 0, 0.5), r0: 0.12, r1: 0.1, sides: 5, .trunk, cap: false)
-        m.sphere(centre: DV3(0, 0, 2.6), radii: DV3(0.75, 0.75, 2.3), .cypress, detail: light ? 0 : 1)
-        m.sphere(centre: DV3(0, 0, 4.4), radii: DV3(0.45, 0.45, 1.2), .cypress, detail: light ? -1 : 0)
-        if !light { m.sphere(centre: DV3(0.15, 0.1, 1.6), radii: DV3(0.6, 0.55, 0.9), .leafDark, detail: 0) }
-        return m
+        DioramaPuffKit.cypressTree(light: light)
     }
 
-    /// Smooth shoreline rock: 80 faces close up, 20 in the distance.
+    /// Smooth shoreline rock: 20 smooth-shaded faces; the normals carry the roundness.
     private static func makeRock(_ i: Int, _ swatch: DioramaSwatch, light: Bool = false) -> DioramaMesh {
         var m = DioramaMesh()
-        m.sphere(centre: DV3(0, 0, 0), radii: DV3(0.5, 0.42 + Double(i) * 0.04, 0.36 + Double(i) * 0.035), swatch, detail: light ? -1 : 0)
+        m.sphere(centre: DV3(0, 0, 0), radii: DV3(0.5, 0.42 + Double(i) * 0.04, 0.36 + Double(i) * 0.035), swatch, detail: -1)
         return m
     }
 
-    /// Coconut palm: a gently curving ringed trunk, a crown of arching fronds that rise then droop, a
-    /// few young fronds pointing up and a cluster of coconuts under the crown.
+    /// Coconut palm from the skill kit: curved 4-segment trunk, eight blade fronds (~110 triangles).
     static func makePalm(seed: UInt64, lean: Double, light: Bool = false) -> DioramaMesh {
-        var m = DioramaMesh()
-        var rng = DioramaRandom(seed: seed, salt: 28)
-        let height = rng.range(7.0...8.5)
-        let leanDir = DV2(1, 0.3).normalized * lean
-        let segments = light ? 6 : 24
-        var prev = DV3(0, 0, 0)
-        for k in 1...segments {
-            let t = Double(k) / Double(segments)
-            let p = DV3(leanDir * (t * t * 1.6), height * t)
-            let r0 = 0.30 - 0.12 * Double(k - 1) / Double(segments), r1 = 0.30 - 0.12 * Double(k) / Double(segments)
-            m.tube(from: prev, to: p, r0: r0, r1: r1, sides: light ? 6 : 16, .palmTrunk, cap: k == segments)
-            prev = p
-        }
-        let top = prev + DV3(0, 0, 0.1)
-        m.sphere(centre: top - DV3(0, 0, 0.15), radii: DV3(0.42, 0.42, 0.4), .trunk, detail: light ? -1 : 0)
-        let fronds = light ? 8 : 11
-        for k in 0..<fronds {
-            let a = Double(k) / Double(fronds) * 2 * Double.pi + rng.range(-0.15...0.15)
-            let dir = DV2(cos(a), sin(a))
-            let length = rng.range(3.4...4.2)
-            let droop = rng.range(1.6...2.4)
-            frond(&m, from: top, direction: dir, length: length, rise: 0.9, droop: droop, width: 0.62, k % 2 == 0 ? .leafMid : .leafBright, light: light)
-        }
-        for k in 0..<4 where !light {
-            let a = Double(k) / 4 * 2 * Double.pi + 0.5
-            let dir = DV2(cos(a), sin(a))
-            frond(&m, from: top, direction: dir, length: 2.0, rise: 1.5, droop: 0.4, width: 0.4, .leafLight)
-        }
-        for k in 0..<5 where !light {
-            let a = Double(k) / 5 * 2 * Double.pi
-            m.sphere(centre: top + DV3(cos(a) * 0.38, sin(a) * 0.38, -0.42), radii: DV3(0.2, 0.2, 0.24), .coconut, detail: 0)
-        }
-        return m
-    }
-
-    /// Smooth indexed frond skin with a continuous curved cross-section and drooping leaflets.
-    private static func frond(_ m: inout DioramaMesh, from top: DV3, direction dir: DV2, length: Double, rise: Double, droop: Double, width: Double, _ s: DioramaSwatch, light: Bool = false) {
-        let steps = light ? 6 : 14, crossSteps = light ? 2 : 4
-        let across = dir.left
-        let uv = DioramaAtlas.uv(s, dark: false)
-        let base = m.positions.count
-        // Fronds and pinnae are open sheets seen from above and below.
-        let wasDoubleSided = m.doubleSided
-        m.doubleSided = true
-        defer { m.doubleSided = wasDoubleSided }
-        func spine(_ t: Double) -> DV3 {
-            top + DV3(dir * (length * t), rise * t - droop * t * t)
-        }
-        for k in 0...steps {
-            let t = Double(k) / Double(steps)
-            let w = width * sin(.pi * t)
-            for j in 0...crossSteps {
-                let u = Double(j) * 2 / Double(crossSteps) - 1
-                let p = spine(t) + DV3(across * (u * w), -0.12 * u * u * sin(.pi * t))
-                let slope = (rise - 2 * droop * t) / max(length, 0.01)
-                let normal = DV3(dir * -slope + across * (0.24 * u / max(width, 0.01)), 1).normalized
-                m.vertex(p, normal, uv)
-            }
-        }
-        for k in 0..<steps {
-            for j in 0..<crossSteps {
-                let a = UInt32(base + k * (crossSteps + 1) + j), b = a + UInt32(crossSteps + 1)
-                m.tri(a, b, b + 1); m.tri(a, b + 1, a + 1)
-            }
-        }
-        guard !light else { return }
-        // Each pinna is a curved tapered ribbon, not a single sharp triangular shard.
-        for k in 1..<11 {
-            let t = Double(k) / 12
-            let w = width * sin(.pi * t)
-            for side in [-1.0, 1.0] {
-                let root = spine(t) + DV3(across * (side * w * 0.75), -0.07)
-                let ribbonBase = m.positions.count
-                for j in 0...6 {
-                    let q = Double(j) / 6
-                    let p = root + DV3(across * (side * w * 0.65 * q) + dir * (0.28 * q), -0.32 * q * q)
-                    let half = 0.045 * sin(.pi * q)
-                    let n = DV3(across * (side * 0.3 * q), 1).normalized
-                    m.vertex(p - DV3(dir * half, 0), n, uv)
-                    m.vertex(p + DV3(dir * half, 0), n, uv)
-                }
-                for j in 0..<6 {
-                    let a = UInt32(ribbonBase + j * 2)
-                    m.tri(a, a + 2, a + 3); m.tri(a, a + 3, a + 1)
-                }
-            }
-        }
+        DioramaPuffKit.palm(seed: seed, lean: lean, light: light)
     }
 
     private static func makeFlamboyant(light: Bool = false) -> DioramaMesh {
-        var m = DioramaMesh()
-        var rng = DioramaRandom(seed: 61, salt: 29)
-        m.tube(from: DV3(0, 0, 0), to: DV3(0, 0, 3.4), r0: 0.34, r1: 0.22, sides: light ? 6 : 16, .trunk, cap: false)
-        for k in 0..<3 where !light {
-            let a = Double(k) / 3 * 2 * Double.pi
-            m.tube(from: DV3(0, 0, 3.2), to: DV3(cos(a) * 2.2, sin(a) * 2.2, 4.6), r0: 0.16, r1: 0.08, sides: 12, .trunk, cap: false)
-        }
-        lumpyCanopy(&m, centre: DV3(0, 0, 5.1), radius: 4.0, squash: 0.38, lumps: 12, palette: [.leafDark, .flamboyant, .flamboyant], rng: &rng, light: light)
-        return m
+        DioramaPuffKit.puffTree(seed: 61, trunkHeight: 3.2, radius: 4.0, squash: 0.46, ring: 7, spread: 0.66,
+                                DioramaPuffKit.flame, light: light, trunkRadius: 0.3)
     }
 
     // MARK: Shrubs and flowers
 
-    /// Low shrub: one moulded mound.
+    /// Low shrub: a few flattened puffs.
     private static func makeBush(seed: UInt64, _ s: DioramaSwatch, light: Bool = false) -> DioramaMesh {
-        var m = DioramaMesh()
-        var rng = DioramaRandom(seed: seed, salt: 26)
-        m.blob(centre: DV3(0, 0, 0.5), radii: DV3(rng.range(0.9...1.1), rng.range(0.8...1.0), 0.6), seed: seed, amplitude: 0.18, frequency: 3.2,
-               lower: .leafDark, mid: s, upper: s == .leafDark ? .leafMid : s, flattenBottom: 0.6, light: light)
-        return m
+        let gradient: DioramaPuffKit.Gradient
+        switch s {
+        case .leafOlive: gradient = DioramaPuffKit.olive
+        case .leafBright: gradient = DioramaPuffKit.lime
+        case .leafDark: gradient = DioramaPuffKit.deep
+        default: gradient = DioramaPuffKit.hedge
+        }
+        return DioramaPuffKit.bush(seed: seed, size: 0.95, puffs: 3, gradient, light: light)
     }
 
-    /// Flowering shrub: green mound studded with small coloured blooms.
+    /// Flowering shrub: green puff mound with a few bloom puffs on its crown.
     private static func makeFlowerBush(seed: UInt64, _ flower: DioramaSwatch, light: Bool = false) -> DioramaMesh {
-        var m = DioramaMesh()
-        var rng = DioramaRandom(seed: seed, salt: 27)
-        m.sphere(centre: DV3(0, 0, 0.42), radii: DV3(0.8, 0.75, 0.45), .hedge, detail: light ? 0 : 1)
-        for _ in 0..<(light ? 3 : 9) {
-            let a = rng.range(0...6.28), r = rng.range(0.1...0.65)
-            let p = DV3(cos(a) * r, sin(a) * r, 0.42 + 0.42 * (1 - (r / 0.8) * (r / 0.8)).squareRoot() * 0.9)
-            m.sphere(centre: p, radii: DV3(0.14, 0.14, 0.12), flower, detail: light ? -1 : 0)
+        let bloom: DioramaPuffKit.Gradient
+        switch flower {
+        case .flowerYellow: bloom = DioramaPuffKit.sunflower
+        case .flowerRed: bloom = DioramaPuffKit.poppy
+        case .flowerWhite: bloom = DioramaPuffKit.ivory
+        default: bloom = DioramaPuffKit.blossom
         }
-        return m
+        return DioramaPuffKit.flowerBush(seed: seed, bloom, light: light)
     }
 
     private static func makeBougainvillea(_ color: DioramaSwatch, light: Bool = false) -> DioramaMesh {
-        var m = DioramaMesh()
-        m.sphere(centre: DV3(0, 0.1, 1.85), radii: DV3(1.4, 0.8, 0.55), color, detail: light ? 0 : 1)
-        m.sphere(centre: DV3(0.7, 0.4, 1.5), radii: DV3(0.7, 0.45, 0.6), color, detail: light ? -1 : 0)
-        m.sphere(centre: DV3(-0.8, 0.45, 1.35), radii: DV3(0.65, 0.4, 0.7), .leafDark, detail: light ? -1 : 0)
-        m.sphere(centre: DV3(0.1, 0.5, 1.15), radii: DV3(0.55, 0.3, 0.8), color, detail: light ? -1 : 0)
-        return m
+        DioramaPuffKit.bougainvillea(color == .bougainvilleaOrange ? DioramaPuffKit.tangerine : DioramaPuffKit.magenta, light: light)
     }
 
     // MARK: Vehicles
@@ -759,11 +657,18 @@ nonisolated struct DioramaPropPlacer {
         mesh.extrude(rect.corners, z0: z, z1: z + 0.28, .kerb, top: .soil)
         let colours: [DioramaSwatch] = [.flowerPink, .flowerYellow, .flowerRed, .flowerWhite]
         let primary = rng.pick(colours)
-        let count = Int(halfLength * halfWidth * 7)
-        for _ in 0..<max(count, 4) {
+        // One low puff mound of foliage per bed (skill kit), blooms as single small puffs on top.
+        let mounds = max(1, Int((halfLength / max(halfWidth, 0.3)).rounded()))
+        var blobs: [DioramaPuffKit.Blob] = []
+        for k in 0..<mounds {
+            let u = mounds == 1 ? 0 : (Double(k) / Double(mounds - 1) * 2 - 1) * (halfLength - halfWidth * 0.8)
+            blobs.append(.init(DV3(c + axis * u, z + 0.3), radii: DV3(halfWidth * 0.95, halfWidth * 0.95, 0.26)))
+        }
+        DioramaPuffKit.canopy(&mesh, blobs, DioramaPuffKit.hedge, light: true, swatch: .hedge)
+        let count = Int(halfLength * halfWidth * 4)
+        for _ in 0..<max(count, 3) {
             let p = c + axis * rng.range(between: -halfLength + 0.15, and: halfLength - 0.15) + axis.left * rng.range(between: -halfWidth + 0.15, and: halfWidth - 0.15)
-            mesh.sphere(centre: DV3(p, z + 0.42), radii: DV3(0.16, 0.16, 0.14), .hedge, detail: 0)
-            mesh.sphere(centre: DV3(p, z + 0.55), radii: DV3(0.11, 0.11, 0.1), rng.chance(0.75) ? primary : rng.pick(colours), detail: 0)
+            mesh.sphere(centre: DV3(p, z + 0.55), radii: DV3(0.13, 0.13, 0.1), rng.chance(0.75) ? primary : rng.pick(colours), detail: -1)
         }
     }
 

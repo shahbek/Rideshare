@@ -105,9 +105,9 @@ nonisolated struct DioramaLightingPreset: Sendable {
                 sun: simd_normalize(SIMD3<Float>(-0.46, -0.42, 0.78)),
                 sunColor: SIMD3<Float>(1.0, 0.93, 0.80) * 0.80,
                 sky: SIMD3<Float>(0.70, 0.83, 1.0), ground: SIMD3<Float>(0.72, 0.76, 0.46),
-                glow: 0, ambientStrength: 0.64, shadowStrength: 0.82, saturation: 1.28, foliageWrap: 0.26,
+                glow: 0, ambientStrength: 0.64, shadowStrength: 0.82, saturation: 1.45, foliageWrap: 0.26,
                 tint: SIMD3<Float>(1.03, 1.0, 0.95), waterLift: 0.72,
-                haze: SIMD3<Float>(0.76, 0.87, 1.0), hazeAmount: 0.30,
+                haze: SIMD3<Float>(0.76, 0.87, 1.0), hazeAmount: 0.16,
                 contrast: 1.10, exposure: 1.04,
                 nativeAmbient: SIMD3<Float>(0.74, 0.85, 1.0), nativeAmbientIntensity: 0.62,
                 nativeDirectional: SIMD3<Float>(1.0, 0.93, 0.80), nativeDirectionalIntensity: 0.66,
@@ -117,9 +117,9 @@ nonisolated struct DioramaLightingPreset: Sendable {
                 sun: simd_normalize(SIMD3<Float>(-0.82, -0.42, 0.27)),
                 sunColor: SIMD3<Float>(1.0, 0.56, 0.30) * 0.82,
                 sky: SIMD3<Float>(0.56, 0.44, 0.86), ground: SIMD3<Float>(0.46, 0.30, 0.36),
-                glow: 0.95, ambientStrength: 0.62, shadowStrength: 0.76, saturation: 1.20, foliageWrap: 0.14,
+                glow: 0.95, ambientStrength: 0.62, shadowStrength: 0.76, saturation: 1.36, foliageWrap: 0.14,
                 tint: SIMD3<Float>(1.05, 0.97, 1.0), waterLift: 0.36,
-                haze: SIMD3<Float>(0.86, 0.56, 0.62), hazeAmount: 0.48,
+                haze: SIMD3<Float>(0.86, 0.56, 0.62), hazeAmount: 0.34,
                 contrast: 1.08, exposure: 1.02,
                 nativeAmbient: SIMD3<Float>(0.60, 0.50, 0.86), nativeAmbientIntensity: 0.56,
                 nativeDirectional: SIMD3<Float>(1.0, 0.58, 0.32), nativeDirectionalIntensity: 0.62,
@@ -129,9 +129,9 @@ nonisolated struct DioramaLightingPreset: Sendable {
                 sun: simd_normalize(SIMD3<Float>(0.30, 0.45, 0.84)),
                 sunColor: SIMD3<Float>(0.55, 0.68, 1.0) * 0.26,
                 sky: SIMD3<Float>(0.22, 0.30, 0.60), ground: SIMD3<Float>(0.10, 0.12, 0.24),
-                glow: 1.35, ambientStrength: 0.95, shadowStrength: 0.50, saturation: 0.82, foliageWrap: 0.0,
+                glow: 1.35, ambientStrength: 0.95, shadowStrength: 0.50, saturation: 1.0, foliageWrap: 0.0,
                 tint: SIMD3<Float>(0.90, 0.96, 1.12), waterLift: 0.16,
-                haze: SIMD3<Float>(0.08, 0.12, 0.26), hazeAmount: 0.50,
+                haze: SIMD3<Float>(0.08, 0.12, 0.26), hazeAmount: 0.40,
                 contrast: 1.06, exposure: 1.0,
                 nativeAmbient: SIMD3<Float>(0.30, 0.38, 0.66), nativeAmbientIntensity: 0.78,
                 nativeDirectional: SIMD3<Float>(0.60, 0.70, 1.0), nativeDirectionalIntensity: 0.26,
@@ -578,7 +578,8 @@ nonisolated enum DioramaShaderSource {
     float3 dioramaSodium(float3 c) {
         float l = dot(c, float3(0.30, 0.59, 0.11));
         float warm = saturate((c.r - c.b) / max(c.r, 1e-3) * 2.0);
-        return mix(c, float3(1.0, 0.50, 0.15) * (l * 1.55), warm * 0.85);
+        // Saturated sodium amber (2026-10-12 vibrancy pass): lamp pools read orange, not cream.
+        return mix(c, float3(1.0, 0.45, 0.09) * (l * 1.6), warm * 0.92);
     }
     float3 dioramaPointLights(float3 p, float3 n, constant DioramaUniforms &u,
                               const device DioramaLight *lights,
@@ -975,8 +976,10 @@ nonisolated enum DioramaShaderSource {
         }
         if (code > 5.5) { return dioramaRevealColor(in.color.rgb, 1.0, revealAlpha, u); }
         if (code > 3.5) {
-            float3 c = in.color.rgb * (0.55 + 0.8 * glow) + float3(0.12, 0.05, 0.0) * glow;
-            return dioramaRevealColor(min(c, float3(1.0)), 1.0, revealAlpha, u);
+            // Hue-preserving clamp: brightening never bleaches amber windows and lanterns to cream.
+            float3 c = in.color.rgb * (0.6 + 0.85 * glow);
+            c /= max(1.0, max(c.r, max(c.g, c.b)));
+            return dioramaRevealColor(c, 1.0, revealAlpha, u);
         }
 
         float3 n = normalize(in.normal);
@@ -1034,7 +1037,7 @@ nonisolated enum DioramaShaderSource {
         float4 rasterEpochs = float4(0.0);
         float2 rasterF = float2(0.0);
         // Organic breakup is only evaluated where a pixel is small enough to see it (no far aliasing).
-        float organicDetail = 1.0 - smoothstep(0.6, 2.5, footprint);
+        float organicDetail = clay ? 0.0 : 1.0 - smoothstep(0.6, 2.5, footprint);
         float breakup = 0.5, breakupFine = 0.5;
         if (paintedGround && organicDetail > 0.0) {
             breakup = mix(0.5, dioramaNoise(vegetationPosition * 0.21 + float2(2.3, -6.1)), organicDetail);
@@ -1144,7 +1147,29 @@ nonisolated enum DioramaShaderSource {
         float naturalCoverage = coastCoverage;
         float soilFraction = 0.0;
         grassDetailWeight = 0.0;
-        if (naturalArea > 0.0001) {
+        if (naturalArea > 0.0001 && clay) {
+            // Skill ground (style-spec §4/§6): flat palette polygons, grass graded between two
+            // vivid greens by one broad noise. No tufts, dryness, worn patches, clods or ripples.
+            if (paintedGround && finish.y > 0.0001) {
+                soilFraction = smoothstep(0.08, 0.94, dioramaEarthFraction(albedo));
+            }
+            float broad = dioramaNoise(vegetationPosition * 0.03 + float2(11.4, -7.2));
+            float3 grass = mix(float3(96.0, 150.0, 30.0), float3(150.0, 196.0, 52.0), smoothstep(0.22, 0.78, broad)) / 255.0;
+            float3 turfRatio = clamp(paintedPigment / float3(131.0, 173.0, 50.0) * 255.0, float3(0.80), float3(1.25));
+            grass = mix(grass, grass * turfRatio, (1.0 - soilFraction) * 0.85);
+            if (mown > 0.001) {
+                float phase = dot(vegetationPosition, float2(0.7071, 0.7071)) / 6.0;
+                float stripeAA = saturate(1.0 - fwidth(phase) * 2.0);
+                float stripe = smoothstep(-0.18, 0.18, sin(phase * 3.14159265)) * 2.0 - 1.0;
+                grass *= 1.0 + stripe * 0.075 * stripeAA * mown;
+            }
+            float3 ground = mix(grass, float3(184.0, 140.0, 88.0) / 255.0, soilFraction);
+            float sandShare = sandArea / naturalArea;
+            if (sandShare > 0.0001) {
+                ground = mix(ground, paintedPigment * float3(1.06, 0.99, 0.88), smoothstep(0.2, 0.8, sandShare));
+            }
+            albedo = mix(albedo, ground, naturalArea * (1.0 - naturalCoverage));
+        } else if (naturalArea > 0.0001) {
             if (paintedGround && finish.y > 0.0001) {
                 soilFraction = smoothstep(0.08, 0.94, dioramaEarthFraction(albedo));
             }
@@ -1217,8 +1242,10 @@ nonisolated enum DioramaShaderSource {
                 * (1.0 - smoothstep(0.60, 0.80, min(albedo.r, min(albedo.g, albedo.b))));
             float weather = bakedGrade ? gradeField.sample(gradeSampler, gradeUV).b
                                        : dioramaNoise(vegetationPosition * 0.055 + float2(8.2, 13.9));
-            float aggregate = dioramaNoise(vegetationPosition * 0.85);
-            float3 asphalt = mix(float3(119.0, 116.0, 111.0), float3(169.0, 156.0, 151.0), smoothstep(0.25, 0.76, weather)) / 255.0;
+            // Clay: the skill's lavender-grey road, one broad weathering field, no aggregate grain.
+            float aggregate = clay ? 0.5 : dioramaNoise(vegetationPosition * 0.85);
+            float3 asphalt = clay ? mix(float3(112.0, 104.0, 126.0), float3(138.0, 130.0, 152.0), smoothstep(0.25, 0.76, weather)) / 255.0
+                                  : mix(float3(119.0, 116.0, 111.0), float3(169.0, 156.0, 151.0), smoothstep(0.25, 0.76, weather)) / 255.0;
             asphalt *= 0.94 + 0.12 * aggregate;
             albedo = mix(albedo, asphalt, coolAsphalt * finish.z);
         } else if (tex > 3.5 && tex < 4.5) {
@@ -1226,20 +1253,15 @@ nonisolated enum DioramaShaderSource {
         }
 
         if (tex > 9.5 && tex < 10.5) {
-            // Source cluster tones + smooth normals retain depth inside each crown. Stable placement
-            // variation adds greener trees, rather than assigning every tree one pale lime material.
-            float luminance = dot(albedo, float3(0.2126, 0.7152, 0.0722));
-            float cluster = dioramaNoise(vegetationPosition * 0.38 + surfacePosition.z * 0.13);
-            float tone = saturate(smoothstep(0.20, 0.72, luminance) * 0.68
-                + smoothstep(-0.45, 0.92, surfaceNormal.z) * 0.22 + cluster * 0.10);
-            float3 shade = float3(48.0, 76.0, 37.0) / 255.0;
-            float3 middle = float3(99.0, 130.0, 56.0) / 255.0;
-            float3 crown = float3(168.0, 187.0, 98.0) / 255.0;
-            float greener = smoothstep(0.54, 0.90, in.treeVariation);
-            middle = mix(middle, float3(72.0, 122.0, 65.0) / 255.0, greener * 0.65);
-            crown = mix(crown, float3(137.0, 176.0, 94.0) / 255.0, greener * 0.55);
-            albedo = tone < 0.58 ? mix(shade, middle, tone / 0.58)
-                                 : mix(middle, crown, (tone - 0.58) / 0.42);
+            // Skill puff canopies: the vertex gradient (dark foot to bright crown) is the colour; a
+            // fine painterly grain (±6 %) is the only texture, faded once a pixel spans it.
+            float grainFade = 1.0 - smoothstep(0.25, 1.2, footprint);
+            if (grainFade > 0.0) {
+                float2 g = surfacePosition.xy * 1.9 + float2(surfacePosition.z * 1.3, -surfacePosition.z * 0.7);
+                float grain = dioramaNoise(g) * 0.6 + dioramaNoise(g * 2.7 + float2(5.1, -3.3)) * 0.4;
+                albedo *= 1.0 + (grain - 0.5) * 0.12 * grainFade;
+            }
+            albedo *= mix(float3(1.0), float3(0.93, 1.03, 0.90), smoothstep(0.54, 0.90, in.treeVariation) * 0.6);
         }
 
         // Legacy saved wall vertices already carry height grading; texture them without a rebuild.
@@ -1460,14 +1482,47 @@ nonisolated enum DioramaShaderSource {
             float aa = max(0.003, min(0.5, length(fwidth(wp)) * 0.65));
             float white = 0.0, yellow = 0.0;
             float3 whiteColor = float3(0.98, 0.96, 0.92), yellowColor = float3(0.96, 0.77, 0.19);
+            // Shader kerbs (color.w 3/4): coverage-weighted distance from the road edge and the
+            // direction into the road, averaged where neighbouring spans overlap.
+            float kerbCover = 0.0, kerbDistance = 0.0;
+            float2 kerbInward = float2(0.0);
+            float3 kerbColor = float3(0.95, 0.92, 0.88);
             for (uint k = 0; k < entry.y; k++) {
                 DioramaPaintTriangle t = detailLines ? detailPaint[detailPaintIndices[entry.x + k]] : paint[paintIndices[entry.x + k]];
                 if (t.color.w < 0.0) continue;
                 float3 p = float3(wp, 1.0);
                 float distance = min(dot(t.edge0.xyz, p), min(dot(t.edge1.xyz, p), dot(t.edge2.xyz, p)));
                 float coverage = smoothstep(-aa, aa, distance);
+                if (t.color.w > 2.5) {
+                    if (coverage <= 0.0) continue;
+                    bool farSide = t.color.w > 3.5;
+                    float s = dot(t.edge0.xyz, p);
+                    kerbDistance += coverage * (farSide ? 0.7 - s : s);
+                    kerbInward += coverage * (farSide ? -t.edge0.xy : t.edge0.xy);
+                    kerbCover += coverage;
+                    kerbColor = t.color.rgb;
+                    continue;
+                }
                 if (t.color.b < 0.5) { yellow += coverage; yellowColor = t.color.rgb; }
                 else { white += coverage; whiteColor = t.color.rgb; }
+            }
+            if (kerbCover > 0.001) {
+                // Pale 17 cm kerb top, an 8 cm face turned toward the road (lit by the real sun
+                // through the normal), then a soft gutter shadow fading over 45 cm of asphalt.
+                float s = kerbDistance / kerbCover;
+                float w = saturate(kerbCover);
+                float ka = max(aa, 0.012);
+                float top = 1.0 - smoothstep(0.17 - ka, 0.17 + ka, s);
+                float face = (1.0 - smoothstep(0.25 - ka, 0.25 + ka, s)) - top;
+                float gutter = smoothstep(0.25 - ka, 0.25 + ka, s) * (1.0 - smoothstep(0.25, 0.7, s));
+                float2 inward = kerbInward / max(length(kerbInward), 1e-5);
+                albedo = mix(albedo, kerbColor * mix(1.0, 0.86, face / max(top + face, 1e-4)), w * (top + face));
+                albedo *= 1.0 - w * gutter * 0.34;
+                float3 faceNormal = normalize(float3(inward, 0.4));
+                float3 lipNormal = normalize(float3(inward * 0.5, 1.0));
+                float lip = smoothstep(0.08, 0.17, s) * top;
+                detailNormal = normalize(mix(detailNormal, faceNormal, w * face));
+                detailNormal = normalize(mix(detailNormal, lipNormal, w * lip));
             }
             albedo = mix(albedo, whiteColor, saturate(white));
             albedo = mix(albedo, yellowColor, saturate(yellow));
@@ -1478,12 +1533,6 @@ nonisolated enum DioramaShaderSource {
         float3 litN = surfaceNormal;
         float hemi = litN.z * 0.5 + 0.5;
         float3 ambient = mix(u.groundColor.rgb, u.skyColor.rgb, hemi);
-        if (clay) {
-            // Clay keeps each surface's own colour: the sky/ground fill is eased toward a warm neutral
-            // of the same brightness, so shaded walls read as cooler plaster, not violet or olive.
-            float fill = dot(ambient, float3(0.30, 0.59, 0.11));
-            ambient = mix(ambient, float3(fill) * float3(1.04, 1.0, 0.95), 0.45);
-        }
         // Screen-space contact shadow wherever surfaces meet: walls and ground, trees and grass.
         float ao = 1.0;
         if (u.post.x > 0.001 && !mirrored) {
@@ -1492,9 +1541,9 @@ nonisolated enum DioramaShaderSource {
             ao = 1.0 - u.post.x * revealCoverage * (1.0 - occlusion.sample(aoSampler, suv).r);
         }
         float ndl = dot(detailNormal, u.sunDirection.xyz);
-        // Clay wraps the sun a little around every rounded form so chamfers shade as continuous
-        // curves instead of a hard terminator at the single bevel.
-        float wrap = foliage ? u.look.w : (clay ? 0.16 : 0.0);
+        // Clay uses the skill's wrap (0.45) so rounded forms shade as continuous curves; the
+        // cast-shadow lookup below must cover every face that wrapped sun still reaches.
+        float wrap = clay ? 0.45 : (foliage ? u.look.w : 0.0);
         float sun = saturate((ndl + wrap) / (1.0 + wrap)) * facade.sunMask;
         // Faces turned from the sun only use visibility for specular materials.
         float visibility = dioramaShadow(litPos, litN, u, shadowMap,
@@ -1504,6 +1553,16 @@ nonisolated enum DioramaShaderSource {
         visibility = mix(1.0, visibility, smoothstep(0.0, 0.12, dot(litN, u.sunDirection.xyz)));
         // Soft, Apple Maps-like cast shadows: the preset decides how much sun a shadow removes.
         float3 light = ambient * u.look.x * ao * facade.occlusion + u.sunColor.rgb * sun * mix(1.0, visibility, u.look.y) * (0.75 + 0.25 * ao);
+        if (clay) {
+            // Skill `stylize`: wrapped soft diffuse (wrap 0.45, smooth ramp) pulled toward a
+            // purple-blue shadow tint, plus hemisphere fill. Shadows stay coloured, never grey, so
+            // every surface keeps its own saturated hue on the shaded side.
+            float diff = smoothstep(0.02, 0.98, saturate((ndl + 0.45) / 1.45)) * facade.sunMask;
+            float lit = diff * mix(1.0, visibility, u.look.y);
+            float3 shadowTint = u.skyColor.rgb * float3(0.62, 0.55, 0.66);
+            float3 direct = mix(shadowTint, u.sunColor.rgb * 1.25, lit);
+            light = (direct * 0.78 + ambient * (0.30 * u.look.x / 0.64)) * ao * facade.occlusion;
+        }
         float3 pointLight = glow > 0.01 ? dioramaSodium(dioramaPointLights(litPos, litN, u, lights, lightTable, lightIndices)) : float3(0.0);
         // City glow: the orange wash of night satellite imagery comes from thousands of overlapping
         // sodium pools along every street, not from individual fixtures. A road-density field baked
@@ -1517,7 +1576,7 @@ nonisolated enum DioramaShaderSource {
             if (street > 0.001) {
                 float pooling = 0.72 + 0.28 * dioramaNoise(wp * 0.085 + float2(3.7, -1.3));
                 float facing = roofSurface ? 0.28 : (0.55 + 0.45 * saturate(litN.z));
-                cityGlow = float3(1.0, 0.47, 0.13) * (street * pooling * facing * glow * 0.52 * (0.7 + 0.3 * ao));
+                cityGlow = float3(1.0, 0.42, 0.07) * (street * pooling * facing * glow * 0.52 * (0.7 + 0.3 * ao));
             }
         }
         // Floodlit facades (Apple Maps-style material glow): every wall carries its height above
@@ -1533,8 +1592,8 @@ nonisolated enum DioramaShaderSource {
             float scallop = 1.0 - scallopFade * 0.55 * (0.5 - 0.5 * cos(along * 1.0471976));
             float uplight = exp(-h / 6.5) * (0.45 + 0.55 * street) * scallop;
             float body = smoothstep(7.0, 26.0, h) * (0.55 + 0.45 * smoothstep(26.0, 90.0, h));
-            float3 sodium = float3(1.0, 0.52, 0.17);
-            float3 warmWhite = float3(1.0, 0.80, 0.56);
+            float3 sodium = float3(1.0, 0.45, 0.10);
+            float3 warmWhite = float3(1.0, 0.66, 0.32);
             facadeGlow = (sodium * uplight * 0.85 + warmWhite * body * 0.42) * glow * (0.75 + 0.25 * ao);
         }
         float3 lampLight = pointLight * glow * (0.6 + 0.4 * ao) + cityGlow + facadeGlow;
@@ -1639,7 +1698,7 @@ nonisolated enum DioramaShaderSource {
             color += u.sunColor.rgb * gloss * visibility * (1.0 - rough) * 0.25;
         }
         // Rounded clay rim: a soft sky lift on grazing faces reads every form as a smooth solid.
-        float rim = pow(1.0 - saturate(dot(n, view)), clay ? 3.0 : 4.0) * (clay ? 0.07 : 0.035);
+        float rim = pow(1.0 - saturate(dot(n, view)), clay ? 3.0 : 4.0) * (clay ? 0.04 : 0.035);
         color += u.skyColor.rgb * rim;
         // Lamp pools stay warm: the moonlit night grade applies to sky and sun light only.
         float3 lampColor = albedo * lampLight;

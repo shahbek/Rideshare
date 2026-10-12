@@ -62,96 +62,66 @@ nonisolated enum DioramaVegetation {
 
     // MARK: Prototypes
 
+    /// Skill puff kit (`DioramaPuffKit`): puff crowns with canopy normals and a vertex gradient,
+    /// open trunks, buried faces dropped; 80-face puffs close, 20 far.
     private static func mesh(_ kind: Kind, light: Bool) -> DioramaMesh {
-        var m = DioramaMesh()
-        let sides = light ? 4 : 8
-        let detail = light ? -1 : 0
-        var rng = DioramaRandom(seed: UInt64(kind.rawValue + 1), salt: 0x56_45_47)
-        func crown(fork: Double, trunk: Double, lobes: Int, spread: Double, lobe: Double, squash: Double,
-                   lift: Double, palette: [DioramaSwatch], top: DioramaSwatch, under: DioramaSwatch?) {
-            let phase = rng.range(0...Double.pi * 2)
-            for k in 0..<lobes {
-                let a = phase + Double(k) * Double.pi * 2 / Double(lobes) + rng.range(-0.25...0.25)
-                let offset = DV2(cos(a), sin(a)) * spread * rng.range(0.82...1.08)
-                let centre = DV3(offset, fork + lift + rng.range(-0.3...0.45))
-                if !light || k % 2 == 0 {
-                    m.tube(from: DV3(0, 0, fork * 0.8), to: DV3(offset * 0.6, centre.z - lobe * squash * 0.5),
-                           r0: trunk * 0.62, r1: trunk * 0.22, sides: light ? 3 : 6, .trunk)
-                }
-                let r = lobe * rng.range(0.85...1.1)
-                m.sphere(centre: centre, radii: DV3(r, r * rng.range(0.88...1.0), r * squash), palette[k % palette.count], detail: detail)
-            }
-            m.sphere(centre: DV3(0, 0, fork + lift + lobe * squash * 0.75), radii: DV3(lobe * 1.05, lobe, lobe * squash * 1.05), top, detail: detail)
-            if let under, !light {
-                m.sphere(centre: DV3(0, 0, fork + lift - lobe * squash * 0.25), radii: DV3(lobe * 0.95, lobe * 0.9, lobe * squash * 0.6), under, detail: 0)
-            }
-        }
+        let seed = UInt64(kind.rawValue + 1) &* 0x9E37
+        var rng = DioramaRandom(seed: seed, salt: 0x56_45_47)
         switch kind {
         case .shadeGiant:
-            // Wide fig/rain-tree crown, 11–12 m tall and about 14 m across.
-            m.tube(from: DV3(0, 0, 0), to: DV3(0.15, 0, 3.4), r0: 0.62, r1: 0.42, sides: sides, .trunk)
-            if !light { m.cylinder(centre: .zero, z0: 0, z1: 0.35, r0: 0.95, r1: 0.62, sides: sides, .trunk) }
-            crown(fork: 3.4, trunk: 0.5, lobes: light ? 5 : 7, spread: 3.6, lobe: 2.9, squash: 0.62, lift: 2.6,
-                  palette: [.leafDark, .leafMid, .leafOlive], top: .leafMid, under: .leafDark)
+            // Wide fig/rain-tree crown, 11-12 m tall and about 14 m across.
+            return DioramaPuffKit.puffTree(seed: seed, trunkHeight: 3.6, radius: 5.4, squash: 0.62, ring: 7, spread: 0.62,
+                                           DioramaPuffKit.green, light: light, trunkRadius: 0.55)
         case .mango:
-            // Dense dark evergreen dome, low skirt.
-            m.tube(from: DV3(0, 0, 0), to: DV3(0, 0, 2.2), r0: 0.42, r1: 0.32, sides: sides, .trunk)
-            m.sphere(centre: DV3(0, 0, 5.0), radii: DV3(3.8, 3.6, 3.2), .leafDark, detail: detail)
-            crown(fork: 2.2, trunk: 0.32, lobes: light ? 3 : 5, spread: 2.4, lobe: 2.0, squash: 0.85, lift: 2.4,
-                  palette: [.leafDark, .leafMid], top: .leafDark, under: nil)
+            // Dense dark evergreen dome on a short trunk.
+            return DioramaPuffKit.puffTree(seed: seed, trunkHeight: 2.2, radius: 3.8, squash: 0.86, ring: 6, spread: 0.5,
+                                           DioramaPuffKit.deep, light: light, trunkRadius: 0.4)
         case .pinkTabebuia:
-            // Pink trumpet tree in bloom: open forked crown of pink clusters over a few green ones.
-            m.tube(from: DV3(0, 0, 0), to: DV3(0.1, 0, 2.9), r0: 0.3, r1: 0.22, sides: sides, .trunk)
-            crown(fork: 2.9, trunk: 0.26, lobes: light ? 4 : 6, spread: 2.0, lobe: 1.65, squash: 0.78, lift: 1.8,
-                  palette: [.flowerPink, .flowerPink, .leafMid], top: .flowerPink, under: .leafMid)
+            return DioramaPuffKit.puffTree(seed: seed, trunkHeight: 2.9, radius: 2.8, squash: 0.8, ring: 6, spread: 0.6,
+                                           DioramaPuffKit.blossom, light: light, trunkRadius: 0.28)
         case .flamboyant:
-            m.tube(from: DV3(0, 0, 0), to: DV3(0, 0, 3.0), r0: 0.36, r1: 0.26, sides: sides, .trunk)
-            crown(fork: 3.0, trunk: 0.3, lobes: light ? 4 : 7, spread: 3.3, lobe: 2.2, squash: 0.42, lift: 1.4,
-                  palette: [.flamboyant, .leafMid, .flamboyant], top: .flamboyant, under: .leafDark)
+            // Flame tree: a broad, flat scarlet umbrella.
+            return DioramaPuffKit.puffTree(seed: seed, trunkHeight: 3.0, radius: 4.2, squash: 0.48, ring: 7, spread: 0.66,
+                                           DioramaPuffKit.flame, light: light, trunkRadius: 0.34)
         case .umbrellaAcacia:
-            // Flat-topped savanna acacia: slim forked stems under a wide thin table.
-            m.tube(from: DV3(0, 0, 0), to: DV3(0.2, 0.1, 3.6), r0: 0.24, r1: 0.16, sides: sides, .trunk)
-            if !light {
-                m.tube(from: DV3(0.2, 0.1, 3.0), to: DV3(-1.6, 0.8, 4.8), r0: 0.14, r1: 0.07, sides: 5, .trunk)
-                m.tube(from: DV3(0.2, 0.1, 3.2), to: DV3(1.8, -0.9, 4.9), r0: 0.14, r1: 0.07, sides: 5, .trunk)
-            }
-            crown(fork: 3.6, trunk: 0.2, lobes: light ? 4 : 6, spread: 2.8, lobe: 2.0, squash: 0.32, lift: 1.4,
-                  palette: [.leafOlive, .leafMid], top: .leafOlive, under: nil)
+            // Flat-topped savanna acacia: slim stem under a wide thin table.
+            return DioramaPuffKit.puffTree(seed: seed, trunkHeight: 3.8, radius: 3.6, squash: 0.36, ring: 6, spread: 0.7,
+                                           DioramaPuffKit.olive, light: light, trunkRadius: 0.22)
         case .neem:
             // Tall oval shade tree along roads.
-            m.tube(from: DV3(0, 0, 0), to: DV3(0, 0, 3.6), r0: 0.36, r1: 0.26, sides: sides, .trunk)
-            for tier in 0..<(light ? 3 : 4) {
-                let t = Double(tier)
-                let r = 2.4 - t * 0.35
-                m.sphere(centre: DV3(0.2 * sin(t * 2.1), 0.2 * cos(t * 1.7), 5.0 + t * 1.6), radii: DV3(r, r * 0.92, 1.6),
-                         tier == 3 ? .leafLight : (tier % 2 == 0 ? .leafMid : .leafDark), detail: detail)
-            }
+            return DioramaPuffKit.tieredTree(seed: seed, trunkHeight: 3.4, tiers: 4, radius: 2.5, taper: 0.4, step: 1.5,
+                                             DioramaPuffKit.green, light: light)
         case .palm:
-            m = DioramaPropLibrary.makePalm(seed: 41, lean: 0.8, light: light)
+            return DioramaPuffKit.palm(seed: 41, lean: 0.8, light: light)
         case .baobab:
-            // Swollen bottle trunk with short stubby limbs and sparse leaf clusters.
-            m.cylinder(centre: .zero, z0: 0, z1: 3.2, r0: 1.45, r1: 1.05, sides: light ? 6 : 12, .palmTrunk)
-            m.cylinder(centre: .zero, z0: 3.2, z1: 5.6, r0: 1.05, r1: 0.62, sides: light ? 6 : 12, .palmTrunk)
-            for k in 0..<(light ? 3 : 6) {
-                let a = Double(k) * Double.pi * 2 / Double(light ? 3 : 6) + 0.4
+            // Swollen bottle trunk, short stubby limbs, sparse leaf puffs.
+            var m = DioramaMesh()
+            DioramaPuffKit.limb(&m, from: DV3(0, 0, -0.05), to: DV3(0, 0, 3.2), r0: 1.45, r1: 1.05, light: light, .palmTrunk)
+            DioramaPuffKit.limb(&m, from: DV3(0, 0, 3.2), to: DV3(0, 0, 5.6), r0: 1.05, r1: 0.62, light: light, .palmTrunk)
+            var blobs: [DioramaPuffKit.Blob] = []
+            let limbs = light ? 3 : 5
+            for k in 0..<limbs {
+                let a = Double(k) * Double.pi * 2 / Double(limbs) + 0.4
                 let tip = DV3(cos(a) * 3.0, sin(a) * 3.0, 7.4 + Double(k % 2) * 0.6)
-                m.tube(from: DV3(0, 0, 5.2), to: tip, r0: 0.42, r1: 0.16, sides: light ? 3 : 6, .palmTrunk)
-                m.sphere(centre: tip + DV3(0, 0, 0.4), radii: DV3(1.2, 1.1, 0.7), .leafOlive, detail: detail)
+                DioramaPuffKit.limb(&m, from: DV3(0, 0, 5.2), to: tip, r0: 0.42, r1: 0.16, light: light, .palmTrunk)
+                blobs.append(.init(tip + DV3(0, 0, 0.4), 1.25, squash: 0.62))
             }
+            DioramaPuffKit.canopy(&m, blobs, DioramaPuffKit.olive, light: light)
+            return m
         case .scrubBush:
-            m.blob(centre: DV3(0, 0, 0.7), radii: DV3(1.35, 1.15, 0.85), seed: 31, amplitude: 0.24, frequency: 3.0,
-                   lower: .leafDark, mid: .leafOlive, upper: .hedge, flattenBottom: 0.6, light: light)
+            return DioramaPuffKit.bush(seed: seed, size: 1.25, puffs: 4, DioramaPuffKit.olive, light: light)
         case .thicket:
-            for (k, offset) in [DV2(0, 0), DV2(1.4, 0.6), DV2(-1.1, 0.9)].enumerated() where !light || k < 2 {
-                m.blob(centre: DV3(offset, 1.0 - Double(k) * 0.15), radii: DV3(1.5, 1.3, 1.15 - Double(k) * 0.15), seed: UInt64(33 + k),
-                       amplitude: 0.26, frequency: 2.8, lower: .leafDark, mid: k == 1 ? .leafOlive : .hedge, upper: .leafMid,
-                       flattenBottom: 0.5, light: light)
+            var m = DioramaMesh()
+            var blobs: [DioramaPuffKit.Blob] = []
+            for (k, offset) in [DV2(0, 0), DV2(1.4, 0.6), DV2(-1.1, 0.9), DV2(0.3, -1.2)].enumerated() where !light || k < 2 {
+                let r = rng.range(1.15...1.45)
+                blobs.append(.init(DV3(offset, r * 0.75), r, squash: 0.82))
             }
+            DioramaPuffKit.canopy(&m, blobs, DioramaPuffKit.hedge, light: light, swatch: .hedge)
+            return m
         case .lowShrub:
-            m.blob(centre: DV3(0, 0, 0.42), radii: DV3(0.85, 0.75, 0.5), seed: 37, amplitude: 0.18, frequency: 3.4,
-                   lower: .leafDark, mid: .leafDark, upper: .leafMid, flattenBottom: 0.6, light: light)
+            return DioramaPuffKit.bush(seed: seed, size: 0.7, puffs: 3, DioramaPuffKit.hedge, light: light)
         }
-        return m
     }
 
     // MARK: Placement

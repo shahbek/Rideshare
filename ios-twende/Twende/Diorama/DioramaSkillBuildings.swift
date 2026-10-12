@@ -272,7 +272,7 @@ nonisolated struct DioramaSkillBuildings: Sendable {
                     let n = SIMD3(source.normal.x, source.normal.y, source.normal.z)
                     let p = SIMD3(source.position.x, source.position.y, source.position.z) + n * 0.015
                     vertices.append(BuildingRenderVertex(position: SIMD4(p, 1), normal: source.normal,
-                        color: SIMD4(1.0, 0.80, 0.52, 1), appearance: SIMD4(0.85, 1, 0, 4)))
+                        color: SIMD4(1.0, 0.64, 0.20, 1), appearance: SIMD4(0.85, 1, 0, 4)))
                 }
                 let begin = indices.count
                 for t in stride(from: 0, to: module.indexCount - 2, by: 3) {
@@ -358,13 +358,23 @@ nonisolated struct DioramaSkillBuildings: Sendable {
         n = simd_length(n) > 0.001 ? simd_normalize(n) : SIMD3(0, 0, 1)
         let glass = raw.loadUnaligned(fromByteOffset: o + 9, as: UInt8.self) == 1
         let ao = Float(raw.loadUnaligned(fromByteOffset: o + 13, as: UInt8.self)) / 255
-        let rgb = SIMD3<Float>(Float(raw.loadUnaligned(fromByteOffset: o + 10, as: UInt8.self)),
-                               Float(raw.loadUnaligned(fromByteOffset: o + 11, as: UInt8.self)),
-                               Float(raw.loadUnaligned(fromByteOffset: o + 12, as: UInt8.self))) / 255 * ao
+        let source = SIMD3<Float>(Float(raw.loadUnaligned(fromByteOffset: o + 10, as: UInt8.self)),
+                                  Float(raw.loadUnaligned(fromByteOffset: o + 11, as: UInt8.self)),
+                                  Float(raw.loadUnaligned(fromByteOffset: o + 12, as: UInt8.self))) / 255
+        let rgb = (glass ? source : Self.vivid(source)) * ao
         // Painted surfaces carry no material code, so no texture, facade or retrofit pass touches
         // them; glass gets the renderer's quiet sky reflection (material 6).
         return BuildingRenderVertex(position: SIMD4(p, 1), normal: SIMD4(n, 0), color: SIMD4(rgb, 1),
                                     appearance: SIMD4(0.85, glass ? 6 : 0, 0, 0))
+    }
+
+    /// The skill's pastel palette pushed toward Dar es Salaam's saturated paint: chroma ×1.45 around
+    /// the colour's own luminance (near-whites gain least), clamped to the displayable range.
+    static func vivid(_ c: SIMD3<Float>) -> SIMD3<Float> {
+        let luminance = simd_dot(c, SIMD3(0.2126, 0.7152, 0.0722))
+        let chroma = (c.max() - c.min())
+        let boost: Float = chroma < 0.03 ? 1.0 : 1.45
+        return simd_clamp(SIMD3(repeating: luminance) + (c - SIMD3(repeating: luminance)) * boost, SIMD3(repeating: 0), SIMD3(repeating: 1))
     }
 
     /// Winds a triangle counter-clockwise around its vertex normals (the renderer culls back faces).

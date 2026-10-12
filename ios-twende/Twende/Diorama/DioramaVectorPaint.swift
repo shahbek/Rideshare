@@ -18,7 +18,9 @@ nonisolated struct DioramaVectorPaint: Sendable {
 
     /// edge0.w carries the finish layer (pieces of one operation union); edge1.w the raster epoch the
     /// layer was painted in (compact tiles, see `DioramaGroundPainter`).
-    init(rings: [(ring: [DV2], color: SIMD4<Float>)] = [], rect: DioramaRect? = nil, layers: [UInt32] = [], epochs: [UInt32] = []) {
+    /// `kerbs` are prebuilt shader-kerb records (see `DioramaGroundPainter.kerb`) with their bounds.
+    init(rings: [(ring: [DV2], color: SIMD4<Float>)] = [], rect: DioramaRect? = nil, layers: [UInt32] = [], epochs: [UInt32] = [],
+         kerbs: [(DioramaPaintTriangle, DioramaRect)] = []) {
         guard let rect else { return }
         var bins = [[UInt32]](repeating: [], count: Self.cells * Self.cells)
         func cell(_ value: Double, _ origin: Double, _ extent: Double) -> Int {
@@ -45,6 +47,15 @@ nonisolated struct DioramaVectorPaint: Sendable {
                 for y in cell(bounds.minY, rect.minY, rect.height)...cell(bounds.maxY, rect.minY, rect.height) {
                     for x in cell(bounds.minX, rect.minX, rect.width)...cell(bounds.maxX, rect.minX, rect.width) { bins[y * Self.cells + x].append(index) }
                 }
+            }
+        }
+        for (triangle, box) in kerbs {
+            let bounds = box.expanded(by: 0.6)
+            guard bounds.intersects(rect) else { continue }
+            let index = UInt32(triangles.count)
+            triangles.append(triangle)
+            for y in cell(bounds.minY, rect.minY, rect.height)...cell(bounds.maxY, rect.minY, rect.height) {
+                for x in cell(bounds.minX, rect.minX, rect.width)...cell(bounds.maxX, rect.minX, rect.width) { bins[y * Self.cells + x].append(index) }
             }
         }
         for i in bins.indices {

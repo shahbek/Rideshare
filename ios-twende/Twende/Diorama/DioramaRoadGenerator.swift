@@ -3,8 +3,10 @@ import Foundation
 
 /// Roads are paint. Pavements, carriageways, lane dashes, edge lines, crossings and give-way marks are
 /// drawn into the tile's ground image in that order, so later fills cover earlier ones with smooth
-/// anti-aliased edges and nothing is stacked as geometry. The only road geometry left is the kerb
-/// stone: a low strip along exposed carriageway boundaries, dropped at crossings and driveways.
+/// anti-aliased edges and nothing is stacked as geometry. Kerbs are shader paint too on compact
+/// tiles (`DioramaGroundPainter.kerb`): a pale top, lit face and gutter shadow drawn from the
+/// distance to the road edge, dropped at crossings and driveways. Kerb geometry is only built
+/// where vector paint is unavailable.
 nonisolated struct DioramaRoadGenerator {
     let config: DioramaConfig
     let data: DioramaTileData
@@ -108,17 +110,32 @@ nonisolated struct DioramaRoadGenerator {
             return DioramaPolygon.triangulate(ccw).map { [ccw[$0.0], ccw[$0.1], ccw[$0.2]] }
         })
         var spans: [(DV2, DV2)] = []
+        let shaderKerbs = painter.paintsKerbs
         for edge in layout.carriageway.boundary() {
             let mid = (edge.a + edge.b) * 0.5
             guard isPaved(near: mid) else { continue }
             for segment in obstacles.outsideSegments(edge.a, edge.b, within: data.rect.expanded(by: -0.3)) {
                 let line = DioramaPolygon.densify([segment.0, segment.1], maxStep: 0.75)
+                // Carriageway rings are counter-clockwise: the road is on the left of every edge.
+                let inward = (segment.1 - segment.0).normalized.left
+                var run: DV2? = nil, runEnd = line[0]
                 for (a, b) in zip(line, line.dropFirst()) {
-                    guard !ramps.contains(where: { $0.covers((a + b) * 0.5) }) else { continue }
-                    spans.append((a, b))
+                    guard !ramps.contains(where: { $0.covers((a + b) * 0.5) }) else {
+                        if let start = run { painter.kerb(start, runEnd, inward: inward); run = nil }
+                        continue
+                    }
+                    if shaderKerbs {
+                        if run == nil { run = a }
+                        runEnd = b
+                    } else {
+                        spans.append((a, b))
+                    }
                 }
+                if let start = run { painter.kerb(start, runEnd, inward: inward) }
             }
         }
+        // Compact tiles paint kerbs in the shader; geometry only where vector paint is unavailable.
+        guard !shaderKerbs else { return }
         for line in DioramaLinearGeometry.chains(spans) {
             mesh.mouldedStrip(line, halfWidth: 0.12, height: config.kerbHeight + 0.08,
                 radius: 0.045, lateralOffset: 0.07, swatch: .kerb,
