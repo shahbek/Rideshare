@@ -141,6 +141,11 @@ nonisolated struct DioramaBuildingGenerator {
             }
         }
 
+        if DioramaConfig.shaderFacades {
+            return shaderFacadeBuilding(f, kind: kind, floors: floors, height: height, box: box, wallColor: wallColor,
+                ground: ground, override: override, lights: lights, rng: &rng, into: &mesh, pointLights: &pointLights)
+        }
+
         // Same-material wall bases follow the existing slope, never a separate pedestal.
         for i in ring.indices where !flags[i] {
             let a = ring[i], b = ring[(i + 1) % ring.count]
@@ -328,6 +333,128 @@ nonisolated struct DioramaBuildingGenerator {
 
     private func roofColor(_ rng: inout DioramaRandom) -> DioramaSwatch {
         rng.pick(district.pitchedRoofColors)
+    }
+
+    // MARK: Shader facades
+
+    /// The same house in a fraction of the triangles: one wall quad per footprint edge (openings,
+    /// doors, shopfronts, galleries, floor lines, plinth and rounded corners are drawn by the
+    /// shader), the unchanged roof kit, and a flat deck that is either a soft-rimmed lid or a
+    /// three-face parapet. Real 3D stays only where it casts a readable shadow: sunshade ledges,
+    /// shop canopies, roof tanks and stair heads.
+    private func shaderFacadeBuilding(_ f: DioramaBuildingFeature, kind: DioramaBuildingKind, floors: Int, height rawHeight: Double,
+                                      box: DioramaOrientedRect, wallColor: DioramaSwatch, ground: Double,
+                                      override: DioramaBuildingOverride?, lights: Bool, rng: inout DioramaRandom,
+                                      into mesh: inout DioramaMesh, pointLights: inout [DioramaLight]) -> DioramaBuilt {
+        let ring = f.ring, flags = f.clipped.count == f.ring.count ? f.clipped : Array(repeating: false, count: f.ring.count)
+        let n = ring.count
+        // Snap the storey to a height the shader encodes exactly so floor lines meet the roof.
+        let storey = DioramaFacade.snapStorey(rawHeight / Double(floors))
+        let height = storey * Double(floors)
+        let front = frontEdge(ring, flags: flags, centroid: f.centroid)
+        let frontOut = front >= 0 ? (ring[(front + 1) % n] - ring[front]).normalized.right : DV2(0, -1)
+        let galleries = district == .masaki && kind == .apartments && floors >= 3
+        let style: DioramaFacade.Style = kind == .villa ? .villa : (kind == .commercial ? .commercial : .masonry)
+        mesh.facadeRing(ring, skip: flags, bottom: { p in terrain.height(p) - ground - 0.25 }, top: height,
+                        wallColor, front: front) { i in
+            let a = ring[i], b = ring[(i + 1) % n]
+            guard a.distance(to: b) > 2.4 else { return DioramaFacade(style: .plain, storey: storey) }
+            if galleries, abs((b - a).normalized.right.dot(frontOut)) > 0.8 {
+                return DioramaFacade(style: .gallery, storey: storey)
+            }
+            return DioramaFacade(style: style, storey: storey)
+        }
+
+        var flatRoof = kind != .villa
+        if kind == .villa, rng.chance(1 - config.hipRoofShare) { flatRoof = true }
+        if district == .masaki, kind == .apartments, floors <= 10, rng.chance(0.5) { flatRoof = false }
+        if district == .city, kind == .villa, floors >= 2 { flatRoof = !rng.chance(0.25) }
+        var roofRoll = DioramaRandom(seed: f.id, salt: 0x52_4F_4F_46)
+        let roll = roofRoll.unit()
+        if flatRoof, override == nil, kind != .villa, floors <= 2, roofRoll.chance(district == .masaki ? 0.25 : 0.6) { flatRoof = false }
+        if !flatRoof, flags.contains(true) { flatRoof = true }
+        if let forced = override?.flatRoof { flatRoof = forced || flags.contains(true) }
+        let pitchedColor = override?.roofColor ?? roofColor(&rng)
+        if !flatRoof {
+            let pitch = config.roofPitchDegrees * Double.pi / 180
+            let shape = DioramaRoofKit.shape(of: ring)
+            var roofed = false
+            if kind == .villa, shape.rectangularity > 0.55, roll < 0.55 || !shape.isConvex {
+                roofed = DioramaRoofBuilder.hip(ring, flags: flags, z: height, pitch: pitch,
+                                               overhang: config.roofOverhang, maxRise: config.hipRoofMaxRise,
+                                               color: pitchedColor, fascia: .trimWhite, into: &mesh, footprint: ring)
+            }
+            if !roofed {
+                let modern = district == .masaki && kind == .villa
+                for form in DioramaRoofKit.candidates(for: shape, roll: roll, modern: modern) {
+                    let formPitch = form == .pyramid ? pitch * 1.1 : (form == .gable || form == .jerkinhead ? pitch * 1.05 : pitch)
+                    if DioramaRoofKit.build(form, ring: ring, flags: flags, z: height, pitch: formPitch,
+                                            overhang: form == .shed ? config.roofOverhang * 0.7 : config.roofOverhang,
+                                            maxRise: config.hipRoofMaxRise, color: pitchedColor, fascia: .trimWhite,
+                                            gable: wallColor, into: &mesh) {
+                        roofed = true
+                        break
+                    }
+                }
+            }
+            if !roofed { flatRoof = true }
+        }
+        let deckColor = override?.roofColor ?? .roofConcrete
+        var deck = height
+        if flatRoof {
+            if kind == .apartments || (district == .city && floors >= 2) {
+                deck = shaderParapet(ring, flags: flags, z: height, color: wallColor, deck: deckColor, storey: storey, into: &mesh)
+            } else {
+                // Rim normals lean outward: the deck edge shades as a rounded roll with no bevel faces.
+                mesh.softLid(ring, z: height, lean: 0.6, deckColor)
+            }
+        }
+
+        var entrance = f.centroid
+        var entranceOut = DV2(0, -1)
+        if front >= 0 {
+            let a = ring[front], b = ring[(front + 1) % n]
+            entrance = (a + b) * 0.5
+            entranceOut = frontOut
+            if lights {
+                let length = a.distance(to: b)
+                pointLights.append(DioramaLight(position: DV3(entrance + frontOut * 1.2, ground + 2.8),
+                    color: SIMD3<Float>(1.0, 0.82, 0.58), radius: 6.5, intensity: 0.75))
+                if floors >= 2 {
+                    pointLights.append(DioramaLight(position: DV3(entrance + frontOut * 1.4, ground + height * 0.55),
+                        color: SIMD3<Float>(1.0, 0.78, 0.50), radius: min(max(length * 0.55 + 3.5, 5), 14),
+                        intensity: config.facadeLightIntensity))
+                }
+            }
+        }
+        if !galleries {
+            districtDetails(ring: ring, flags: flags, front: front, kind: kind, floors: floors, storeyHeight: storey,
+                            height: height, flatRoof: flatRoof, wallColor: wallColor, recessed: true, rng: &rng, into: &mesh)
+        }
+        // roofFurniture adds the legacy rounded-edge bevel for non-apartments; the soft lid has none.
+        roofFurniture(ring: ring, box: box, height: kind == .apartments ? deck : deck - config.roofBevel,
+                      flatRoof: flatRoof, kind: kind, rng: &rng, into: &mesh)
+        return DioramaBuilt(feature: f, kind: kind, floors: floors, height: height, box: box, flatRoof: flatRoof,
+                            wallColor: wallColor, entrance: entrance, entranceOut: entranceOut)
+    }
+
+    /// Parapet around a flat deck: the facade wall continues 0.8 m as a blank render band, then a
+    /// coping top and an inner face. Returns the deck height.
+    private func shaderParapet(_ ring: [DV2], flags: [Bool], z: Double, color: DioramaSwatch, deck: DioramaSwatch,
+                               storey: Double, into mesh: inout DioramaMesh) -> Double {
+        let n = ring.count
+        let rise = 0.8, thickness = 0.25
+        mesh.polygon(ring, z: z, deck)
+        mesh.facadeRing(ring, skip: flags, bottom: { _ in z }, top: z + rise, color) { _ in
+            DioramaFacade(style: .plain, storey: storey)
+        }
+        guard let inner = DioramaPolygon.offset(ring, by: -thickness), inner.count == n else { return z }
+        for i in 0..<n where !flags[i] {
+            let j = (i + 1) % n
+            mesh.quad(DV3(ring[i], z + rise), DV3(ring[j], z + rise), DV3(inner[j], z + rise), DV3(inner[i], z + rise), color, normal: .up)
+            mesh.wall(inner[j], inner[i], z0: z, z1: z + rise, color)
+        }
+        return z
     }
 
     // MARK: District character

@@ -28,7 +28,10 @@ nonisolated enum DioramaMeshPacking {
             default: texture = 0
             }
             let attribute = i < mesh.attributes.count ? mesh.attributes[i] : 0
-            let appearance = SIMD4<Float>(0.85, legacyMaterials && texture > 9.5 ? 0 : texture, attribute.isFinite ? attribute : 0, halo ? 5 : code)
+            // Shader facades replace the swatch material and add their corner/front flags.
+            let surface = i < mesh.surfaces.count ? mesh.surfaces[i] : .zero
+            let material: Float = surface.x > 0 ? surface.x : (legacyMaterials && texture > 9.5 ? 0 : texture)
+            let appearance = SIMD4<Float>(0.85, material, attribute.isFinite ? attribute : 0, (halo ? 5 : code) + surface.y)
             var color = cell.map { DioramaAtlas.color($0.swatch, dark: $0.dark, config: config) } ?? SIMD4<Float>(1, 0, 1, 1)
             if i < mesh.tints.count {
                 let t = mesh.tints[i]

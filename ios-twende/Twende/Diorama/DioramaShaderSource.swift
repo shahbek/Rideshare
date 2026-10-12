@@ -491,7 +491,15 @@ nonisolated enum DioramaShaderSource {
 
     float dioramaShadow(float3 p, float3 n, constant DioramaUniforms &u, depth2d<float> shadowMap, bool needed = true) {
         if (u.shadowParams.x < 0.5) return 1.0;
-        float4 projected = u.shadowMatrix * float4(p + n * 0.06, 1.0);
+        // Normal offset scaled to the shadow texel (and more at grazing light), so a surface never
+        // tests against its own depth sample: removes the striped acne on walls and decks.
+        float2 uvPerMetre = 0.5 * float2(
+            length(float3(u.shadowMatrix[0].x, u.shadowMatrix[1].x, u.shadowMatrix[2].x)),
+            length(float3(u.shadowMatrix[0].y, u.shadowMatrix[1].y, u.shadowMatrix[2].y)));
+        float texelMetres = u.shadowParams.y / max(min(uvPerMetre.x, uvPerMetre.y), 1e-6);
+        float facing = saturate(dot(n, u.sunDirection.xyz));
+        float normalOffset = min(0.06 + texelMetres * (0.7 + 1.5 * (1.0 - facing)), 0.6);
+        float4 projected = u.shadowMatrix * float4(p + n * normalOffset, 1.0);
         float3 q = projected.xyz / projected.w;
         float2 uv = float2(q.x * 0.5 + 0.5, 0.5 - q.y * 0.5);
         if (any(uv < float2(0.002)) || any(uv > float2(0.998)) || q.z <= 0.0 || q.z >= 1.0) return 1.0;
@@ -729,6 +737,198 @@ nonisolated enum DioramaShaderSource {
             + float2(-0.31, 0.49) * crest.y * 0.16 + float2(1.9, 1.2) * crest.z * 0.015;
     }
 
+    /// Height above the building base from a wall's height attribute; shader-facade walls add
+    /// 1000 per decimetre of ground-floor height on top (see DioramaFacade.swift).
+    float dioramaWallHeight(float raw) { return raw - 100.0 - 1000.0 * floor(raw / 1000.0); }
+    /// Signed box distance in wall space (negative inside), for antialiased openings.
+    float dioramaWallBox(float2 p, float2 lo, float2 hi) {
+        float2 d = max(lo - p, p - hi);
+        return max(d.x, d.y);
+    }
+
+    struct DioramaFacadeSample {
+        float3 albedo;
+        float3 normal;
+        float3 emissive;
+        float glass;
+        float sunMask;
+        float occlusion;
+    };
+
+    /// Shader facade on a single wall quad: openings, doors, shopfronts, galleries, curtain grids,
+    /// slab lines, sills, hoods, plinth and rounded vertical corners, drawn from the wall's own
+    /// coordinates. The along-wall position comes from the encoded fraction f and the wall length
+    /// from the ratio of screen derivatives (along-wall metres per f). Recesses are parallax: the
+    /// view ray is stepped to the pane plane, so reveals, sills and sun shadows inside openings move
+    /// with the camera without any geometry. Detail fades to the facade's mean tone below a pixel.
+    DioramaFacadeSample dioramaFacade(float3 p, float3 n, float tex, float raw, float code, float3 wall,
+                                      float3 view, float3 sun, float glow) {
+        DioramaFacadeSample s;
+        s.albedo = wall; s.normal = n; s.emissive = float3(0.0); s.glass = 0.0; s.sunMask = 1.0; s.occlusion = 1.0;
+        float F = floor(tex + 0.5);
+        float f = saturate((tex - (F - 0.375)) / 0.75);
+        float styleIndex = floor((F - 32.0) / 32.0);
+        int style = int(styleIndex);
+        float S = 2.6 + 0.05 * (F - 32.0 - 32.0 * styleIndex);
+        float g = floor(raw / 1000.0);
+        float h = raw - 100.0 - 1000.0 * g;
+        float G = g > 0.5 ? g * 0.1 : S;
+        int flags = int(floor(code * 16.0 + 0.5));
+        float2 out2 = normalize(n.xy + float2(1e-6, 0.0));
+        float2 t2 = float2(-out2.y, out2.x);
+        float along = dot(p.xy, t2);
+        float2 dA = float2(dfdx(along), dfdy(along));
+        float2 dF = float2(dfdx(f), dfdy(f));
+        float L = sqrt(dot(dA, dA) / max(dot(dF, dF), 1e-14));
+        L = isfinite(L) ? clamp(L, 0.1, 400.0) : 10.0;
+        float u = f * L;
+        float px = max(max(length(dA), length(float2(dfdx(h), dfdy(h)))), 1e-4);
+        float aa = px * 0.75;
+
+        // Rounded vertical corners: over the last r metres both walls bend to the corner bisector,
+        // so a square corner shades as a quarter cylinder with no chamfer geometry.
+        float r = min(0.9, L * 0.2);
+        float kStart = (flags & 1) != 0 ? 0.0 : 1.0 - smoothstep(0.0, r, u);
+        float kEnd = (flags & 2) != 0 ? 0.0 : 1.0 - smoothstep(0.0, r, L - u);
+        float bend = 0.78539816 * (kEnd - kStart);
+        s.normal = normalize(float3(out2 * cos(bend) + t2 * sin(bend), 0.0));
+
+        // Cement plinth and contact darkening where the wall meets the ground.
+        float plinth = 1.0 - smoothstep(0.45 - aa, 0.45 + aa, h);
+        s.albedo = mix(s.albedo, float3(0.55, 0.54, 0.51), plinth * 0.7);
+        s.occlusion = mix(0.60, 1.0, smoothstep(-0.25, 1.7, h));
+        if (style <= 0) return s;
+
+        bool groundStorey = h < G;
+        bool tall = G > S + 0.05;
+        bool front = (flags & 4) != 0;
+        float storeyLevel = groundStorey ? 0.0 : 1.0 + floor((h - G) / S);
+        float storeyH = groundStorey ? G : S;
+        float z = h - (groundStorey ? 0.0 : G + (storeyLevel - 1.0) * S);
+
+        float pitch = 3.0, share = 0.52, width = 0.0, sill = 0.9, lintel = 0.55, depth = 0.24;
+        float3 frame = float3(0.94, 0.93, 0.89);
+        float3 glassTint = float3(0.16, 0.22, 0.26);
+        bool hood = false, ledge = true, slab = false, balustrade = false, curtain = false;
+        if (style == 1) { pitch = 2.9; width = 1.15; sill = 0.95; lintel = 0.45; depth = 0.18; hood = true; }
+        else if (style == 2) { slab = true; depth = 0.26; }
+        else if (style == 3) { pitch = 3.6; share = 0.58; sill = 1.05; lintel = 0.6; depth = 0.18; slab = true; }
+        else if (style == 4) { pitch = 3.4; share = 0.86; sill = 0.1; lintel = 0.3; depth = 1.15; slab = true; balustrade = true; ledge = false; }
+        else if (style == 5) { pitch = 1.7; share = 0.95; sill = 0.82; lintel = 0.3; depth = 0.14; slab = true; ledge = false; frame = float3(0.30, 0.33, 0.35); }
+        else { pitch = 1.5; share = 1.0; sill = 0.0; lintel = 0.0; depth = 0.03; curtain = true; ledge = false; frame = float3(0.74, 0.78, 0.80); glassTint = wall * 0.58; }
+
+        bool solid = false, door = false;
+        if (groundStorey) {
+            if (front && (style == 3 || style >= 5 || tall)) {
+                // Shopfront / lobby: broad dark glazing in slim charcoal frames.
+                pitch = max(pitch, 3.0); share = 0.84; sill = tall ? 0.1 : 0.35; lintel = tall ? 0.55 : 0.7;
+                depth = 0.3; balustrade = false; curtain = false; ledge = false; hood = false;
+                frame = float3(0.28, 0.30, 0.32); glassTint = float3(0.14, 0.19, 0.23);
+            } else if (tall && style < 5) {
+                solid = true;
+            } else if (front && style != 3) {
+                door = true;
+            }
+        }
+
+        float margin = min(0.55, L * 0.1);
+        float usable = L - 2.0 * margin;
+        float bays = max(1.0, floor(usable / pitch + 0.25));
+        // Odd bay count on the entrance wall, every storey, so the door sits on the centre line.
+        if (front && fmod(bays, 2.0) < 0.5 && bays > 1.5) bays -= 1.0;
+        float cell = usable / bays;
+        float x = u - margin;
+        float bay = clamp(floor(x / cell), 0.0, bays - 1.0);
+        float cx = x - (bay + 0.5) * cell;
+        float halfW = width > 0.0 ? min(width * 0.5, cell * 0.5 - 0.35) : cell * share * 0.5;
+        float z0 = sill, z1 = storeyH - lintel;
+        bool isDoor = door && bay == floor(bays * 0.5);
+        if (isDoor) {
+            halfW = min(style == 1 ? 0.62 : 0.85, cell * 0.5 - 0.3);
+            z0 = 0.5; z1 = min(2.6, storeyH - 0.35);
+            frame = style == 1 ? float3(0.36, 0.24, 0.16) : float3(0.28, 0.30, 0.32);
+            ledge = false; hood = false; balustrade = false;
+        }
+        if (curtain) { halfW = cell * 0.5; z0 = 0.45; z1 = storeyH; }
+        bool open = !solid && usable > 0.9 && halfW > 0.2 && z1 > z0 + 0.3 && x > -0.01 && x < usable + 0.01;
+        float2 lo = float2(-halfW, z0), hi = float2(halfW, z1);
+        float d = open ? dioramaWallBox(float2(cx, z), lo, hi) : 1.0e3;
+        float cover = 1.0 - smoothstep(-aa, aa, d);
+
+        float3 wallTone = s.albedo;
+        // Curtain walls: the vertex colour tints the glass; spandrels are the same glass, darker.
+        float3 detailed = curtain ? wallTone * 0.72 : wallTone;
+        float paneMask = 0.0;
+        // Slab line at every upper floor, with its soft shadow on the storey below.
+        if (slab && !groundStorey) {
+            float band = 1.0 - smoothstep(0.16 - aa, 0.16 + aa, z);
+            detailed *= 1.0 + 0.07 * band;
+        }
+        if (slab && z > storeyH - 0.12) detailed *= 0.93;
+        if (ledge && open) {
+            // Projecting sill under the opening and its shadow line.
+            float sillMask = (1.0 - smoothstep(halfW + 0.12 - aa, halfW + 0.12 + aa, abs(cx)))
+                * (1.0 - smoothstep(-aa, aa, abs(z - (z0 - 0.05)) - 0.05));
+            float under = (1.0 - smoothstep(halfW + 0.12, halfW + 0.12 + aa, abs(cx)))
+                * step(z0 - 0.26, z) * step(z, z0 - 0.1);
+            detailed = mix(detailed * (1.0 - 0.12 * under), frame, sillMask);
+        }
+        if (hood && open) {
+            float hoodMask = (1.0 - smoothstep(halfW + 0.25 - aa, halfW + 0.25 + aa, abs(cx)))
+                * (1.0 - smoothstep(-aa, aa, abs(z - (z1 + 0.27)) - 0.05));
+            float shade = (1.0 - smoothstep(halfW + 0.25, halfW + 0.25 + aa, abs(cx))) * step(z1, z) * step(z, z1 + 0.22);
+            detailed = mix(detailed * (1.0 - 0.18 * shade), frame, hoodMask);
+        }
+        if (cover > 0.0) {
+            // Parallax recess: step the view ray to the pane plane `depth` behind the wall.
+            float vN = max(dot(view.xy, out2), 0.15);
+            float2 q = float2(cx, z) - depth * float2(dot(view.xy, t2), view.z) / vN;
+            float dq = dioramaWallBox(q, lo, hi);
+            float onPane = 1.0 - smoothstep(-aa, aa, dq);
+            float sN = dot(sun.xy, out2);
+            float lit = 0.0;
+            if (sN > 0.02) {
+                float2 qs = q + depth * float2(dot(sun.xy, t2), sun.z) / sN;
+                lit = 1.0 - smoothstep(-aa, aa, dioramaWallBox(qs, lo, hi));
+            }
+            float vertical = saturate((q.y - z0) / max(z1 - z0, 0.1));
+            float3 glassColor = isDoor && style == 1 ? float3(0.42, 0.28, 0.18) : glassTint * (0.85 + 0.3 * vertical);
+            float frameMask = onPane * (1.0 - smoothstep(-0.075 - aa, -0.075 + aa, dq));
+            if (!curtain && halfW > 0.6) frameMask = max(frameMask, onPane * (1.0 - smoothstep(0.03 - aa, 0.03 + aa, abs(q.x))));
+            if (curtain) {
+                frameMask = max(frameMask, 1.0 - smoothstep(0.035 - aa, 0.035 + aa, abs(abs(cx) - cell * 0.5)));
+                frameMask = max(frameMask, 1.0 - smoothstep(0.04 - aa, 0.04 + aa, abs(z - z0)));
+            }
+            // Reveal surfaces: the sill catches light, jambs are mid tone, the head is in shade.
+            float3 reveal = wallTone * (q.y < z0 ? 0.92 : (q.y > z1 ? 0.5 : 0.7));
+            float3 inside = mix(reveal, mix(glassColor, frame, frameMask), onPane);
+            paneMask = onPane * (1.0 - frameMask) * (isDoor && style == 1 ? 0.0 : 1.0);
+            if (balustrade) {
+                // Solid gallery balustrade in the facade plane, over a deep shaded loggia.
+                float rail = 1.0 - smoothstep(z0 + 1.0 - aa, z0 + 1.0 + aa, z);
+                inside = mix(inside * 0.8, mix(wallTone * 1.04, frame, 1.0 - smoothstep(0.07 - aa, 0.07 + aa, z0 + 1.0 - z)), rail);
+                paneMask *= 1.0 - rail;
+            }
+            detailed = mix(detailed, inside, cover);
+            paneMask *= cover;
+            s.sunMask = mix(1.0, mix(0.0, 1.0, lit), cover * (balustrade ? 0.7 : 1.0) * step(0.08, depth));
+            if (glow > 0.01) {
+                float seed = dot(floor((p.xy - t2 * u) * 0.25), float2(1.0, 57.0));
+                float chance = fract(sin(dot(float2(bay * 7.0 + storeyLevel * 13.0, seed), float2(12.9898, 78.233))) * 43758.5453);
+                float on = step(chance, isDoor ? 0.9 : 0.3);
+                s.emissive = float3(1.0, 0.74, 0.42) * (glow * 0.85 * on * paneMask);
+            }
+        }
+        // Below about a pixel per opening the pattern fades to the facade's mean tone (no shimmer).
+        float detail = 1.0 - smoothstep(0.22, 0.7, px);
+        float openShare = open || curtain ? saturate(2.0 * halfW / max(cell, 0.1)) * saturate((z1 - z0) / max(storeyH, 0.1)) : 0.0;
+        float3 mean = mix(wallTone, glassTint * 1.2, (solid ? 0.0 : openShare) * 0.75);
+        s.albedo = mix(mean, detailed, detail);
+        s.glass = mix(openShare * 0.6, paneMask, detail);
+        if (glow > 0.01) s.emissive = mix(float3(1.0, 0.74, 0.42) * (glow * 0.85 * 0.3 * openShare), s.emissive, detail);
+        return s;
+    }
+
     fragment float4 dioramaFragment(DioramaVarying in [[stage_in]],
                                     bool isFront [[front_facing]],
                                     constant DioramaUniforms &u [[buffer(0)]],
@@ -801,7 +1001,7 @@ nonisolated enum DioramaShaderSource {
 
         // Walls grade lighter towards the top and darker at the base (height carried in appearance.z).
         if (in.appearance.z > 50.0 && code < 0.5) {
-            float h = in.appearance.z - 100.0;
+            float h = dioramaWallHeight(in.appearance.z);
             albedo *= mix(0.90, 1.07, saturate(h / 9.0));
         }
 
@@ -1052,7 +1252,7 @@ nonisolated enum DioramaShaderSource {
         bool grassSurface = naturalArea > 0.0001;
         bool textured = grassSurface ? grassDetailWeight > 0.0001
             : ((tex > 0.5 && tex < 4.5) || (tex > 9.5 && tex < 13.5));
-        if (textured && u.shoreline.z < 0.5 && u.groundColor.w > 0.5) {
+        if (textured && !clay && u.shoreline.z < 0.5 && u.groundColor.w > 0.5) {
             float repeatSize = grassSurface ? 1.6 : (foliage ? 2.4 : 1.4);
             float2 detailUV = vegetationPosition / repeatSize;
             if (foliage) {
@@ -1124,7 +1324,7 @@ nonisolated enum DioramaShaderSource {
         // Building material library (texture 7, 64 px layers, 1.2/2.4/4.8 m repeats): roofs and walls pick a material per
         // building from a stable hash of its own source colour, so neighbours differ but each house is
         // consistent. RGB is a tint ratio (x2) that keeps the source pigment; A is relief height.
-        bool materialLibrary = u.groundColor.w > 0.5 && (roofSurface || plasterSurface);
+        bool materialLibrary = !clay && u.groundColor.w > 0.5 && (roofSurface || plasterSurface);
         float3 seedColor = floor(in.color.rgb * 40.0);
         float materialSeed = dioramaHash(seedColor.xy + seedColor.z * float2(7.13, 3.71));
         float materialSeed2 = dioramaHash(seedColor.yz * 1.7 + float2(11.3, 4.9));
@@ -1178,7 +1378,7 @@ nonisolated enum DioramaShaderSource {
             float2 tangent = normalize(float2(-surfaceNormal.y, surfaceNormal.x) + float2(0.0001, 0.0));
             float2 wallUV = float2(dot(vegetationPosition, tangent), surfacePosition.z);
             float weather = dioramaNoise(wallUV * float2(0.16, 0.34));
-            float h = in.appearance.z > 50.0 ? max(0.0, in.appearance.z - 100.0) : 9.0;
+            float h = in.appearance.z > 50.0 ? max(0.0, dioramaWallHeight(in.appearance.z)) : 9.0;
             float foot = (1.0 - smoothstep(0.0, 1.4, h)) * (0.04 + 0.07 * weather);
             albedo *= 0.97 + 0.06 * weather - foot;
             // Cement plinth: most Dar houses stand on a grey 0.45 m rendered base (crisp at its edge).
@@ -1237,6 +1437,18 @@ nonisolated enum DioramaShaderSource {
             albedo = mix(albedo, paint, mask * detail);
         }
 
+        // Shader facades (material codes 32-255 on building walls): openings, corners and reveals.
+        DioramaFacadeSample facade;
+        facade.albedo = albedo; facade.normal = detailNormal; facade.emissive = float3(0.0);
+        facade.glass = 0.0; facade.sunMask = 1.0; facade.occlusion = 1.0;
+        bool facadeWall = in.appearance.y > 31.5 && code < 0.5 && in.appearance.z > 50.0;
+        if (facadeWall) {
+            facade = dioramaFacade(surfacePosition, surfaceNormal, in.appearance.y, in.appearance.z, code,
+                                   albedo, view, u.sunDirection.xyz, glow);
+            albedo = facade.albedo;
+            detailNormal = facade.normal;
+        }
+
         // Apply analytic lane paint after natural recolouring/detail so boundary coverages cannot
         // tint its white/yellow pigment. Nearest asphalt ownership still excludes coast and paving.
         if (paintedGround && tex > 2.5 && tex < 3.5) {
@@ -1265,6 +1477,12 @@ nonisolated enum DioramaShaderSource {
         float3 litN = surfaceNormal;
         float hemi = litN.z * 0.5 + 0.5;
         float3 ambient = mix(u.groundColor.rgb, u.skyColor.rgb, hemi);
+        if (clay) {
+            // Clay keeps each surface's own colour: the sky/ground fill is eased toward a warm neutral
+            // of the same brightness, so shaded walls read as cooler plaster, not violet or olive.
+            float fill = dot(ambient, float3(0.30, 0.59, 0.11));
+            ambient = mix(ambient, float3(fill) * float3(1.04, 1.0, 0.95), 0.45);
+        }
         // Screen-space contact shadow wherever surfaces meet: walls and ground, trees and grass.
         float ao = 1.0;
         if (u.post.x > 0.001 && !mirrored) {
@@ -1276,12 +1494,15 @@ nonisolated enum DioramaShaderSource {
         // Clay wraps the sun a little around every rounded form so chamfers shade as continuous
         // curves instead of a hard terminator at the single bevel.
         float wrap = foliage ? u.look.w : (clay ? 0.16 : 0.0);
-        float sun = saturate((ndl + wrap) / (1.0 + wrap));
+        float sun = saturate((ndl + wrap) / (1.0 + wrap)) * facade.sunMask;
         // Faces turned from the sun only use visibility for specular materials.
         float visibility = dioramaShadow(litPos, litN, u, shadowMap,
             sun > 0.0 || roofSurface || roadSurface || (tex > 13.5 && tex < 14.5));
+        // Near the terminator the shadow map compares a surface with itself at a grazing angle and
+        // stripes (acne). Such faces are already dark from N·L, so the cast-shadow test fades out.
+        visibility = mix(1.0, visibility, smoothstep(0.0, 0.12, dot(litN, u.sunDirection.xyz)));
         // Soft, Apple Maps-like cast shadows: the preset decides how much sun a shadow removes.
-        float3 light = ambient * u.look.x * ao + u.sunColor.rgb * sun * mix(1.0, visibility, u.look.y) * (0.75 + 0.25 * ao);
+        float3 light = ambient * u.look.x * ao * facade.occlusion + u.sunColor.rgb * sun * mix(1.0, visibility, u.look.y) * (0.75 + 0.25 * ao);
         float3 pointLight = glow > 0.01 ? dioramaSodium(dioramaPointLights(litPos, litN, u, lights, lightTable, lightIndices)) : float3(0.0);
         // City glow: the orange wash of night satellite imagery comes from thousands of overlapping
         // sodium pools along every street, not from individual fixtures. A road-density field baked
@@ -1304,7 +1525,7 @@ nonisolated enum DioramaShaderSource {
         // bodies get an even warm-white wash brightening toward the crown.
         float3 facadeGlow = float3(0.0);
         if (glow > 0.01 && code < 0.5 && in.appearance.z > 50.0 && abs(litN.z) < 0.45) {
-            float h = max(0.0, in.appearance.z - 100.0);
+            float h = max(0.0, dioramaWallHeight(in.appearance.z));
             float2 tangent = normalize(float2(-litN.y, litN.x) + float2(0.0001, 0.0));
             float along = dot(wp, tangent);
             float scallopFade = exp(-h / 9.0);
@@ -1319,6 +1540,12 @@ nonisolated enum DioramaShaderSource {
         light += lampLight;
 
         float3 color = albedo * light;
+        if (facadeWall && facade.glass > 0.001) {
+            // Window glass: a cool sky reflection that strengthens at grazing angles, and a sun glint.
+            float fresnel = 0.22 + 0.55 * pow(1.0 - saturate(dot(surfaceNormal, view)), 3.0);
+            float glint = pow(saturate(dot(facade.normal, normalize(view + u.sunDirection.xyz))), 60.0) * visibility;
+            color = mix(color, u.skyColor.rgb * 0.82, facade.glass * fresnel) + u.sunColor.rgb * glint * facade.glass * 0.35;
+        }
         float time = u.params.y;
 
         if (tex > 4.5 && tex < 5.5) {
@@ -1415,7 +1642,7 @@ nonisolated enum DioramaShaderSource {
         color += u.skyColor.rgb * rim;
         // Lamp pools stay warm: the moonlit night grade applies to sky and sun light only.
         float3 lampColor = albedo * lampLight;
-        float3 graded = dioramaGrade(max(color - lampColor, float3(0.0)), in.worldPosition, u) + lampColor;
+        float3 graded = dioramaGrade(max(color - lampColor, float3(0.0)), in.worldPosition, u) + lampColor + facade.emissive;
         return dioramaRevealColor(graded, 1.0, revealAlpha, u);
     }
 

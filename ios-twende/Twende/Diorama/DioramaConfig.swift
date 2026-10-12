@@ -132,8 +132,13 @@ nonisolated struct DioramaConfig: Sendable {
     /// roads, pavements and lane paint stay exact vector layers. Pieces and packages decoded under
     /// this flag skip their ground image entirely (never read, never uploaded, never mipmapped).
     static let clayRendering = true
+    /// Shader facades (2026-10-12): a building wall is one quad per footprint edge. Windows, doors,
+    /// shopfronts, galleries, curtain-wall grids, floor lines, plinths and rounded vertical corners
+    /// are drawn by the fragment shader from the wall's own coordinates (`DioramaFacade`), with
+    /// parallax reveals instead of modelled recesses. Replaces 7-16 quads per window per floor.
+    static let shaderFacades = true
     /// Bump to invalidate every cached tile.
-    var generatorVersion: Int = 37
+    var generatorVersion: Int = 38
     /// Reuse full-detail architectural primitives without changing their tessellation.
     var instancesArchitecture: Bool = true
     /// Drape the plate/ground overlays over the bundled height snapshot used by roads and foundations.

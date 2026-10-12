@@ -75,6 +75,10 @@ nonisolated struct DioramaMesh: Sendable {
     /// Per-vertex colour multiplier applied at pack time; a slight hue shift per building.
     private(set) var tints: [SIMD3<Float>] = []
     var tint: SIMD3<Float> = SIMD3(1, 1, 1)
+    /// Per-vertex shader surface override: x replaces the swatch's material code (0 keeps it),
+    /// y is added to the category code. Shader facades use both (see `DioramaFacade`).
+    private(set) var surfaces: [SIMD2<Float>] = []
+    var surface: SIMD2<Float> = .zero
 
     var isEmpty: Bool { indices.isEmpty && instances.isEmpty }
     var triangleCount: Int { indices.count / 3 }
@@ -130,6 +134,7 @@ nonisolated struct DioramaMesh: Sendable {
         uvs.append(uv)
         attributes.append(recordsHeight && attribute == 0 ? Float(p.z) + Self.heightAttributeOffset : attribute)
         tints.append(tint)
+        surfaces.append(surface)
         return UInt32(positions.count - 1)
     }
 
@@ -246,6 +251,61 @@ nonisolated struct DioramaMesh: Sendable {
         let v2 = vertex(DV3(b, z1), nb, uv), v3 = vertex(DV3(a, z1), na, uv)
         let out = DV3(face, 0)
         self.face(v0, v1, v2, outward: out); self.face(v0, v2, v3, outward: out)
+    }
+
+    /// One shader-facade wall on edge `i` of a counter-clockwise ring: a single quad whose openings,
+    /// floor lines, plinth and rounded vertical corners are drawn by the fragment shader. Corners
+    /// are rounded in the shader only where they are convex, roughly square and both neighbours
+    /// are real walls; everything else stays a crisp edge. `bottom` gives the foot height per end so
+    /// walls still step down a slope.
+    mutating func facadeWall(_ ring: [DV2], edge i: Int, bottom: (DV2) -> Double, top: Double, _ s: DioramaSwatch,
+                             facade: DioramaFacade, front: Bool = false, skip: [Bool]? = nil) {
+        let n = ring.count
+        guard n >= 3 else { return }
+        let j = (i + 1) % n
+        let a = ring[i], b = ring[j]
+        guard a.distance(to: b) > 0.05 else { return }
+        func roundable(_ corner: Int, previousEdge: Int, nextEdge: Int) -> Bool {
+            if skip?[previousEdge] == true || skip?[nextEdge] == true { return false }
+            let incoming = ring[corner] - ring[(corner + n - 1) % n]
+            let outgoing = ring[(corner + 1) % n] - ring[corner]
+            guard incoming.length > 0.3, outgoing.length > 0.3 else { return false }
+            let p = incoming.normalized, q = outgoing.normalized
+            // Convex and between ~53° and ~127° of turn: the shader bends both walls to the bisector.
+            return p.cross(q) > 0.5 && abs(p.dot(q)) < 0.6
+        }
+        let sharpStart = !roundable(i, previousEdge: (i + n - 1) % n, nextEdge: i)
+        let sharpEnd = !roundable(j, previousEdge: i, nextEdge: (j + 1) % n)
+        facadeWall(a, b, bottomA: bottom(a), bottomB: bottom(b), top: top, s, facade: facade,
+                   sharpStart: sharpStart, sharpEnd: sharpEnd, front: front)
+    }
+
+    /// Shader-facade quad from `a` to `b` (outward to the right of travel).
+    mutating func facadeWall(_ a: DV2, _ b: DV2, bottomA: Double, bottomB: Double, top: Double, _ s: DioramaSwatch,
+                             facade: DioramaFacade, sharpStart: Bool, sharpEnd: Bool, front: Bool) {
+        guard top > max(bottomA, bottomB) + 1e-3, a.distance(to: b) > 0.05 else { return }
+        let out = DV3((b - a).normalized.right, 0)
+        let saved = surface
+        defer { surface = saved }
+        let flags = Float((sharpStart ? 1 : 0) + (sharpEnd ? 2 : 0) + (front ? 4 : 0)) * 0.0625
+        let uv = DioramaAtlas.uv(s, dark: false)
+        reserve(4)
+        func corner(_ p: DV2, _ z: Double, _ along: Float) -> UInt32 {
+            surface = SIMD2(facade.materialCode(along: along), flags)
+            return vertex(DV3(p, z), out, uv, attribute: facade.heightAttribute(z))
+        }
+        let v0 = corner(a, bottomA, 0), v1 = corner(b, bottomB, 1)
+        let v2 = corner(b, top, 1), v3 = corner(a, top, 0)
+        face(v0, v1, v2, outward: out)
+        face(v0, v2, v3, outward: out)
+    }
+
+    /// Shader-facade walls for every unskipped edge of a counter-clockwise ring.
+    mutating func facadeRing(_ ring: [DV2], skip: [Bool]? = nil, bottom: (DV2) -> Double, top: Double, _ s: DioramaSwatch,
+                             front: Int = -1, facade: (Int) -> DioramaFacade) {
+        for i in ring.indices where !(skip?[i] ?? false) {
+            facadeWall(ring, edge: i, bottom: bottom, top: top, s, facade: facade(i), front: i == front, skip: skip)
+        }
     }
 
     /// Walls of a counter-clockwise ring, optionally skipping flagged edges, with an optional lid.
@@ -528,6 +588,7 @@ nonisolated struct DioramaMesh: Sendable {
             uvs.append(other.uvs[i])
             attributes.append(other.attributes[i])
             tints.append(i < other.tints.count ? other.tints[i] * tint : tint)
+            surfaces.append(i < other.surfaces.count ? other.surfaces[i] : .zero)
         }
         indices.append(contentsOf: other.indices.map { $0 + base })
         doubleSidedTriangles.append(contentsOf: other.doubleSidedTriangles)

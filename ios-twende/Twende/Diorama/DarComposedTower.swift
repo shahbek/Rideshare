@@ -25,9 +25,15 @@ nonisolated struct DarComposedTower {
             return false
         }
         let source = DioramaPolygon.counterClockwise(footprint)
-        let ground = min(4.4, site.height / Double(site.levels) * 1.25)
-        let storey = (site.height - ground) / Double(site.levels - 1)
-        func floor(_ f: Int) -> Double { f == 0 ? 0.32 : ground + Double(f - 1) * storey }
+        var ground = min(4.4, site.height / Double(site.levels) * 1.25)
+        var storey = (site.height - ground) / Double(site.levels - 1)
+        if DioramaConfig.shaderFacades {
+            // Datums the facade shader encodes exactly (5 cm storeys, decimetre ground floor).
+            ground = DioramaFacade.snapGround(ground)
+            storey = DioramaFacade.snapStorey(storey)
+        }
+        let groundFloor = ground, storeyHeight = storey
+        func floor(_ f: Int) -> Double { f == 0 ? 0.32 : groundFloor + Double(f - 1) * storeyHeight }
         let front: DV2
         if let bearing = design.frontBearing {
             let angle = bearing * .pi / 180
@@ -40,7 +46,8 @@ nonisolated struct DarComposedTower {
         }
         let facade = DarComposedFacade(wall: DarTowerGenerator.rgb(design.wall ?? site.wall),
             accent: DarTowerGenerator.rgb(design.accent ?? site.accent),
-            glass: DarTowerGenerator.rgb(design.glass ?? site.glass), sourceID: site.osm)
+            glass: DarTowerGenerator.rgb(design.glass ?? site.glass), sourceID: site.osm,
+            ground: groundFloor, storey: storeyHeight)
         let oldTint = mesh.tint, oldHeight = mesh.recordsHeight, oldGlowTint = glow.tint
         mesh.recordsHeight = true
         glow.tint = SIMD3(repeating: 1)

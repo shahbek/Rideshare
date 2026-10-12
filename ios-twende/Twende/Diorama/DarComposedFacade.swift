@@ -9,6 +9,9 @@ nonisolated struct DarComposedFacade {
     let accent: SIMD3<Float>
     let glass: SIMD3<Float>
     let sourceID: UInt64
+    /// Shader-facade datums (snapped by the tower); zero storey keeps the modelled facades.
+    var ground: Double = 0
+    var storey: Double = 0
     private let cream = DarTowerGenerator.rgb("#F4EFE7")
     private let silver = DarTowerGenerator.rgb("#BFCBCB")
 
@@ -51,6 +54,24 @@ nonisolated struct DarComposedFacade {
             let dir = (b - a).normalized, out = dir.right, length = a.distance(to: b)
             let main = out.dot(front) > 0.6
             let style = main ? elevation : sides
+            if DioramaConfig.shaderFacades, storey > 0, style != .nikko {
+                let drawn: DioramaFacade.Style
+                if length < max(1.1, longest * 0.025) {
+                    drawn = .plain
+                } else {
+                    switch style {
+                    case .curtain: drawn = .curtain
+                    case .horizontal: drawn = .ribbon
+                    case .gallery: drawn = .gallery
+                    default: drawn = .masonry
+                    }
+                }
+                pigment(drawn == .curtain ? glass : wall, as: .whitewash, into: &mesh)
+                let foot = floor(from)
+                mesh.facadeWall(ring, edge: i, bottom: { _ in foot }, top: floor(to) - 0.24, .whitewash,
+                    facade: DioramaFacade(style: drawn, storey: storey, groundFloor: ground), front: main && from == 0)
+                continue
+            }
             if length < max(1.1, longest * 0.025) {
                 pigment(wall, as: .whitewash, into: &mesh)
                 mesh.mouldedWall(ring, edge: i, z0: floor(from), z1: floor(to) - 0.24, .whitewash)

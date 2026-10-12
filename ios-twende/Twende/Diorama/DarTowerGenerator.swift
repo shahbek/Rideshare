@@ -43,6 +43,10 @@ nonisolated struct DarTowerGenerator {
         let oldHeight = mesh.recordsHeight, oldTint = mesh.tint, oldGlowTint = glow.tint
         mesh.recordsHeight = true
         defer { mesh.recordsHeight = oldHeight; mesh.tint = oldTint; glow.tint = oldGlowTint }
+        if DioramaConfig.shaderFacades {
+            buildShaderFacades(plan, into: &mesh, lights: &lights)
+            return true
+        }
         use(wall, .whitewash, &mesh)
         DarArchitecturalKit.solid(plan.envelope, bottom: -0.3, top: 0.32, shoulder: 0.08, color: .whitewash, into: &mesh)
         buildGroundFloor(plan, into: &mesh, glow: &glow, lights: &lights)
@@ -89,6 +93,62 @@ nonisolated struct DarTowerGenerator {
             buildRoof(plan, services: false, into: &mesh)
         }
         return true
+    }
+
+    /// Shader facades: each elevation is one quad from plinth to roof; the family decides which
+    /// facade the shader draws (punched masonry, ribbon bands, curtain grid, coastal galleries),
+    /// the taller ground floor is encoded in the wall so lobbies and shopfronts land on it.
+    private mutating func buildShaderFacades(_ plan: DarArchitecturePlan, into mesh: inout DioramaMesh,
+                                             lights: inout [DioramaLight]) {
+        let front = plan.elevations[plan.entrance]
+        let family = design.family
+        func facades(_ p: DarArchitecturePlan) -> (Int) -> DioramaFacade {
+            let longest = p.elevations.map(\.length).max() ?? 1
+            return { i in
+                let e = p.elevations[i]
+                let style: DioramaFacade.Style
+                if e.length < 3 {
+                    style = .plain
+                } else {
+                    switch family {
+                    case .glass: style = .curtain
+                    case .ribbon: style = .ribbon
+                    case .modernist: style = e.length < longest * 0.48 ? .plain : .masonry
+                    case .kisutu, .tiled: style = .masonry
+                    case .coastal: style = e.length >= 5 && abs(e.out.dot(front.out)) > 0.8 ? .gallery : .masonry
+                    }
+                }
+                return DioramaFacade(style: style, storey: p.storey, groundFloor: p.groundFloor)
+            }
+        }
+        // Curtain walls tint their glass with the vertex colour; every other facade is the render.
+        let skin = family == .glass ? glass : wall
+        use(skin, .whitewash, &mesh)
+        let inset = min(2.4, DioramaPolygon.minimumAreaRectangle(plan.envelope).halfWidth * 0.16)
+        if design.hasUpperSetback,
+           let upperRing = DarArchitecturePlan.inset(plan.envelope, distance: inset),
+           let upper = DarArchitecturePlan(footprint: upperRing, site: site) {
+            let split = max(3, plan.levels - (design.variant == 3 ? 3 : 2))
+            mesh.facadeRing(plan.envelope, bottom: { _ in -0.3 }, top: plan.floor(split), .whitewash,
+                            front: plan.entrance, facade: facades(plan))
+            use(cream, .trimWhite, &mesh)
+            mesh.polygon(plan.envelope, z: plan.floor(split), .trimWhite)
+            DarArchitecturalKit.ribbon(plan.envelope, bottom: plan.floor(split), top: plan.floor(split) + 0.95,
+                depth: 0.24, color: .trimWhite, into: &mesh)
+            use(skin, .whitewash, &mesh)
+            mesh.facadeRing(upper.envelope, bottom: { _ in plan.floor(split) }, top: upper.height, .whitewash,
+                            front: upper.entrance, facade: facades(upper))
+            buildRoof(upper, into: &mesh)
+        } else {
+            mesh.facadeRing(plan.envelope, bottom: { _ in -0.3 }, top: plan.height, .whitewash,
+                            front: plan.entrance, facade: facades(plan))
+            buildRoof(plan, into: &mesh)
+        }
+        // Lobby glazing is drawn on the ground floor; a canopy would leave the mapped footprint.
+        if includesLights {
+            lights.append(.init(position: DV3(front.mid + front.out * 0.6, mesh.baseZ + 2.9),
+                color: SIMD3(1, 0.82, 0.58), radius: 7, intensity: 0.55))
+        }
     }
 
     private func buildGroundFloor(_ plan: DarArchitecturePlan, into mesh: inout DioramaMesh,
@@ -336,8 +396,13 @@ nonisolated struct DarTowerGenerator {
                 fascia: .trimWhite, into: &mesh, footprint: plan.source) { hasPitchedRoof = true; return }
         }
         use(Self.rgb("#C9C2B6"), .roofConcrete, &mesh)
-        DarArchitecturalKit.solid(plan.envelope, bottom: plan.height - 0.16, top: plan.height,
-            shoulder: 0.04, color: .roofConcrete, into: &mesh)
+        if DioramaConfig.shaderFacades {
+            // The facade wall already reaches the roof; a slab ring here would sit in its plane.
+            mesh.polygon(plan.envelope, z: plan.height, .roofConcrete)
+        } else {
+            DarArchitecturalKit.solid(plan.envelope, bottom: plan.height - 0.16, top: plan.height,
+                shoulder: 0.04, color: .roofConcrete, into: &mesh)
+        }
         let parapet = design.family == .glass ? 0.25 : (design.family == .modernist ? 0.42 : 0.65)
         use(design.family == .glass ? silver : wall, .trimWhite, &mesh)
         DarArchitecturalKit.ribbon(plan.envelope, bottom: plan.height, top: plan.height + parapet,

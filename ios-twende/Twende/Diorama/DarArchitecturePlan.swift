@@ -36,14 +36,29 @@ nonisolated struct DarArchitecturePlan {
         let bounds = DioramaPolygon.minimumAreaRectangle(source)
         let design = DarBuildingDesign(site: site)
         let radius = min(design.cornerRadius, max(0.25, bounds.halfWidth * 0.14))
-        let round = DioramaPolygon.rounded(source, flags: Array(repeating: false, count: source.count), radius: radius).points
+        // Shader facades round square corners in the fragment shader; the plan keeps true corners.
+        let round = DioramaConfig.shaderFacades ? source
+            : DioramaPolygon.rounded(source, flags: Array(repeating: false, count: source.count), radius: radius).points
         let compact = Self.compactContour(round)
         let ring = Self.fits(compact, inside: source, clearance: -0.03) ? compact : source
         envelope = ring
-        levels = min(site.levels, 60)
-        height = site.height
-        groundFloor = min(design.groundFloor, height / Double(levels) * 1.3)
-        storey = (height - groundFloor) / Double(levels - 1)
+        var levels = min(site.levels, 60)
+        var groundFloor = min(design.groundFloor, site.height / Double(levels) * 1.3)
+        var storey = (site.height - groundFloor) / Double(levels - 1)
+        if DioramaConfig.shaderFacades {
+            // Datums the shader encodes exactly, so drawn floor lines meet the modelled roof.
+            groundFloor = DioramaFacade.snapGround(groundFloor)
+            let snapped = DioramaFacade.snapStorey(storey)
+            if abs(snapped - storey) > DioramaFacade.storeyStep {
+                // Outside the encodable range: keep the mapped height by changing the storey count.
+                levels = max(2, Int(((site.height - groundFloor) / snapped).rounded()) + 1)
+            }
+            storey = snapped
+        }
+        self.levels = levels
+        self.groundFloor = groundFloor
+        self.storey = storey
+        height = DioramaConfig.shaderFacades ? groundFloor + Double(levels - 1) * storey : site.height
         let wantedRecess = design.recess
         if let inner = Self.inset(ring, distance: wantedRecess) {
             glazing = inner; recess = wantedRecess
