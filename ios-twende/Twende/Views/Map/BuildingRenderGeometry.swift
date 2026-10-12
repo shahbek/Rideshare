@@ -19,7 +19,6 @@ enum BuildingRenderGeometry {
             let positions = vectors(from: source)
             guard !positions.isEmpty else { return }
             let normals = geometry.sources(for: .normal).first.map { vectors(from: $0) } ?? []
-            var uvs: [SIMD2<Float>]?
             let transform = node.simdWorldTransform
             let normalMatrix = simd_transpose(simd_inverse(simd_float3x3(columns: (
                 SIMD3(transform.columns.0.x, transform.columns.0.y, transform.columns.0.z),
@@ -43,12 +42,6 @@ enum BuildingRenderGeometry {
                 let isSignHalo = materialName == "airtel.signHalo"
                 let isHalo = materialName == "landmark.tanzaniteHalo" || isSignHalo
                 let isConcrete = materialName == "surface.bridgeConcrete"
-                // Landmark shader-facade walls: "landmark.facade|style|storey|ground|base" (see
-                // HarbourArchitectureParts.facadeSkin); u = along-wall fraction, v = corner flags.
-                let facade = Self.facade(materialName)
-                if facade != nil, uvs == nil {
-                    uvs = geometry.sources(for: .texcoord).first.map { vectors2(from: $0) } ?? []
-                }
                 let appearance = SIMD4<Float>(
                     (material?.roughness.contents as? NSNumber)?.floatValue ?? 0.85,
                     (material?.metalness.contents as? NSNumber)?.floatValue ?? 0,
@@ -77,46 +70,12 @@ enum BuildingRenderGeometry {
                         let inputNormal = normals.indices.contains(id) ? normals[id] : simd_normalize(face)
                         let normal = simd_normalize(normalMatrix * inputNormal)
                         let sampledTint = pigment?.color(at: id).map { $0 * tint } ?? tint
-                        var shaded = appearance
-                        if let (spec, base) = facade {
-                            let uv = uvs.flatMap { $0.indices.contains(id) ? $0[id] : nil } ?? .zero
-                            shaded = SIMD4(uv.y, spec.materialCode(along: uv.x), spec.heightAttribute(Double(p.z) - base), -20)
-                        }
-                        result.append(BuildingRenderVertex(position: p, normal: SIMD4(normal, 0), color: sampledTint, appearance: shaded))
+                        result.append(BuildingRenderVertex(position: p, normal: SIMD4(normal, 0), color: sampledTint, appearance: appearance))
                     }
                 }
             }
         }
         return result
-    }
-
-    private static func facade(_ name: String) -> (DioramaFacade, Double)? {
-        guard name.hasPrefix("landmark.facade|") else { return nil }
-        let parts = name.split(separator: "|")
-        guard parts.count == 5, let style = Int(parts[1]).flatMap(DioramaFacade.Style.init(rawValue:)),
-              let storey = Double(parts[2]), let ground = Double(parts[3]), let base = Double(parts[4]) else { return nil }
-        return (DioramaFacade(style: style, storey: storey, groundFloor: ground), base)
-    }
-
-    private static func vectors2(from source: SCNGeometrySource) -> [SIMD2<Float>] {
-        guard source.usesFloatComponents, source.componentsPerVector >= 2,
-              [4, 8].contains(source.bytesPerComponent), source.vectorCount > 0 else { return [] }
-        return source.data.withUnsafeBytes { bytes in
-            var result: [SIMD2<Float>] = []
-            result.reserveCapacity(source.vectorCount)
-            for index in 0..<source.vectorCount {
-                let start = source.dataOffset + index * source.dataStride
-                guard start >= 0, start + 2 * source.bytesPerComponent <= bytes.count else { return [] }
-                func scalar(_ component: Int) -> Float {
-                    let offset = start + component * source.bytesPerComponent
-                    return source.bytesPerComponent == 4
-                        ? bytes.loadUnaligned(fromByteOffset: offset, as: Float.self)
-                        : Float(bytes.loadUnaligned(fromByteOffset: offset, as: Double.self))
-                }
-                result.append(SIMD2(scalar(0), scalar(1)))
-            }
-            return result
-        }
     }
 
     private static func vectors(from source: SCNGeometrySource) -> [SIMD3<Float>] {

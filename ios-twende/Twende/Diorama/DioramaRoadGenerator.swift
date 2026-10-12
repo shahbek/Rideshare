@@ -140,7 +140,11 @@ nonisolated struct DioramaRoadGenerator {
                     run = nil
                 }
                 for (a, b) in zip(line, line.dropFirst()) {
-                    guard !ramps.contains(where: { $0.covers((a + b) * 0.5) }) else { flush(); continue }
+                    let mid = (a + b) * 0.5
+                    guard !ramps.contains(where: { $0.covers(mid) }) else { flush(); continue }
+                    // Asphalt again within 1.2 m on the far side: a sliver of island at a median
+                    // nose or merge. Its kerbs would overlap into thin spikes, so it stays unkerbed.
+                    guard !layout.carriageway.contains(mid - inward * 1.2) else { flush(); continue }
                     if shaderKerbs {
                         if run == nil { run = a }
                         runEnd = b

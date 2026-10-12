@@ -1,5 +1,4 @@
 import SceneKit
-import UIKit
 import simd
 
 /// Bounded explicit-mesh facade vocabulary using the existing Slipway kit and landmark materials.
@@ -60,55 +59,42 @@ enum HarbourArchitectureParts {
         return kept.map { ring[$0] }
     }
 
-    /// Storey the facade shader can express (2.60-4.15 m) that divides `span` into whole floors.
-    static func facadeStorey(span: Double, rows: Int) -> (storey: Double, rows: Int) {
-        var count = max(1, rows)
-        let raw = span/Double(count)
-        if raw > DioramaFacade.minimumStorey+DioramaFacade.storeyStep*31 { count = Int(ceil(span/4.15)) }
-        else if raw < DioramaFacade.minimumStorey { count = max(1, Int(floor(span/DioramaFacade.minimumStorey))) }
-        return (DioramaFacade.snapStorey(span/Double(count)), count)
-    }
+    enum PaneKind { case pane, alternate, lit }
 
-    /// The city's shader facade on a landmark ring: one quad per edge, openings, mullions, floor
-    /// lines, reveals and night windows drawn by the fragment shader. Square corners are rounded by
-    /// the shader; short edges (rounded contours) keep the ring's smooth normals and sharp flags.
-    /// `lit` adds a sparse set of proud lit panes (2 triangles each) that bloom at night.
-    static func facadeSkin(_ input: [SIMD2<Double>], bottom: Double, top: Double, storey: Double,
-                           style: DioramaFacade.Style, color: String, root: SCNNode, name: String,
-                           lit: Bool = false, litBay: Double = 3.4) {
+    /// The approved pigment glazing (flat glass cells coloured by a pattern, lit cells glowing at
+    /// night) at a fraction of the vertices: cells of the same kind stacked in one bay column are
+    /// a single tall quad, so a column only splits where a lit window interrupts it. Same cells,
+    /// same colours, same smooth normals as the per-cell original; typically 3-6x fewer quads.
+    static func glazing(_ ring: [SIMD2<Double>], bottom: Double, top: Double, rows: Int, bayWidth: Double,
+                        minimumEdge: Double = 0.01, pattern: (_ edge: Int, _ bay: Int, _ row: Int, _ length: Double) -> PaneKind,
+                        panes: inout BuildingMesh, alternate: inout BuildingMesh, lit: inout BuildingMesh) {
         typealias P = DarLandmarkParts
-        guard input.count >= 3, top > bottom+0.1 else { return }
-        let ring = ccw(input)
-        let n = ring.count
-        let smooth = BuildingContour.outwardNormals(ring)
-        func roundable(_ corner: Int) -> Bool {
-            let incoming = ring[corner]-ring[(corner+n-1)%n], outgoing = ring[(corner+1)%n]-ring[corner]
-            guard simd_length(incoming) > 0.3, simd_length(outgoing) > 0.3 else { return false }
-            let p = simd_normalize(incoming), q = simd_normalize(outgoing)
-            return p.x*q.y-p.y*q.x > 0.5 && abs(simd_dot(p,q)) < 0.6
-        }
-        let snapped = DioramaFacade.snapStorey(storey)
-        var walls = BuildingMesh(), panes = BuildingMesh()
+        guard ring.count >= 3, rows > 0, top > bottom else { return }
+        let normals = BuildingContour.outwardNormals(ring), storey = (top-bottom)/Double(rows)
         for i in ring.indices {
-            let j = (i+1)%n, a = ring[i], b = ring[j], d = b-a, length = simd_length(d)
-            guard length > 0.05 else { continue }
-            let flat = SIMD2(d.y,-d.x)/length
-            let short = length < 1.2
-            let flags = (short || !roundable(i) ? 1 : 0)+(short || !roundable(j) ? 2 : 0)
-            walls.facadeQuad(a,b,bottom:bottom,top:top,normals:short ? smooth[i] : flat,short ? smooth[j] : flat,flags:flags)
-            guard lit, length > 3 else { continue }
-            let rows = Int((top-bottom)/snapped), bays = max(1,Int(ceil(length/litBay)))
-            for row in 0..<rows {
-                for bay in 0..<bays where (bay+row*5+i)%17 == 2 {
-                    let p = a+d*((Double(bay)+0.12)/Double(bays))+flat*0.04, q = a+d*((Double(bay)+0.88)/Double(bays))+flat*0.04
-                    let low = bottom+Double(row)*snapped+0.5, high = bottom+Double(row+1)*snapped-0.15
-                    panes.quad(P.p(p,low),P.p(q,low),P.p(q,high),P.p(p,high),normal:P.p(flat,0))
+            let j = (i+1)%ring.count, a = ring[i], delta = ring[j]-a, length = simd_length(delta)
+            guard length > minimumEdge else { continue }
+            let bays = max(1, Int(ceil(length/bayWidth)))
+            for bay in 0..<bays {
+                let t = Double(bay)/Double(bays), u = Double(bay+1)/Double(bays)
+                let p = a+delta*t, q = a+delta*u
+                let na = simd_normalize(normals[i]*(1-t)+normals[j]*t)
+                let nb = simd_normalize(normals[i]*(1-u)+normals[j]*u)
+                let ns = [P.p(na,0),P.p(nb,0),P.p(nb,0),P.p(na,0)]
+                var start = 0, kind = pattern(i, bay, 0, length)
+                for row in 1...rows {
+                    let next: PaneKind? = row < rows ? pattern(i, bay, row, length) : nil
+                    guard next != kind else { continue }
+                    let low = bottom+Double(start)*storey, high = bottom+Double(row)*storey
+                    switch kind {
+                    case .pane: panes.smoothQuad(P.p(p,low),P.p(q,low),P.p(q,high),P.p(p,high),normals:ns)
+                    case .alternate: alternate.smoothQuad(P.p(p,low),P.p(q,low),P.p(q,high),P.p(p,high),normals:ns)
+                    case .lit: lit.smoothQuad(P.p(p,low),P.p(q,low),P.p(q,high),P.p(p,high),normals:ns)
+                    }
+                    if let next { start = row; kind = next }
                 }
             }
         }
-        let material = BuildingSurfaces.make("landmark.facade|\(style.rawValue)|\(snapped)|0|\(bottom)",color:color,roughness:0.85)
-        root.addChildNode(walls.node(name:name,material:material))
-        if lit { root.addChildNode(panes.node(name:"occupiedHarbourWindows",material:LandmarkLightingGeometry.window)) }
     }
 
     /// Projecting band seen from the street and the sky only: a front face and a lid (4 triangles
@@ -138,36 +124,40 @@ enum HarbourArchitectureParts {
         mesh.quad(P.p(fa,bottom),P.p(a,bottom),P.p(a,top),P.p(fa,top),normal:P.p(-simd_normalize(t),0))
     }
 
-    /// Curtain wall as a shader facade (glass tint from the pane material) plus light geometry for
-    /// what reads at map scale: one sill ledge per storey and edge, and slim mullion fins per bay.
+    /// Curtain wall in the approved pigment look: glass cells alternating two tints by bay column,
+    /// occupied windows lit at night (about one cell in seven), one sill per storey and a mullion
+    /// at every bay. Columns are merged quads (`glazing`); sills are open ledges and mullions open
+    /// fins on exactly the original sill and mullion lines, so nothing overlaps or doubles up.
     static func curtain(_ ring: [SIMD2<Double>], bottom: Double, top: Double, rows: Int, bayWidth: Double,
                         root: SCNNode, occupied: Bool = true, creamSills: Bool = false, drawsSills: Bool = true,
                         paneMaterial: SCNMaterial? = nil, alternateMaterial: SCNMaterial? = nil) {
-        typealias P = DarLandmarkParts
-        let ring = ccw(ring)
-        let (storey, count) = facadeStorey(span: top-bottom, rows: rows)
-        let tint = (paneMaterial ?? glass).diffuse.contents as? UIColor ?? .darkGray
-        facadeSkin(ring, bottom: bottom, top: top, storey: storey, style: .curtain, color: hex(tint),
-                   root: root, name: "curtainGlass", lit: occupied, litBay: bayWidth)
-        var frames = BuildingMesh()
+        var panes = BuildingMesh(), alternate = BuildingMesh(), lit = BuildingMesh(), frames = BuildingMesh()
+        glazing(ring, bottom: bottom, top: top, rows: rows, bayWidth: bayWidth, pattern: { i, bay, row, length in
+            if occupied && length > 3 && (bay+row*5+i)%7 == 2 { return .lit }
+            return (bay+i)%3 == 0 ? .alternate : .pane
+        }, panes: &panes, alternate: &alternate, lit: &lit)
+        root.addChildNode(panes.node(name:"curtainGlass",material:paneMaterial ?? glass))
+        root.addChildNode(alternate.node(name:"curtainGlass",material:alternateMaterial ?? lightGlass))
+        root.addChildNode(lit.node(name:"occupiedHarbourWindows",material:LandmarkLightingGeometry.window))
+        let outward = ccw(ring)
+        let storey = (top-bottom)/Double(rows)
         if drawsSills {
-            let step = (top-bottom)/Double(count)
-            for row in 1...count {
-                ledge(&frames, ring: ring, z: bottom+Double(row)*step-(creamSills ? 0.32 : 0.16),
-                      height: creamSills ? 0.32 : 0.16, reach: creamSills ? 0.3 : 0.14)
+            let r = creamSills ? 0.20 : 0.10
+            for row in 1...rows {
+                ledge(&frames, ring: outward, z: bottom+Double(row)*storey-r, height: r*2, reach: 0.10+r)
             }
         }
-        for i in ring.indices {
-            let a = ring[i], b = ring[(i+1)%ring.count], d = b-a, length = simd_length(d)
+        for i in outward.indices {
+            let a = outward[i], b = outward[(i+1)%outward.count], d = b-a, length = simd_length(d)
             guard length > 2 else { continue }
             let n = SIMD2(d.y,-d.x)/length
             let bays = max(1, Int(ceil(length/bayWidth)))
             for bay in 0..<bays {
-                fin(&frames, at: a+d*(Double(bay)/Double(bays)), outward: n, bottom: bottom, top: top, width: 0.22, depth: 0.16)
+                fin(&frames, at: a+d*(Double(bay)/Double(bays)), outward: n, bottom: bottom, top: top, width: 0.24, depth: 0.22)
             }
         }
-        root.addChildNode(frames.node(name:"harbourClosedMullions",material:creamSills ? P.plaster : P.silver))
-        root.addChildNode(BuildingFootprint(rings:[ring]).deck(at:top-0.25,thickness:0.25,material:P.plaster,name:"closedHarbourRoof"))
+        root.addChildNode(frames.node(name:"harbourClosedMullions",material:creamSills ? DarLandmarkParts.plaster : DarLandmarkParts.silver))
+        root.addChildNode(BuildingFootprint(rings:[ring]).deck(at:top-0.25,thickness:0.25,material:DarLandmarkParts.plaster,name:"closedHarbourRoof"))
     }
 
     /// Counter-clockwise copy (outward is to the right of travel).
@@ -175,12 +165,6 @@ enum HarbourArchitectureParts {
         var area = 0.0
         for i in ring.indices { let a = ring[i], b = ring[(i+1)%ring.count]; area += a.x*b.y-a.y*b.x }
         return area < 0 ? Array(ring.reversed()) : ring
-    }
-
-    static func hex(_ color: UIColor) -> String {
-        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 1
-        color.getRed(&r, green: &g, blue: &b, alpha: &a)
-        return String(format: "#%02X%02X%02X", Int((r*255).rounded()), Int((g*255).rounded()), Int((b*255).rounded()))
     }
 
     /// Last human-readable rejection, surfaced in Settings so a missing tower names its actual cause.

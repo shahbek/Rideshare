@@ -37,13 +37,7 @@ enum JohariRotanaGeometry {
         let centre = SIMD2((bounds.x+bounds.z)/2,(bounds.y+bounds.w)/2)
         let recessed = ring.map { centre+($0-centre)*0.987 }
         P.volume(recessed,bottom:0.2,top:podiumTop-0.6,material:H.louvre,name:"johariRecessedParkingPodium",root:root)
-        // Parking louvres: the shader's ribbon facade (dark bands, slim mullions) a few cm proud of
-        // the recessed body, instead of three modelled slats per level and edge.
-        let louvreSkin = ring.map { centre+($0-centre)*0.9895 }
-        let (louvreStorey, _) = H.facadeStorey(span:podiumTop-0.8,rows:7)
-        H.facadeSkin(H.compactContour(louvreSkin,error:0.05),bottom:0.2,top:podiumTop-0.6,storey:louvreStorey,style:.ribbon,
-                     color:"#30494E",root:root,name:"johariParkingLouvres")
-        var bands = BuildingMesh(), fins = BuildingMesh()
+        var bands = BuildingMesh(), fins = BuildingMesh(), slats = BuildingMesh()
         for level in 0...7 {
             H.ribbon(&bands,ring:ring,z:0.3+Double(level)*(podiumTop-0.9)/7,height:1.45,reach:0.18)
         }
@@ -56,6 +50,14 @@ enum JohariRotanaGeometry {
             for bay in 0...bays {
                 let p = a+d*(Double(bay)/Double(bays))-n*0.20
                 LandmarkMesh.leanBeam(&fins,from:P.p(p,0.4),to:P.p(p,podiumTop),radius:0.34)
+            }
+            // Parking louvres: three slim slats per level and edge (open 4-sided bars, no caps).
+            for level in 0..<7 {
+                let z = 1.8+Double(level)*(podiumTop-0.9)/7
+                for step in 0..<3 {
+                    let low = z+Double(step)*0.32
+                    LandmarkMesh.leanBeam(&slats,from:P.p(a-n*0.15,low),to:P.p(q-n*0.15,low),radius:0.045)
+                }
             }
         }
         // Glass stair/lift bays interrupt the open parking ribbons on both long elevations.
@@ -70,6 +72,7 @@ enum JohariRotanaGeometry {
         }
         root.addChildNode(bands.node(name:"johariContinuousParkingRibbons",material:P.plaster))
         root.addChildNode(fins.node(name:"johariPodiumPiers",material:P.plaster))
+        root.addChildNode(slats.node(name:"johariParkingLouvres",material:H.louvre))
         root.addChildNode(surrounds.node(name:"johariGoldPodiumBays",material:P.gold))
         root.addChildNode(bays.node(name:"curtainGlass",material:H.glass))
     }

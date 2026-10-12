@@ -563,7 +563,7 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost, @unchecke
                     }
                 }
             }
-            if !contextOnly, !labels.isEmpty {
+            if DioramaConfig.buildingLabels, !contextOnly, !labels.isEmpty {
                 labelRenderer = DioramaLabelRenderer(device: metalDevice, labels: labels, scale: displayScale, color: colorFormat, depthFormat: depthFormat)
             }
             guard vertexBuffer != nil, indexBuffer != nil, instanceBuffer != nil,

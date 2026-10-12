@@ -583,10 +583,17 @@ nonisolated enum DioramaShaderSource {
             if (dist2 > radius * radius) continue;
             float dist = sqrt(dist2);
             float3 L = d / max(dist, 0.01);
-            float att = 1.0 - dist / radius;
-            att = att * att * (1.0 / (1.0 + dist2 * 0.06));
-            float wrap = saturate(dot(n, L) * 0.75 + 0.25);
-            sum += l.color.rgb * (l.color.w * att * wrap * 3.2 * fixtureCoverage);
+            // Light leaves the fixture, not the ground: inverse-square falloff from the lamp head
+            // with a smooth range window, Lambert on the receiver (only a 10 % wrap), and a shaded
+            // lantern that throws most of its light downward (negative intensity: an uplight that
+            // washes the wall above it). The brightest pool therefore sits on the ground directly
+            // under the head and walls are lit from above, fading with distance from the fixture.
+            float fade = saturate(1.0 - pow(dist / radius, 4.0));
+            float att = fade * fade / (1.0 + dist2 * 0.12);
+            float facing = l.color.w < 0.0 ? -L.z : L.z;
+            float cone = mix(0.3, 1.0, smoothstep(-0.15, 0.55, facing));
+            float ndl = saturate(dot(n, L) * 0.9 + 0.1);
+            sum += l.color.rgb * (abs(l.color.w) * att * ndl * cone * 3.2 * fixtureCoverage);
         }
         return sum;
     }
@@ -1229,37 +1236,20 @@ nonisolated enum DioramaShaderSource {
         float skyOpen = in.appearance.z > 50.0 && code < 0.5 ? smoothstep(6.0, 60.0, dioramaWallHeight(in.appearance.z)) * 0.08 : 0.0;
         float3 light = (direct * 0.80 + ambient * (0.30 * u.look.x / 0.64) * (1.0 + skyOpen) + bounce) * ao * facade.occlusion;
         float3 pointLight = glow > 0.01 ? dioramaSodium(dioramaPointLights(litPos, litN, u, lights, lightTable, lightIndices)) : float3(0.0);
-        // City glow: the orange wash of night satellite imagery comes from thousands of overlapping
-        // sodium pools along every street, not from individual fixtures. An even street density
-        // lights ground and facades, with gentle
-        // pooling; roofs catch only a little of it.
+        // City glow: only a faint, even sky glow (city light scattered back down by haze) without any pools:
+        // every visible pool of light now comes from a real fixture (dioramaPointLights).
         float3 cityGlow = float3(0.0);
-        float street = 0.0;
         if (glow > 0.01) {
-            // An even, slightly pooled sodium wash stands in for a road-density field.
-            street = 0.42;
-            if (street > 0.001) {
-                float pooling = 0.72 + 0.28 * dioramaNoise(wp * 0.085 + float2(3.7, -1.3));
-                float facing = roofSurface ? 0.28 : (0.55 + 0.45 * saturate(litN.z));
-                cityGlow = float3(1.0, 0.42, 0.07) * (street * pooling * facing * glow * 0.52 * (0.7 + 0.3 * ao));
-            }
+            float skyward = 0.35 + 0.65 * saturate(litN.z);
+            cityGlow = float3(1.0, 0.50, 0.16) * (skyward * glow * 0.07 * (0.7 + 0.3 * ao));
         }
-        // Floodlit facades (Apple Maps-style material glow): every wall carries its height above
-        // its own base, so towers and landmarks light themselves without per-building keying.
-        // A sodium uplight pool at street level fades upward in soft floodlight scallops; tall
-        // bodies get an even warm-white wash brightening toward the crown.
+        // Tall bodies keep a soft warm wash of interior light spilling through their glazing,
+        // brightening toward the crown. No fake street-level uplight pools at wall feet.
         float3 facadeGlow = float3(0.0);
         if (glow > 0.01 && code < 0.5 && in.appearance.z > 50.0 && abs(litN.z) < 0.45) {
             float h = max(0.0, dioramaWallHeight(in.appearance.z));
-            float2 tangent = normalize(float2(-litN.y, litN.x) + float2(0.0001, 0.0));
-            float along = dot(wp, tangent);
-            float scallopFade = exp(-h / 9.0);
-            float scallop = 1.0 - scallopFade * 0.55 * (0.5 - 0.5 * cos(along * 1.0471976));
-            float uplight = exp(-h / 6.5) * (0.45 + 0.55 * street) * scallop;
             float body = smoothstep(7.0, 26.0, h) * (0.55 + 0.45 * smoothstep(26.0, 90.0, h));
-            float3 sodium = float3(1.0, 0.45, 0.10);
-            float3 warmWhite = float3(1.0, 0.60, 0.24);
-            facadeGlow = (sodium * uplight * 0.85 + warmWhite * body * 0.42) * glow * (0.75 + 0.25 * ao);
+            facadeGlow = float3(1.0, 0.60, 0.24) * (body * 0.30 * glow * (0.75 + 0.25 * ao));
         }
         float3 lampLight = pointLight * glow * (0.6 + 0.4 * ao) + cityGlow + facadeGlow;
         light += lampLight;
@@ -1393,7 +1383,7 @@ nonisolated enum DioramaShaderSource {
             float pick = fract(sin(dot(block, float2(12.9898, 78.233))) * 43758.5453);
             float share = kind > 1.5 ? 0.34 : (kind > 0.5 ? 1.0 : 0.10);
             if (pick >= share) discard_fragment();
-            energy = kind > 0.5 && kind < 1.5 ? 1.5 : 1.1;
+            energy = kind > 0.5 && kind < 1.5 ? 2.1 : 1.1;
         }
         out.position = float4(0.0);
         out.normal = float4(0.0);

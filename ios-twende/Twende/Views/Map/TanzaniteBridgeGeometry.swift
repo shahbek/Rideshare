@@ -80,8 +80,8 @@ enum TanzaniteBridgeGeometry {
         for station in alignment.record.pylonChainages {
             for side in [-1.0, 1.0] {
                 let base = alignment.point(at: station, offset: side * (half + 1.2)) + SIMD3(0, 0, 1.0)
-                LandmarkLightingGeometry.fixture(at: base, radius: 26, intensity: 2.2, root: scene.rootNode)
-                LandmarkLightingGeometry.fixture(at: base + SIMD3(0, 0, 18), radius: 22, intensity: 1.6, root: scene.rootNode)
+                LandmarkLightingGeometry.fixture(at: base, radius: 26, intensity: 2.2, root: scene.rootNode, upward: true)
+                LandmarkLightingGeometry.fixture(at: base + SIMD3(0, 0, 18), radius: 22, intensity: 1.6, root: scene.rootNode, upward: true)
             }
         }
         scene.rootNode.addChildNode(lamps.node(name: "bridgeLightingColumns", material: DarLandmarkParts.silver))

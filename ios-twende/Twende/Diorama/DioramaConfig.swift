@@ -137,8 +137,12 @@ nonisolated struct DioramaConfig: Sendable {
     /// are drawn by the fragment shader from the wall's own coordinates (`DioramaFacade`), with
     /// parallax reveals instead of modelled recesses. Replaces 7-16 quads per window per floor.
     static let shaderFacades = true
+    /// Floating 3D building nameplates (`DioramaLabelRenderer`). Off: the renderer is never built,
+    /// its plate atlas never rasterised or budgeted and its draw never encoded. The component is
+    /// kept intact for a later, redesigned label system.
+    static let buildingLabels = false
     /// Bump to invalidate every cached tile.
-    var generatorVersion: Int = 43
+    var generatorVersion: Int = 44
     /// Reuse full-detail architectural primitives without changing their tessellation.
     var instancesArchitecture: Bool = true
     /// Drape the plate/ground overlays over the bundled height snapshot used by roads and foundations.

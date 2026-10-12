@@ -97,7 +97,8 @@ final class DioramaResidencyBudget {
         let w = Int(max(1, size.width)), h = Int(max(1, size.height))
         let hw = max(1, w / 2), hh = max(1, h / 2)
         let screen = hw * hh * 30 + max(1, hw / 2) * max(1, hh / 2) * 16 + max(1, hw / 4) * max(1, hh / 4) * 16
-        return chunks + 16 * 1_048_576 + screen + DioramaLabelRenderer.estimatedTextureBytes(titles: labelTitles, scale: scale)
+        let labels = DioramaConfig.buildingLabels ? DioramaLabelRenderer.estimatedTextureBytes(titles: labelTitles, scale: scale) : 0
+        return chunks + 16 * 1_048_576 + screen + labels
     }
 
     /// Saved tiles decode straight into shared Metal storage (unified memory): one copy, packed

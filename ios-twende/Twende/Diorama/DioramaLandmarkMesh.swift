@@ -25,17 +25,6 @@ enum DioramaLandmarkMesh {
             let code = raw[0].appearance.w
             // Old billboard halos carried a different normal grammar; real bloom replaces them.
             if code == 3 { continue }
-            if code == -20 {
-                // Shader-facade wall: openings, mullions, floor lines and night windows come from the
-                // fragment shader, exactly as on the city's buildings (DioramaFacade encoding).
-                var wall = raw.map { v in BuildingRenderVertex(position: v.position, normal: v.normal, color: v.color,
-                    appearance: SIMD4(0.85, v.appearance.y, v.appearance.z, v.appearance.x * 0.0625)) }
-                let p = wall.map { SIMD3($0.position.x, $0.position.y, $0.position.z) }
-                let n = wall.reduce(SIMD3<Float>.zero) { $0 + SIMD3($1.normal.x, $1.normal.y, $1.normal.z) }
-                if simd_dot(simd_cross(p[1] - p[0], p[2] - p[0]), n) < 0 { wall.swapAt(1, 2) }
-                append(wall, category: .buildings, doubleSided: false)
-                continue
-            }
             let material: Float = code == -15 ? 9 : code == -14 ? 5 : code == -12 ? 15 : code == 1 || code == 2 || code == -11 ? 6 : code == -5 ? 10 : code == -2 ? 13 : code == -6 ? 4 : code == -7 ? 3 : code == -8 ? 11 : code == -9 || code == 4 ? 0 : 12
             var solid = raw.map { v in
                 BuildingRenderVertex(position: v.position, normal: v.normal,
@@ -67,8 +56,10 @@ enum DioramaLandmarkMesh {
         scene.rootNode.enumerateChildNodes { node, _ in
             guard node.name == "landmarkPointLight", let light = node.light else { return }
             let p = node.simdWorldPosition
+            // Negative intensity marks an uplight (the shader aims its cone upward).
+            let sign: Float = light.name == "uplight" ? -1 : 1
             lights.append(.init(position: DV3(Double(p.x), Double(p.y), Double(p.z)),
-                color: SIMD3(1, 0.64, 0.20), radius: Double(light.attenuationEndDistance), intensity: Float(light.intensity) / 1000))
+                color: SIMD3(1, 0.64, 0.20), radius: Double(light.attenuationEndDistance), intensity: sign * Float(light.intensity) / 1000))
         }
         return .init(vertices: packed, indices: indices, ranges: ranges, lights: lights, minimum: low, maximum: high)
     }
@@ -86,14 +77,6 @@ enum DioramaLandmarkMesh {
             guard raw.count == 3 else { return [] }
             let code = raw[0].appearance.w
             if code == 3 { return [] }
-            if code == -20 {
-                var wall = raw.map { v in BuildingRenderVertex(position: v.position, normal: v.normal, color: v.color,
-                    appearance: SIMD4(0.85, v.appearance.y, v.appearance.z, v.appearance.x * 0.0625)) }
-                let p = wall.map { SIMD3($0.position.x, $0.position.y, $0.position.z) }
-                let n = wall.reduce(SIMD3<Float>.zero) { $0 + SIMD3($1.normal.x, $1.normal.y, $1.normal.z) }
-                if simd_dot(simd_cross(p[1] - p[0], p[2] - p[0]), n) < 0 { wall.swapAt(1, 2) }
-                return [(wall, .buildings, false, false)]
-            }
             let material: Float = code == -15 ? 9 : code == -14 ? 5 : code == -12 ? 15 : code == 1 || code == 2 || code == -11 ? 6 : code == -5 ? 10 : code == -2 ? 13 : code == -6 ? 4 : code == -7 ? 3 : code == -8 ? 11 : code == -9 || code == 4 ? 0 : 12
             var solid = raw.map { v in
                 BuildingRenderVertex(position: v.position, normal: v.normal, color: code == -11 ? SIMD4(0.255, 0.494, 0.525, 1) : v.color,

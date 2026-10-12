@@ -78,17 +78,21 @@ enum BandariTowerGeometry {
         roundels(podium,largeX:coreLeft-19,sailFace:sailFace,root:root)
     }
 
-    /// Glazing is the city's curtain shader facade (one quad per edge, panes, mullions and night
-    /// windows in the fragment shader); the dark floor seams stay as flat strips 3 cm proud.
-    private static func paintedGlazing(_ input: [SIMD2<Double>], bottom: Double, top: Double, rows: Int,
+    /// Approved pigment glazing: wide glass bays in two tints on a diagonal rhythm, occupied windows
+    /// lit at night, dark floor seams as flat strips 3 cm proud. Bay columns are merged quads.
+    private static func paintedGlazing(_ ring: [SIMD2<Double>], bottom: Double, top: Double, rows: Int,
                                        bayWidth: Double, occupied: Bool, root: SCNNode) {
         typealias P = DarLandmarkParts
         typealias H = HarbourArchitectureParts
-        let ring = H.ccw(input)
-        let (storey, count) = H.facadeStorey(span: top-bottom, rows: rows)
-        H.facadeSkin(ring, bottom: bottom, top: top, storey: storey, style: .curtain, color: "#326A72",
-                     root: root, name: "curtainGlass", lit: occupied, litBay: bayWidth)
-        let normals = BuildingContour.outwardNormals(ring), step = (top-bottom)/Double(count)
+        var panes = BuildingMesh(), light = BuildingMesh(), lit = BuildingMesh()
+        H.glazing(ring, bottom: bottom, top: top, rows: rows, bayWidth: bayWidth, pattern: { i, bay, row, length in
+            if occupied && length > 8 && (row*3+bay+i)%9 == 4 { return .lit }
+            return (bay+row+i)%4 == 0 ? .alternate : .pane
+        }, panes: &panes, alternate: &light, lit: &lit)
+        root.addChildNode(panes.node(name:"curtainGlass",material:H.glass))
+        root.addChildNode(light.node(name:"curtainGlass",material:H.lightGlass))
+        root.addChildNode(lit.node(name:"occupiedHarbourWindows",material:LandmarkLightingGeometry.window))
+        let normals = BuildingContour.outwardNormals(ring), count = rows, step = (top-bottom)/Double(rows)
         var seams = BuildingMesh()
         for i in ring.indices {
             let j = (i+1)%ring.count

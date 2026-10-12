@@ -43,7 +43,7 @@ nonisolated final class DioramaBakedLandmarks: @unchecked Sendable {
     /// GPU-ready tile snapshots that contain them) then rebuild once. The stamp is deliberately NOT
     /// tied to the app version/build or executable date: every new build used to rebuild all
     /// ~70 harbour recipes before the first full-detail read, which took minutes on each install.
-    static let recipeRevision = 3
+    static let recipeRevision = 4
     private static let stamp: String = "bake4-compositions-r\(recipeRevision)"
 
     private let lock = NSLock()

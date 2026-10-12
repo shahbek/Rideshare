@@ -11,12 +11,18 @@ enum PSPFTowerGeometry {
         let width = highX - lowX
         let roof: Double = 140.5
         let mirror = site.id == "pspf-nw"
-        // Glass is the city's curtain shader facade (two shader storeys per modelled floor band);
-        // the deep floor bands and mullions stay geometry as open ledges and fins.
-        H.facadeSkin(ring, bottom: 0, top: roof, storey: roof / 36, style: .curtain, color: "#326A72",
-                     root: root, name: "curtainGlass", lit: true, litBay: 5.2)
+        // Approved two-tint teal glazing with lit occupied floors; bay columns are merged quads.
+        // The deep floor bands and mullions are open ledges and fins on the original lines.
+        var glass = BuildingMesh(), glassAlternate = BuildingMesh(), lit = BuildingMesh()
+        H.glazing(ring, bottom: 0, top: roof, rows: 18, bayWidth: 5.2, pattern: { i, bay, floor, _ in
+            if (bay + floor * 3 + i) % 7 == 1 { return .lit }
+            return (bay + i) % 3 == 0 ? .alternate : .pane
+        }, panes: &glass, alternate: &glassAlternate, lit: &lit)
+        root.addChildNode(glass.node(name: "curtainGlass", material: BuildingSurfaces.make("pspf.tealGlass", color: "#326A72", roughness: 0.4, metalness: 0.08)))
+        root.addChildNode(glassAlternate.node(name: "curtainGlass", material: BuildingSurfaces.make("pspf.tealGlass", color: "#417E86", roughness: 0.4, metalness: 0.08)))
+        root.addChildNode(lit.node(name: "occupiedTowerWindows", material: LandmarkLightingGeometry.window))
         var mullions = BuildingMesh(), gold = BuildingMesh(), ribs = BuildingMesh(), lattice = BuildingMesh(), fins = BuildingMesh()
-        for floor in 1...18 { H.ledge(&mullions, ring: ring, z: Double(floor) * roof / 18 - 0.56, height: 0.56, reach: 0.5) }
+        for floor in 1...18 { H.ledge(&mullions, ring: ring, z: Double(floor) * roof / 18 - 0.28, height: 0.56, reach: 0.5) }
         for i in ring.indices {
             let j = (i + 1) % ring.count, a = ring[i], b = ring[j], delta = b - a
             let length = simd_length(delta)

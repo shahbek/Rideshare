@@ -159,6 +159,9 @@ nonisolated enum DioramaStreamPiece {
         /// Harbour buildings in this piece come from the stylized-map-renderer skill (generator 40+).
         /// Harbour pieces without it carry retired procedural buildings and are never mounted.
         var skill: Bool? = nil
+        /// Generator version of the build that baked the piece, so a published set can be checked
+        /// against the current scenery before it is built into the app.
+        var generator: Int? = nil
     }
 
     /// What a bake measured for one piece (only measured values are ever shown).
@@ -536,7 +539,8 @@ nonisolated enum DioramaStreamPiece {
             foliage: materialCounts.x, architecture: materialCounts.y,
             labels: labels.map { LabelRecord(id: $0.id, title: $0.title, anchor: $0.anchor, footprint: $0.footprint.flatMap { [$0.x, $0.y] }, named: $0.isNamed) },
             sections: sections, sourceTriangles: slice.indices.count / 3, stylised: stylised ? true : nil,
-            skill: DioramaRegion.of(id.tile) == .harbour ? true : nil)
+            skill: DioramaRegion.of(id.tile) == .harbour ? true : nil,
+            generator: DioramaConfig.slipway.generatorVersion)
         let encoder = JSONEncoder()
         encoder.nonConformingFloatEncodingStrategy = .convertToString(positiveInfinity: "inf", negativeInfinity: "-inf", nan: "nan")
         let json = try encoder.encode(header)
