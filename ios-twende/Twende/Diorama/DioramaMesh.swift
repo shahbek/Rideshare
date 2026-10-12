@@ -266,7 +266,7 @@ nonisolated struct DioramaMesh: Sendable {
             let j = (i + 1) % n
             mouldedWall(outer, edge: i, z0: z0, z1: z1, s)
             quad(DV3(ring[i], z1), DV3(ring[j], z1), DV3(outer[j], z1), DV3(outer[i], z1), s, normal: .up)
-            quad(DV3(ring[i], z0), DV3(ring[j], z0), DV3(outer[j], z0), DV3(outer[i], z0), s, dark: true, normal: DV3(0, 0, -1))
+            // No underside: a band's soffit faces the ground and the map camera is always above it.
         }
     }
 
@@ -328,16 +328,18 @@ nonisolated struct DioramaMesh: Sendable {
         }
     }
 
-    /// Thin box standing proud of a facade. `out` is the facade's outward normal.
+    /// Thin box standing proud of a facade. `out` is the facade's outward normal. `sides` adds
+    /// every return; `lid` alone adds only the top face, which is what the map camera sees of a
+    /// sill, hood or canopy (its ends and underside are below a pixel).
     mutating func facadeBox(a: DV2, dir: DV2, out: DV2, u: Double, width: Double, z0: Double, z1: Double, depth: Double,
-                            _ s: DioramaSwatch, dark: Bool = false, sides: Bool = true) {
+                            _ s: DioramaSwatch, dark: Bool = false, sides: Bool = true, lid: Bool = false) {
         if let registry = primitiveRegistry, width > 0, z1 > z0,
            abs(dir.length - 1) < 1e-9, abs(out.length - 1) < 1e-9, abs(dir.dot(out)) < 1e-9 {
             let sign = dir.cross(out) < 0 ? -1.0 : 1.0
             let prototype = registry.prototype(kind: "windows / frames", parameters: [width, z1 - z0, depth, sign],
-                flags: [s.rawValue, dark ? 1 : 0, sides ? 1 : 0], doubleSided: doubleSided) { mesh in
+                flags: [s.rawValue, dark ? 1 : 0, sides ? 1 : 0, lid ? 1 : 0], doubleSided: doubleSided) { mesh in
                 mesh.facadeBox(a: .zero, dir: DV2(1, 0), out: DV2(0, sign), u: 0, width: width,
-                               z0: 0, z1: z1 - z0, depth: depth, s, dark: dark, sides: sides)
+                               z0: 0, z1: z1 - z0, depth: depth, s, dark: dark, sides: sides, lid: lid)
             }
             architecturalInstance(prototype, .init(rotation: atan2(dir.y, dir.x), translation: DV3(a + dir * u, z0)))
             return
@@ -345,6 +347,10 @@ nonisolated struct DioramaMesh: Sendable {
         let l = a + dir * (u - width / 2), r = a + dir * (u + width / 2)
         let lf = l + out * depth, rf = r + out * depth
         quad(DV3(lf, z0), DV3(rf, z0), DV3(rf, z1), DV3(lf, z1), s, dark: dark, normal: DV3(out, 0))
+        if !sides, lid {
+            quad(DV3(l, z1), DV3(r, z1), DV3(rf, z1), DV3(lf, z1), s, dark: dark, normal: .up)
+            return
+        }
         guard sides else { return }
         quad(DV3(l, z1), DV3(r, z1), DV3(rf, z1), DV3(lf, z1), s, dark: dark, normal: .up)
         quad(DV3(l, z0), DV3(r, z0), DV3(rf, z0), DV3(lf, z0), s, dark: true, normal: DV3(0, 0, -1))

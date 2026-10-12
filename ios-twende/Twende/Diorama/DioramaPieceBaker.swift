@@ -4,10 +4,12 @@ import Metal
 import Observation
 import UIKit
 
-/// One-time bake on this phone: builds the stylised, fully lit harbour scene of each tile
-/// (`DioramaStylisedScene`: simple blocks, hero landmarks, painted ground with baked shadows,
-/// instanced props), encodes one GPU-ready piece per tile and uploads them to the harbour piece
-/// catalogue. The pieces then go into the app bundle; no phone builds anything while viewing.
+/// One-time bake on this phone: decodes each harbour tile exactly as viewing does (the saved
+/// full-detail package with landmarks, skyline, roofs, walls, planting and lights applied), encodes
+/// it as one GPU-ready whole-tile piece and uploads the pieces to the harbour piece catalogue. The
+/// pieces then go into the app bundle; no phone builds anything while viewing. Every bake reports
+/// the measured triangles per category and per kit part, which is what the low-poly remodelling
+/// of the kit is judged against.
 ///
 /// Foreground only; pauses on Low Power Mode or when the app leaves the foreground, like
 /// preparation. Re-running re-bakes (seconds per ring) and re-uploads; the server's upload token
@@ -28,6 +30,8 @@ final class DioramaPieceBaker {
         let pieces: [Piece]
         let published: Bool
         let revision: Int
+        /// Measured lines per tile key (triangles by category and by kit part).
+        var reports: [String: [String]]? = nil
     }
     nonisolated enum BakeFailure: LocalizedError {
         case missing(String), paused(String), device
@@ -55,7 +59,10 @@ final class DioramaPieceBaker {
     }
     nonisolated private static var reportURL: URL { root.appendingPathComponent("bake.json") }
 
-    private init() { report = Self.readReport() }
+    private init() {
+        report = Self.readReport()
+        tileReports = report?.reports ?? [:]
+    }
 
     nonisolated private static func readReport() -> Report? {
         guard let data = try? Data(contentsOf: reportURL) else { return nil }
@@ -148,31 +155,24 @@ final class DioramaPieceBaker {
         var pieces: [Report.Piece] = []
         var reports: [String: [String]] = [:]
         let started = Date()
-        let token = MapboxOptions.accessToken
+        let store = DioramaOfflineStore.store(for: region)
         for tile in region.tiles {
             try checkPolicy()
             stage = "Baking landmark recipes · \(tile.key)"
-            let landmarks = await DioramaBakedLandmarks.shared.meshes(for: tile)
+            _ = await DioramaBakedLandmarks.shared.meshes(for: tile)
             try checkPolicy()
-            stage = "Reading map sources · \(tile.key)"
-            // Sources saved on this phone first; otherwise fetched once with the map token.
-            var source = await DioramaMasakiSource.load(tile: tile, config: .slipway, token: token, offline: true)
-            if source == nil || source?.hasMapboxCoverage != true {
-                source = await DioramaMasakiSource.load(tile: tile, config: .slipway, token: token, offline: false)
-            }
-            guard let data = source, data.hasMapboxCoverage, data.sourceTerrain != nil else {
-                throw BakeFailure.missing("The map and elevation sources of \(tile.key) could not be read. Connect to the internet (or prepare the harbour once) and bake again.")
-            }
+            stage = "Measuring detail levels · \(tile.key)"
+            _ = try await store.optimize(tile, context: true)
             try checkPolicy()
-            stage = "Building the stylised scene · \(tile.key)"
-            let build = Task.detached(priority: .userInitiated) { () throws -> (DioramaResidentTile, DioramaStylisedScene.Report) in
-                try DioramaStylisedScene.build(data, config: .slipway, landmarks: landmarks, device: device)
+            stage = "Decoding full detail with everything applied · \(tile.key)"
+            guard let resident = await store.readResident(tile, context: false) else {
+                throw BakeFailure.missing("The saved full-detail package of \(tile.key) could not be read: \(await store.readFailure(tile)). Download the harbour in Settings first, then bake again.")
             }
-            let (resident, sceneReport) = try await withTaskCancellationHandler { try await build.value } onCancel: { build.cancel() }
-            reports[tile.key] = sceneReport.lines
-            for line in sceneReport.lines { print("[Pieces] \(tile.key) \(line)") }
+            let lines = Self.measure(resident)
+            reports[tile.key] = lines
+            for line in lines { print("[Pieces] \(tile.key) \(line)") }
             try checkPolicy()
-            stage = "Encoding the scene piece · \(tile.key)"
+            stage = "Encoding the whole-tile piece · \(tile.key)"
             let root = Self.root
             let job = Task.detached(priority: .userInitiated) { () throws -> [Report.Piece] in
                 var out: [Report.Piece] = []
@@ -189,11 +189,11 @@ final class DioramaPieceBaker {
             pieces.append(contentsOf: made)
             done = pieces.count
             let bytes = made.reduce(0) { $0 + $1.bytes }
-            print("[Pieces] \(tile.key) stylised scene: \(made.count) piece, \(bytes) bytes, \(made.reduce(0) { $0 + $1.triangles }) triangles, \(made.reduce(0) { $0 + $1.instances }) placements, built in \(String(format: "%.1f", sceneReport.seconds)) s")
+            print("[Pieces] \(tile.key) whole-tile piece: \(bytes) bytes, \(made.reduce(0) { $0 + $1.triangles }) unique triangles, \(made.reduce(0) { $0 + $1.instances }) placements")
         }
         tileReports = reports
         let bakeSeconds = Date().timeIntervalSince(started)
-        let current = Report(bakedAt: Date().timeIntervalSince1970, pieces: pieces, published: false, revision: 0)
+        let current = Report(bakedAt: Date().timeIntervalSince1970, pieces: pieces, published: false, revision: 0, reports: reports)
         try JSONEncoder().encode(current).write(to: Self.reportURL, options: .atomic)
         report = current
         let totalBytes = pieces.reduce(0) { $0 + $1.bytes }
@@ -209,6 +209,32 @@ final class DioramaPieceBaker {
             print("[Pieces] upload failed: \(error)")
             message = baked + " Upload failed: \((error as? LocalizedError)?.errorDescription ?? "\(error)"). The baked scene draws on this phone now (zoom into the harbour); tap Upload to retry."
         }
+    }
+
+    /// Measured geometry of one decoded tile: unique triangles (each prototype once), triangles the
+    /// GPU draws with every placement, placements per category, then the generator's own part
+    /// report (prototype kinds and counts). Only measured values; nothing estimated.
+    nonisolated static func measure(_ r: DioramaResidentTile) -> [String] {
+        var unique: [DioramaCategory: Int] = [:], drawn: [DioramaCategory: Int] = [:], placements: [DioramaCategory: Int] = [:]
+        for range in r.ranges {
+            unique[range.category, default: 0] += range.count / 3
+            drawn[range.category, default: 0] += range.count / 3
+        }
+        var prototypes = Set<Int>()
+        for group in r.groups {
+            if prototypes.insert(group.fullStart).inserted { unique[group.category, default: 0] += group.fullCount / 3 }
+            drawn[group.category, default: 0] += group.fullCount / 3 * group.instances.count
+            placements[group.category, default: 0] += group.instances.count
+        }
+        let totalUnique = unique.values.reduce(0, +), totalDrawn = drawn.values.reduce(0, +), totalPlacements = placements.values.reduce(0, +)
+        var out = ["\(totalUnique) unique triangles · \(totalDrawn) drawn with placements · \(totalPlacements) placements · \(r.vertexCount) vertices"]
+        for category in DioramaCategory.allCases {
+            let u = unique[category] ?? 0, d = drawn[category] ?? 0, p = placements[category] ?? 0
+            guard u > 0 || d > 0 else { continue }
+            out.append("\(category.rawValue): \(u) unique · \(d) drawn" + (p > 0 ? " · \(p) placements" : ""))
+        }
+        out.append(contentsOf: r.summary.optimizationReport)
+        return out
     }
 
     /// Uploads a baked set to the `harbour-z2` catalogue and marks the report published.
@@ -231,9 +257,9 @@ final class DioramaPieceBaker {
             current = Report(bakedAt: current.bakedAt, pieces: pieces, published: true, revision: revision)
             try JSONEncoder().encode(current).write(to: Self.reportURL, options: .atomic)
             report = current
-            message = "Published \(count) stylised scene pieces (\(ByteCountFormatter.string(fromByteCount: Int64(totalBytes), countStyle: .file))). They go into the app with the next build."
+            message = "Published \(count) whole-tile pieces (\(ByteCountFormatter.string(fromByteCount: Int64(totalBytes), countStyle: .file))). They go into the app with the next build."
         } catch DioramaPrebakedScenery.Failure.rejected(let reason) where reason.contains("already_published") {
-            message = "A stylised harbour set is already published. Replacing it needs the scenery publish key: enter it under Publisher tools, then tap Upload again. The baked pieces stay on this phone and draw here."
+            message = "A whole-tile harbour set is already published. Replacing it needs the scenery publish key: enter it under Publisher tools, then tap Upload again. The baked pieces stay on this phone and draw here."
         } catch DioramaPrebakedScenery.Failure.rejected(let reason) where reason.contains("seed_in_progress") {
             message = "Another phone is uploading to the harbour piece set right now. Wait 3 minutes, then tap Upload again; nothing needs rebaking."
         } catch DioramaPrebakedScenery.Failure.rejected(let reason) where reason.contains("seed_expired") || reason.contains("stale_or_invalid") {

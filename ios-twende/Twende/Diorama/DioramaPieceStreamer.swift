@@ -71,6 +71,9 @@ final class DioramaPieceStreamer {
         let bytes: Int
         let groundRect: DioramaRect
         var attached: Bool = false
+        /// The finite arrival sweep; `revealed` once it has run (or was skipped) so it never repeats.
+        var revealTask: Task<Void, Never>?
+        var revealed: Bool = false
         init(id: ID, host: DioramaRenderLayer, bytes: Int, groundRect: DioramaRect) {
             self.id = id; self.host = host; self.bytes = bytes; self.groundRect = groundRect
         }
@@ -310,7 +313,7 @@ final class DioramaPieceStreamer {
 
         var list: [ID] = []
         for (tile, distance) in ranked {
-            // A stylised scene is the whole tile at every distance: nothing else is wanted for it.
+            // A whole-tile scene piece is the tile at every distance: nothing else is wanted for it.
             let scene = ID(tile: tile, ring: .scene, column: 0, row: 0)
             if available[scene] != nil { list.append(scene); continue }
             list.append(ID(tile: tile, ring: .coarse, column: 0, row: 0))
@@ -480,6 +483,7 @@ final class DioramaPieceStreamer {
                 if shouldAttach { group?.attach(resident.host, id: hostID(id), order: id.ring.order, map: map) }
                 else { group?.detach(hostID(id)) }
                 resident.attached = shouldAttach
+                if shouldAttach, id.ring == .scene, !resident.revealed { reveal(resident, map: map) }
             }
             if id.ring == .coarse || id.ring == .medium {
                 // Mask the full-detail window out of the coarse/medium geometry once every wanted
@@ -508,7 +512,30 @@ final class DioramaPieceStreamer {
 
     private func release(_ id: ID) {
         guard let resident = residents.removeValue(forKey: id) else { return }
+        resident.revealTask?.cancel()
         if resident.attached, let map { DioramaLayerGroup.existing(for: map)?.detach(hostID(id)) }
+    }
+
+    /// The approved arrival: a soft square sweep grows from the camera's ground point until the
+    /// whole scene piece is uncovered, GPU-paced like every other tile reveal, then the field is
+    /// released so the pass costs nothing afterwards.
+    private func reveal(_ resident: Resident, map: MapboxMap) {
+        resident.revealed = true
+        let host = resident.host
+        let projection = DioramaProjection(origin: resident.id.tile.centre)
+        let centre = projection.local(longitude: map.cameraState.center.longitude, latitude: map.cameraState.center.latitude)
+        let rect = resident.groundRect
+        let cx = min(max(centre.x, rect.minX), rect.maxX), cy = min(max(centre.y, rect.minY), rect.maxY)
+        let extent = Float(max(abs(cx - rect.minX), abs(cx - rect.maxX), abs(cy - rect.minY), abs(cy - rect.maxY))) + DioramaRevealStyle.support + 20
+        let field = SIMD4<Float>(Float(cx), Float(cy), -DioramaRevealStyle.support - 2, 1)
+        resident.revealTask = Task { @MainActor [weak self, weak resident] in
+            let finished = await DioramaTileTransition.run(host: host, from: -DioramaRevealStyle.support - 2, to: extent, lifecycle: false,
+                                                           field: field, duration: 1.4) { _, _ in self?.map?.triggerRepaint() }
+            host.setReveal(.zero)
+            resident?.revealTask = nil
+            self?.map?.triggerRepaint()
+            if finished { print("[Pieces] arrival sweep complete \(resident?.id.directory ?? "")") }
+        }
     }
 
     func trimForMemoryWarning() {
@@ -619,7 +646,7 @@ final class DioramaPieceStreamer {
 
     private func mount(_ decoded: DioramaStreamPiece.Decoded, id: ID) async throws {
         let host = DioramaRenderLayer(resident: decoded.resident, groundRect: decoded.groundRect, visible: categories, timeOfDay: time,
-            config: config, labels: decoded.resident.labels, displayScale: Float(UIScreen.main.scale), contextOnly: true, stylised: id.ring.isStylised)
+            config: config, labels: decoded.resident.labels, displayScale: Float(UIScreen.main.scale), contextOnly: true, stylised: decoded.stylised)
         let upload = Task.detached(priority: .userInitiated) { await DioramaGPUUploadQueue.shared.prepare(host) }
         await withTaskCancellationHandler { await upload.value } onCancel: { upload.cancel() }
         guard !Task.isCancelled, map != nil, residents[id] == nil else { return }

@@ -27,7 +27,7 @@ nonisolated enum DioramaStreamPiece {
         case coarse = "c"
         case medium = "m"
         case fine = "f"
-        /// One stylised, fully baked scene per tile (`DioramaStylisedScene`); replaces every other ring.
+        /// One whole-tile piece holding the finished tile at full detail; replaces every other ring.
         case scene = "s"
         /// Blocks per tile side.
         var divisions: Int {
@@ -42,7 +42,7 @@ nonisolated enum DioramaStreamPiece {
             case .coarse: "coarse"
             case .medium: "medium"
             case .fine: "fine"
-            case .scene: "stylised scene"
+            case .scene: "whole-tile scene"
             }
         }
         /// Layer-group draw order: fine pieces draw after the coarse/medium geometry they replace.
@@ -55,8 +55,6 @@ nonisolated enum DioramaStreamPiece {
             case .scene: 16
             }
         }
-        /// Drawn with the baked-only stylised shader.
-        var isStylised: Bool { self == .scene }
     }
 
     struct ID: Hashable, Sendable, CustomStringConvertible {
@@ -155,6 +153,9 @@ nonisolated enum DioramaStreamPiece {
         let sections: [Section]
         /// Where the piece came from, for the Settings listing.
         let sourceTriangles: Int
+        /// Lit entirely at bake time (vertex colours and ground image); drawn with the sample-only
+        /// shader. Absent on pieces that carry the full lighting rig.
+        let stylised: Bool?
     }
 
     /// What a bake measured for one piece (only measured values are ever shown).
@@ -239,7 +240,7 @@ nonisolated enum DioramaStreamPiece {
 
     /// Cuts every non-empty block of `ring` out of a finished tile and hands each encoded piece to
     /// `sink`. Triangles and placements are binned once by overlap; vertices are re-indexed per piece.
-    static func bake(_ r: DioramaResidentTile, ring: Ring, device: MTLDevice,
+    static func bake(_ r: DioramaResidentTile, ring: Ring, device: MTLDevice, stylised: Bool = false,
                      sink: (ID, Data, Measured) throws -> Void) throws {
         let source = Source(r)
         let n = ring.divisions
@@ -423,7 +424,7 @@ nonisolated enum DioramaStreamPiece {
 
                 let data = try encode(slice, id: id, groundRect: groundRect, lightGrid: grid, paint: vectorPaint, labels: labels,
                                       groundIndex: groundIndex, texture: readable, crop: crop, device: device,
-                                      waterHeight: r.waterHeight, materialCounts: r.materialCounts)
+                                      waterHeight: r.waterHeight, materialCounts: r.materialCounts, stylised: stylised)
                 try sink(id, data, Measured(id: id, bytes: data.count, triangles: slice.ranges.reduce(0) { $0 + $1.count } / 3,
                                             instances: slice.instances.count, vertices: slice.vertices.count))
             }
@@ -450,7 +451,7 @@ nonisolated enum DioramaStreamPiece {
     private static func encode(_ slice: Slice, id: ID, groundRect: DioramaRect, lightGrid: DioramaLightGrid, paint: DioramaVectorPaint,
                                labels: [DioramaBuildingLabel], groundIndex: DioramaGroundIndex?, texture: MTLTexture?,
                                crop: (x: Int, y: Int, width: Int, height: Int)?, device: MTLDevice,
-                               waterHeight: Double, materialCounts: SIMD2<Int>) throws -> Data {
+                               waterHeight: Double, materialCounts: SIMD2<Int>, stylised: Bool) throws -> Data {
         var payload = Data()
         var sections: [Section] = []
         func section(_ name: String, _ bytes: UnsafeRawBufferPointer, codec: Int) {
@@ -531,7 +532,7 @@ nonisolated enum DioramaStreamPiece {
             shadowLow: shadow ? slice.shadowLow : nil, shadowHigh: shadow ? slice.shadowHigh : nil,
             foliage: materialCounts.x, architecture: materialCounts.y,
             labels: labels.map { LabelRecord(id: $0.id, title: $0.title, anchor: $0.anchor, footprint: $0.footprint.flatMap { [$0.x, $0.y] }, named: $0.isNamed) },
-            sections: sections, sourceTriangles: slice.indices.count / 3)
+            sections: sections, sourceTriangles: slice.indices.count / 3, stylised: stylised ? true : nil)
         let encoder = JSONEncoder()
         encoder.nonConformingFloatEncodingStrategy = .convertToString(positiveInfinity: "inf", negativeInfinity: "-inf", nan: "nan")
         let json = try encoder.encode(header)
@@ -549,6 +550,7 @@ nonisolated enum DioramaStreamPiece {
         let resident: DioramaResidentTile
         let groundRect: DioramaRect
         let header: Header
+        var stylised: Bool { header.stylised ?? false }
     }
 
     /// Receive → decompress into shared Metal storage → draw. Every offset is bounds-checked so a

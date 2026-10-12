@@ -65,8 +65,9 @@ nonisolated struct DioramaBuildingKit {
     func roofEdge(_ ring: [DV2], flags: [Bool], z: Double, bevel: Double, deck: DioramaSwatch, into mesh: inout DioramaMesh) -> [DV2]? {
         let n = ring.count
         guard let inner = DioramaPolygon.offset(ring, by: -bevel), inner.count == n else { return nil }
-        // A quarter-circle profile with analytic vertex normals, including the plan fillets.
-        let stops = (0...6).map { Double($0) / 6 * Double.pi / 2 }
+        // A quarter-circle profile with analytic vertex normals, including the plan fillets. Three
+        // segments: the smooth normals carry the curve, so more stops only add triangles.
+        let stops = (0...3).map { Double($0) / 3 * Double.pi / 2 }
         func outward(_ index: Int) -> DV3 {
             let before = (ring[index] - ring[(index + n - 1) % n]).normalized.right
             let after = (ring[(index + 1) % n] - ring[index]).normalized.right
@@ -97,6 +98,8 @@ nonisolated struct DioramaBuildingKit {
     // MARK: Openings
 
     /// Window unit: deep reveal, recessed dark pane (plus glow when lit), chunky frame, lintel and sill.
+    /// Low poly by design: only faces the map camera can see are built (no head underside, no frame
+    /// returns, no 3.5 cm burglar bars), so a unit is 10 quads and reads exactly as before.
     func window(a: DV2, dir: DV2, out: DV2, u: Double, z0: Double, z1: Double, width: Double,
                 hasGrille: Bool, lit: Bool, into mesh: inout DioramaMesh, glow: inout DioramaMesh) {
         if let registry = mesh.primitiveRegistry, abs(dir.length - 1) < 1e-9,
@@ -122,20 +125,14 @@ nonisolated struct DioramaBuildingKit {
         let frame = 0.11 * detail, projection = 0.09 * detail
         for side in [-1.0, 1.0] {
             mesh.facadeBox(a: a, dir: dir, out: out, u: u + side * (width / 2 + frame / 2), width: frame,
-                           z0: z0 - frame, z1: z1 + frame, depth: projection, .frame)
+                           z0: z0 - frame, z1: z1 + frame, depth: projection, .frame, sides: false)
         }
-        mesh.facadeBox(a: a, dir: dir, out: out, u: u, width: width + frame * 2, z0: z1, z1: z1 + frame * 1.2, depth: projection * 1.2, .frame)
+        mesh.facadeBox(a: a, dir: dir, out: out, u: u, width: width + frame * 2, z0: z1, z1: z1 + frame * 1.2, depth: projection * 1.2, .frame, sides: false, lid: true)
         mesh.facadeBox(a: a, dir: dir, out: out, u: u, width: 0.085 * detail, z0: z0, z1: z1, depth: -0.10, .frame, sides: false)
-        if hasGrille {
-            // Welded burglar bars, as on nearly every Dar ground and first floor: five uprights, two rails.
-            for fraction in [-0.33, -0.165, 0.0, 0.165, 0.33] {
-                mesh.facadeBox(a: a, dir: dir, out: out, u: u + width * fraction, width: 0.035, z0: z0, z1: z1, depth: -0.035, .metalCharcoal, sides: false)
-            }
-            for level in [0.33, 0.66] {
-                mesh.facadeBox(a: a, dir: dir, out: out, u: u, width: width, z0: z0 + (z1 - z0) * level, z1: z0 + (z1 - z0) * level + 0.035, depth: -0.03, .metalCharcoal, sides: false)
-            }
-        }
-        mesh.facadeBox(a: a, dir: dir, out: out, u: u, width: width + frame * 2, z0: z0 - frame * 1.1, z1: z0, depth: projection * 1.6, .trimWhite)
+        // Burglar bars are 3.5 cm: a tenth of a map pixel. `hasGrille` keeps its meaning for the
+        // prototype key so grilled and plain windows stay distinct units if bars ever return.
+        _ = hasGrille
+        mesh.facadeBox(a: a, dir: dir, out: out, u: u, width: width + frame * 2, z0: z0 - frame * 1.1, z1: z0, depth: projection * 1.6, .trimWhite, sides: false, lid: true)
     }
 
     /// Door unit: reveal, recessed leaf, handle; an uncovered door gets a canopy and two steps.
@@ -148,11 +145,12 @@ nonisolated struct DioramaBuildingKit {
             mesh.facadeBox(a: a, dir: dir, out: out, u: u, width: 0.04, z0: bottom, z1: top - 0.45, depth: -0.17, .frame, sides: false)
             mesh.facadeBox(a: a, dir: dir, out: out, u: u, width: width - 0.1, z0: top - 0.42, z1: top - 0.06, depth: -0.18, .glass, sides: false)
         }
-        mesh.facadeBox(a: a, dir: dir, out: out, u: u + width * 0.3, width: 0.05 * detail, z0: bottom + 0.75, z1: bottom + 1.02, depth: -0.16, .metalCharcoal, sides: false)
+        // No 5 cm door handle: below a map pixel.
         guard !covered else { return }
-        mesh.facadeBox(a: a, dir: dir, out: out, u: u, width: width + 0.5 * detail, z0: top + 0.1, z1: top + 0.26 * detail, depth: 0.8 * detail, .concrete)
-        mesh.facadeBox(a: a, dir: dir, out: out, u: u, width: width + 0.4, z0: 0, z1: 0.5, depth: 0.35, .courtyard)
-        mesh.facadeBox(a: a, dir: dir, out: out, u: u, width: width + 0.6, z0: 0, z1: 0.25, depth: 0.65, .courtyard)
+        // Canopy and steps: front and top faces only; ends and undersides never face the camera.
+        mesh.facadeBox(a: a, dir: dir, out: out, u: u, width: width + 0.5 * detail, z0: top + 0.1, z1: top + 0.26 * detail, depth: 0.8 * detail, .concrete, sides: false, lid: true)
+        mesh.facadeBox(a: a, dir: dir, out: out, u: u, width: width + 0.4, z0: 0, z1: 0.5, depth: 0.35, .courtyard, sides: false, lid: true)
+        mesh.facadeBox(a: a, dir: dir, out: out, u: u, width: width + 0.6, z0: 0, z1: 0.25, depth: 0.65, .courtyard, sides: false, lid: true)
     }
 
     /// Shop front: wide glazed opening with a fascia sign and a canvas awning.
@@ -160,7 +158,7 @@ nonisolated struct DioramaBuildingKit {
                    sign: DioramaSwatch, awning awningColor: DioramaSwatch, into mesh: inout DioramaMesh) {
         door(a: a, dir: dir, out: out, u: u, width: width, bottom: bottom, top: top, kind: .commercial, covered: true, into: &mesh)
         let signHeight = 0.34 * detail
-        mesh.facadeBox(a: a, dir: dir, out: out, u: u, width: width, z0: top + 0.08, z1: min(top + 0.08 + signHeight, wallTop - 0.05), depth: 0.14 * detail, sign)
+        mesh.facadeBox(a: a, dir: dir, out: out, u: u, width: width, z0: top + 0.08, z1: min(top + 0.08 + signHeight, wallTop - 0.05), depth: 0.14 * detail, sign, sides: false, lid: true)
         awning(a: a, dir: dir, out: out, u: u, width: width + 0.15, z: top + 0.04, color: awningColor, into: &mesh)
     }
 
@@ -175,14 +173,14 @@ nonisolated struct DioramaBuildingKit {
         mesh.quad(DV3(l + out * depth, lip), DV3(r + out * depth, lip), DV3(r + out * depth, lip - 0.22 * detail), DV3(l + out * depth, lip - 0.22 * detail), .trimWhite, normal: DV3(out, 0))
     }
 
-    /// Four inward returns connect the plaster face to a recessed pane/door.
+    /// Three inward returns connect the plaster face to a recessed pane/door: both jambs and the
+    /// sill. The head's underside faces the ground and is never seen from the map camera.
     private func reveal(a: DV2, dir: DV2, out: DV2, u: Double, width: Double, z0: Double, z1: Double, into mesh: inout DioramaMesh) {
         let l = a + dir * (u - width / 2), r = a + dir * (u + width / 2)
         let li = l - out * 0.2, ri = r - out * 0.2
         mesh.quad(DV3(l, z0), DV3(li, z0), DV3(li, z1), DV3(l, z1), .frame, normal: DV3(dir, 0))
         mesh.quad(DV3(ri, z0), DV3(r, z0), DV3(r, z1), DV3(ri, z1), .frame, normal: DV3(-dir, 0))
         mesh.quad(DV3(li, z0), DV3(ri, z0), DV3(r, z0), DV3(l, z0), .frame, normal: .up)
-        mesh.quad(DV3(l, z1), DV3(r, z1), DV3(ri, z1), DV3(li, z1), .frame, dark: true, normal: DV3(0, 0, -1))
     }
 
     // MARK: Veranda and balconies
@@ -200,9 +198,9 @@ nonisolated struct DioramaBuildingKit {
         for k in 0...bays {
             let position = k == 0 ? 0.2 : (k == bays ? length - 0.2 : length * Double(k) / Double(bays))
             let p = a + dir * position - out * 0.18
-            mesh.cylinder(centre: p, z0: base, z1: ceiling - beam, r0: column, r1: column * 0.9, sides: 10, .trimWhite)
-            mesh.cylinder(centre: p, z0: base, z1: base + 0.12, r0: column * 1.4, r1: column * 1.1, sides: 10, .trimWhite)
-            mesh.cylinder(centre: p, z0: ceiling - beam - 0.12, z1: ceiling - beam, r0: column * 1.1, r1: column * 1.4, sides: 10, .trimWhite)
+            // A 14 cm column is a quarter of a map pixel wide: six smooth-shaded sides read as round,
+            // and its base and capital rings (4 cm proud) cannot be seen.
+            mesh.cylinder(centre: p, z0: base, z1: ceiling - beam, r0: column, r1: column * 0.9, sides: 6, .trimWhite, cap: false)
         }
         if railed { balconyRail(a: a, b: b, out: out, z: base, into: &mesh) }
     }
@@ -215,9 +213,7 @@ nonisolated struct DioramaBuildingKit {
         let height = 0.85 * detail
         mesh.box(centre: centre, z0: z, axis: dir, halfLength: span / 2, halfWidth: 0.09 * detail, height: height * 0.7, .cream)
         mesh.box(centre: centre, z0: z + height * 0.7, axis: dir, halfLength: span / 2 + 0.05, halfWidth: 0.13 * detail, height: 0.09 * detail, .trimWhite, bevel: 0.03)
-        for t in stride(from: -span / 2 + 0.3, through: span / 2 - 0.3, by: 0.6) {
-            mesh.cylinder(centre: centre + dir * t, z0: z + height * 0.7, z1: z + height, r0: 0.03, r1: 0.03, sides: 6, .trimWhite)
-        }
+        // No 3 cm balusters between the upstand and the handrail: a twentieth of a map pixel.
         mesh.box(centre: centre, z0: z + height, axis: dir, halfLength: span / 2 + 0.05, halfWidth: 0.06 * detail, height: 0.06, .trimWhite)
     }
 

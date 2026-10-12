@@ -126,7 +126,7 @@ nonisolated struct DioramaBuildingOverride: Sendable {
 /// One place to tune the whole look without touching generation code.
 nonisolated struct DioramaConfig: Sendable {
     /// Bump to invalidate every cached tile.
-    var generatorVersion: Int = 36
+    var generatorVersion: Int = 37
     /// Reuse full-detail architectural primitives without changing their tessellation.
     var instancesArchitecture: Bool = true
     /// Drape the plate/ground overlays over the bundled height snapshot used by roads and foundations.

@@ -294,7 +294,7 @@ nonisolated struct DioramaBuildingGenerator {
                         // Cast-concrete eyebrow hood over each residential window (sun and rain shade).
                         if kind != .commercial, upper + 0.42 < wallTop {
                             mesh.facadeBox(a: a, dir: dir, out: out, u: u, width: openingWidth + 0.5, z0: upper + 0.22, z1: upper + 0.32,
-                                           depth: 0.42, .trimWhite)
+                                           depth: 0.42, .trimWhite, sides: false, lid: true)
                         }
                     }
                 }
@@ -347,13 +347,13 @@ nonisolated struct DioramaBuildingGenerator {
             // Turquoise pilaster strips framing the street face.
             if rng.chance(0.6) {
                 for u in [0.3, length - 0.3] {
-                    mesh.facadeBox(a: a, dir: dir, out: out, u: u, width: 0.4, z0: 0.5, z1: height, depth: 0.14, .kisutuTeal)
+                    mesh.facadeBox(a: a, dir: dir, out: out, u: u, width: 0.4, z0: 0.5, z1: height, depth: 0.14, .kisutuTeal, sides: false, lid: true)
                 }
             }
             // Continuous eyebrow sunshade ledges over every upper floor's windows.
             for floor in 1..<max(floors, 1) {
                 let z = Double(floor) * storeyHeight + storeyHeight - 0.5
-                mesh.facadeBox(a: a, dir: dir, out: out, u: length / 2, width: length - 1.0, z0: z, z1: z + 0.13, depth: 0.5, .trimWhite)
+                mesh.facadeBox(a: a, dir: dir, out: out, u: length / 2, width: length - 1.0, z0: z, z1: z + 0.13, depth: 0.5, .trimWhite, sides: false, lid: true)
             }
             // Corrugated shop verandah on slim posts over the pavement.
             if kind == .commercial || floors >= 3, !roads.isOnCarriageway(mid + out * 1.9, margin: 0.2) {

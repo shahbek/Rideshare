@@ -79,6 +79,13 @@ extension DioramaMesh {
         guard path.count >= 2, halfWidth > 0, height > 0 else { return }
         let clean = DioramaLinearGeometry.simplified(path)
         guard clean.count >= 2 else { return }
+        if !foliage, min(radius, halfWidth * 0.95, height * 0.45) < 0.1 {
+            // Kerbs, compound walls and copings: a radius under 10 cm is below a map pixel, so the
+            // rounded 16-point profile (32 triangles per 1.5 m, with a buried bottom) is replaced by
+            // the three faces the camera can see. Identical silhouette and shading from above.
+            squareStrip(clean, halfWidth: halfWidth, height: height, lateralOffset: lateralOffset, swatch: swatch, base: base)
+            return
+        }
         let line = DioramaPolygon.densify(clean, maxStep: foliage ? 0.65 : 1.5)
         let closed = line[0].distance(to: line[line.count - 1]) < 0.0002
         let count = line.count
@@ -163,6 +170,50 @@ extension DioramaMesh {
                     triangle(points[end * width + a], points[end * width + b], points[end * width + c], swatch, normal: DV3(out, 0))
                 }
             }
+        }
+    }
+
+    /// Hard-edged terrain-following shell of a thin upstand: two side faces and a top, no bottom,
+    /// mitred at bends exactly like `mouldedStrip`. Six triangles per span; straight runs only
+    /// split every 3 m so the top still follows the ground.
+    nonisolated mutating func squareStrip(
+        _ clean: [DV2], halfWidth: Double, height: Double, lateralOffset: Double,
+        swatch: DioramaSwatch, base: (DV2) -> Double
+    ) {
+        let line = DioramaPolygon.densify(clean, maxStep: 3)
+        let count = line.count
+        guard count >= 2 else { return }
+        let closed = line[0].distance(to: line[count - 1]) < 0.0002
+        var left: [DV3] = [], right: [DV3] = [], top: [(DV3, DV3)] = []
+        left.reserveCapacity(count); right.reserveCapacity(count); top.reserveCapacity(count)
+        for i in 0..<count {
+            let previous = i == 0 ? (closed ? line[count - 2] : line[0]) : line[i - 1]
+            let next = i == count - 1 ? (closed ? line[1] : line[i]) : line[i + 1]
+            let before = (line[i] - previous).normalized.right
+            let after = (next - line[i]).normalized.right
+            let side: DV2
+            if !closed && i == 0 { side = after }
+            else if !closed && i == count - 1 { side = before }
+            else {
+                let bisector = (before + after).normalized
+                side = bisector * (1 / max(0.35, bisector.dot(after)))
+            }
+            let p = line[i], ground = base(p)
+            let l = p + side * (lateralOffset - halfWidth), r = p + side * (lateralOffset + halfWidth)
+            left.append(DV3(l, ground)); right.append(DV3(r, ground))
+            top.append((DV3(l, ground + height), DV3(r, ground + height)))
+        }
+        for i in 0..<(count - 1) {
+            let along = (line[i + 1] - line[i]).normalized
+            let out = DV3(along.right, 0)
+            quad(right[i], right[i + 1], top[i + 1].1, top[i].1, swatch, normal: out)
+            quad(top[i].1, top[i + 1].1, top[i + 1].0, top[i].0, swatch, normal: .up)
+            quad(top[i].0, top[i + 1].0, left[i + 1], left[i], swatch, normal: out * -1)
+        }
+        if !closed {
+            quad(left[0], right[0], top[0].1, top[0].0, swatch, normal: DV3((line[0] - line[1]).normalized, 0))
+            let e = count - 1
+            quad(right[e], left[e], top[e].0, top[e].1, swatch, normal: DV3((line[e] - line[e - 1]).normalized, 0))
         }
     }
 }
