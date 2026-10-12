@@ -138,7 +138,7 @@ nonisolated struct DioramaConfig: Sendable {
     /// parallax reveals instead of modelled recesses. Replaces 7-16 quads per window per floor.
     static let shaderFacades = true
     /// Bump to invalidate every cached tile.
-    var generatorVersion: Int = 38
+    var generatorVersion: Int = 40
     /// Reuse full-detail architectural primitives without changing their tessellation.
     var instancesArchitecture: Bool = true
     /// Drape the plate/ground overlays over the bundled height snapshot used by roads and foundations.

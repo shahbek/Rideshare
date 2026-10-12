@@ -537,7 +537,9 @@ nonisolated extension DioramaTileArchive {
                     ground: { p in heights.height(p, grid: support, index: { index[$0] }, position: { packed[$0].position }) },
                     sites: DioramaEstate.sites(projection: DioramaProjection(origin: origin)), waterHeight: m.waterHeight)
             }
-            if let roofs = DioramaRoofRetrofit.build(packed: packed, vertexCount: finalVertexCount, index: idx, ranges: ranges,
+            // Harbour roofs are the stylized-map-renderer skill's own; no read-time roof architecture there.
+            if DioramaRegion.of(DioramaTileID(z: m.z, x: m.x, y: m.y)) != .harbour,
+               let roofs = DioramaRoofRetrofit.build(packed: packed, vertexCount: finalVertexCount, index: idx, ranges: ranges,
                                                      tileRect: tileRect, vertexBudget: roofReserve, estate: estate), !roofs.indices.isEmpty {
                 for (i, v) in roofs.vertices.enumerated() {
                     packed[finalVertexCount + i] = v

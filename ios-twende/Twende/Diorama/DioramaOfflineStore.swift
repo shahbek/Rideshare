@@ -35,6 +35,15 @@ nonisolated enum DioramaRegion: String, CaseIterable, Sendable {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent(isStreamed ? "HarbourStreamZ" : folder, isDirectory: true)
     }
+    /// True when a lon/lat ring's centroid lies in a harbour tile. Harbour buildings come only from the
+    /// stylized-map-renderer skill, so bespoke landmark and skyline recipes there are retired.
+    static func isHarbour(ring: [[Double]]) -> Bool {
+        let points = ring.filter { $0.count == 2 }
+        guard !points.isEmpty else { return false }
+        let lon = points.reduce(0) { $0 + $1[0] } / Double(points.count)
+        let lat = points.reduce(0) { $0 + $1[1] } / Double(points.count)
+        return DioramaOfflineStore.harbourTiles.contains(DioramaTileID(latitude: lat, longitude: lon, zoom: 16))
+    }
     static func of(_ tile: DioramaTileID) -> DioramaRegion {
         if DioramaOfflineStore.harbourTiles.contains(tile) { return .harbour }
         if DioramaOfflineStore.golfTiles.contains(tile) { return .golf }
@@ -68,6 +77,8 @@ actor DioramaOfflineStore {
         return DarGolf.tiles.filter { !taken.contains($0) }
     }()
     static let harbour = DioramaOfflineStore(region: .harbour)
+    /// First generator whose harbour buildings come from the stylized-map-renderer skill.
+    nonisolated static let harbourSkillGenerator = 40
     static let golf = DioramaOfflineStore(region: .golf)
     nonisolated static func store(for tile: DioramaTileID) -> DioramaOfflineStore {
         store(for: DioramaRegion.of(tile))
@@ -103,7 +114,12 @@ actor DioramaOfflineStore {
         }
         let marker = "-\(tile.key)-"
         let suffix = context.map { $0 ? "-context1" : "-focus" }
-        return names?.1.contains { $0.hasPrefix("v") && $0.contains(marker) && (suffix.map($0.hasSuffix) ?? true) } ?? false
+        return names?.1.contains { name in
+            guard name.hasPrefix("v"), name.contains(marker), suffix.map(name.hasSuffix) ?? true else { return false }
+            guard region == .harbour else { return true }
+            let version = name.split(separator: "-").first.flatMap { Int($0.dropFirst()) } ?? 0
+            return version >= harbourSkillGenerator
+        } ?? false
     }
     nonisolated let region: DioramaRegion
     nonisolated var regionTiles: [DioramaTileID] { region.tiles }
@@ -612,7 +628,8 @@ actor DioramaOfflineStore {
             guard name != current, name.hasPrefix("v"), name.hasSuffix(suffix),
                   let prefix = name.split(separator: "-").first,
                   let version = Int(prefix.dropFirst()) else { return false }
-            return version <= DioramaConfig.slipway.generatorVersion
+            // Harbour packages before generator 40 hold retired procedural buildings, not the skill's.
+            return version <= DioramaConfig.slipway.generatorVersion && (region != .harbour || version >= Self.harbourSkillGenerator)
         }.sorted { $0.compare($1, options: .numeric) == .orderedDescending }
         let revisions = Array((1...Self.joinRevision).reversed())
         let joinedNames = revisions.map { joinedKey(tile, context: context, revision: $0) }

@@ -105,7 +105,9 @@ nonisolated struct DioramaBuildingGenerator {
                                   r0: 0.22, r1: 0.18, sides: 8, .pierWood)
                 }
             }
-        } else {
+        } else if !DioramaConfig.shaderFacades || DioramaFennKit.needsSkirt(f.ring, terrain: terrain) {
+            // Shader-facade walls reach 0.25 m into the ground at every corner; a skirt is only
+            // needed where the ground dips further between corners.
             terrain.foundation(f.ring, top: ground, swatch: .concrete, into: &mesh)
         }
         let savedMesh = mesh.baseZ, savedGlow = glow.baseZ
@@ -132,6 +134,11 @@ nonisolated struct DioramaBuildingGenerator {
         // Keep authored overrides, cut edges, courtyard holes and low-rise house roofs in their own recipes.
         if floors >= 4, height >= 12, override == nil, !f.clipped.contains(true), f.area > 60 {
             let recipe = architecturalRecipe(f, kind: kind, floors: floors, height: height, wallColor: wallColor)
+            if DioramaConfig.shaderFacades,
+               let built = fennTower(f, recipe: recipe, kind: kind, wallColor: wallColor, box: box, ground: ground,
+                                     lights: lights, into: &mesh, pointLights: &pointLights) {
+                return built
+            }
             var generator = DarTowerGenerator(site: recipe)
             var facadeLights: [DioramaLight] = []
             if generator.build(f.ring, into: &mesh, glow: &glow, lights: &facadeLights, includesLights: lights) {
@@ -337,33 +344,38 @@ nonisolated struct DioramaBuildingGenerator {
 
     // MARK: Shader facades
 
-    /// The same house in a fraction of the triangles: one wall quad per footprint edge (openings,
-    /// doors, shopfronts, galleries, floor lines, plinth and rounded corners are drawn by the
-    /// shader), the unchanged roof kit, and a flat deck that is either a soft-rimmed lid or a
-    /// three-face parapet. Real 3D stays only where it casts a readable shadow: sunshade ledges,
-    /// shop canopies, roof tanks and stair heads.
+    /// Stylised-kit house (`DioramaFennKit`): repaired footprint, filleted convex corners, one
+    /// shader-facade quad per edge (openings, doors, shopfronts, galleries, floor lines and plinth
+    /// are drawn by the shader), the unchanged pitched-roof kit, or a flat deck finished with the
+    /// rounded parapet and its occlusion ring (blocks) or the rolled slab edge (houses). Roof props
+    /// are shared library meshes placed as instances.
     private func shaderFacadeBuilding(_ f: DioramaBuildingFeature, kind: DioramaBuildingKind, floors: Int, height rawHeight: Double,
                                       box: DioramaOrientedRect, wallColor: DioramaSwatch, ground: Double,
                                       override: DioramaBuildingOverride?, lights: Bool, rng: inout DioramaRandom,
                                       into mesh: inout DioramaMesh, pointLights: inout [DioramaLight]) -> DioramaBuilt {
-        let ring = f.ring, flags = f.clipped.count == f.ring.count ? f.clipped : Array(repeating: false, count: f.ring.count)
-        let n = ring.count
+        let isCut = f.clipped.count == f.ring.count && f.clipped.contains(true)
+        // Tile-cut outlines keep their exact vertices so both halves meet; everything else is repaired.
+        let ring = isCut ? f.ring : DioramaFennKit.repair(f.ring)
+        let flags = isCut ? f.clipped : Array(repeating: false, count: ring.count)
         // Snap the storey to a height the shader encodes exactly so floor lines meet the roof.
         let storey = DioramaFacade.snapStorey(rawHeight / Double(floors))
         let height = storey * Double(floors)
-        let front = frontEdge(ring, flags: flags, centroid: f.centroid)
-        let frontOut = front >= 0 ? (ring[(front + 1) % n] - ring[front]).normalized.right : DV2(0, -1)
+        // Square corners are rounded by the facade shader; no fillet geometry on ordinary buildings.
+        let shell = DioramaFennKit.shell(ring, cut: flags, radius: 0)
+        let m = shell.points.count
+        let front = frontEdge(shell.points, flags: shell.wallFlags, centroid: f.centroid)
+        let frontOut = front >= 0 ? (shell.points[(front + 1) % m] - shell.points[front]).normalized.right : DV2(0, -1)
         let galleries = district == .masaki && kind == .apartments && floors >= 3
         let style: DioramaFacade.Style = kind == .villa ? .villa : (kind == .commercial ? .commercial : .masonry)
-        mesh.facadeRing(ring, skip: flags, bottom: { p in terrain.height(p) - ground - 0.25 }, top: height,
-                        wallColor, front: front) { i in
-            let a = ring[i], b = ring[(i + 1) % n]
+        DioramaFennKit.walls(shell, bottom: { p in terrain.height(p) - ground - 0.25 }, top: height,
+                             wallColor, front: front, facade: { i in
+            let a = shell.points[i], b = shell.points[(i + 1) % m]
             guard a.distance(to: b) > 2.4 else { return DioramaFacade(style: .plain, storey: storey) }
             if galleries, abs((b - a).normalized.right.dot(frontOut)) > 0.8 {
                 return DioramaFacade(style: .gallery, storey: storey)
             }
             return DioramaFacade(style: style, storey: storey)
-        }
+        }, into: &mesh)
 
         var flatRoof = kind != .villa
         if kind == .villa, rng.chance(1 - config.hipRoofShare) { flatRoof = true }
@@ -400,20 +412,17 @@ nonisolated struct DioramaBuildingGenerator {
             if !roofed { flatRoof = true }
         }
         let deckColor = override?.roofColor ?? .roofConcrete
-        var deck = height
+        var deck: DioramaFennKit.Deck?
         if flatRoof {
-            if kind == .apartments || (district == .city && floors >= 2) {
-                deck = shaderParapet(ring, flags: flags, z: height, color: wallColor, deck: deckColor, storey: storey, into: &mesh)
-            } else {
-                // Rim normals lean outward: the deck edge shades as a rounded roll with no bevel faces.
-                mesh.softLid(ring, z: height, lean: 0.6, deckColor)
-            }
+            let parapet = kind == .apartments || (district == .city && floors >= 2) || (kind == .commercial && floors >= 2)
+            deck = DioramaFennKit.flatRoof(shell, z: height, parapet: parapet, wall: wallColor, trim: .trimWhite,
+                                           deck: deckColor, into: &mesh)
         }
 
         var entrance = f.centroid
         var entranceOut = DV2(0, -1)
         if front >= 0 {
-            let a = ring[front], b = ring[(front + 1) % n]
+            let a = shell.points[front], b = shell.points[(front + 1) % m]
             entrance = (a + b) * 0.5
             entranceOut = frontOut
             if lights {
@@ -428,33 +437,124 @@ nonisolated struct DioramaBuildingGenerator {
             }
         }
         if !galleries {
-            districtDetails(ring: ring, flags: flags, front: front, kind: kind, floors: floors, storeyHeight: storey,
+            districtDetails(ring: shell.points, flags: shell.wallFlags, front: front, kind: kind, floors: floors, storeyHeight: storey,
                             height: height, flatRoof: flatRoof, wallColor: wallColor, recessed: true, rng: &rng, into: &mesh)
         }
-        // roofFurniture adds the legacy rounded-edge bevel for non-apartments; the soft lid has none.
-        roofFurniture(ring: ring, box: box, height: kind == .apartments ? deck : deck - config.roofBevel,
-                      flatRoof: flatRoof, kind: kind, rng: &rng, into: &mesh)
+        if let deck, let deckRing = deck.ring {
+            let tanks = rng.chance(district == .city ? 0.45 : config.standTankChance * 0.6) ? (rng.chance(0.25) ? 2 : 1) : 0
+            let head = kind == .apartments && rng.chance(0.55)
+            let condensers = kind == .commercial ? 2 : (kind == .apartments && rng.chance(0.5) ? 1 : 0)
+            DioramaFennKit.roofProps(on: deckRing, z: deck.z, seed: f.id, tanks: tanks, stairHead: head,
+                                     condensers: condensers, kit: kit, into: &mesh)
+        }
         return DioramaBuilt(feature: f, kind: kind, floors: floors, height: height, box: box, flatRoof: flatRoof,
                             wallColor: wallColor, entrance: entrance, entranceOut: entranceOut)
     }
 
-    /// Parapet around a flat deck: the facade wall continues 0.8 m as a blank render band, then a
-    /// coping top and an inner face. Returns the deck height.
-    private func shaderParapet(_ ring: [DV2], flags: [Bool], z: Double, color: DioramaSwatch, deck: DioramaSwatch,
-                               storey: Double, into mesh: inout DioramaMesh) -> Double {
-        let n = ring.count
-        let rise = 0.8, thickness = 0.25
-        mesh.polygon(ring, z: z, deck)
-        mesh.facadeRing(ring, skip: flags, bottom: { _ in z }, top: z + rise, color) { _ in
-            DioramaFacade(style: .plain, storey: storey)
+    /// Ordinary mid- and high-rise blocks on the stylised kit, keeping the district typology
+    /// (family facade, taller ground floor, optional upper setback, coastal hip crowns): filleted
+    /// envelope, shader facades, rounded parapets with occlusion rings, instanced roof plant.
+    /// Nil when the footprint cannot carry the plan; the caller then uses the tower generator.
+    private func fennTower(_ f: DioramaBuildingFeature, recipe: DarSkylineSite, kind: DioramaBuildingKind,
+                           wallColor: DioramaSwatch, box: DioramaOrientedRect, ground: Double, lights: Bool,
+                           into mesh: inout DioramaMesh, pointLights: inout [DioramaLight]) -> DioramaBuilt? {
+        guard let plan = DarArchitecturePlan(footprint: DioramaFennKit.repair(f.ring), site: recipe) else { return nil }
+        let design = DarBuildingDesign(site: recipe)
+        let bounds = DioramaPolygon.minimumAreaRectangle(plan.envelope)
+        // Only designed large radii (curtain-wall, ribbon, broad coastal) are built as fillets;
+        // smaller corners stay square and the facade shader rounds them.
+        let radius = design.cornerRadius >= 1.1 ? min(design.cornerRadius, bounds.halfWidth * 0.3) : 0
+        let segments = radius >= 1.5 ? 2 : 1
+        let front = plan.elevations[plan.entrance]
+        let skin = design.family == .glass ? DarTowerGenerator.rgb(recipe.glass) : DarTowerGenerator.rgb(recipe.wall)
+        let trim = design.family == .glass ? DarTowerGenerator.rgb("#BFCBCB") : DarTowerGenerator.rgb("#F4EFE7")
+        let tints = DioramaFennKit.RoleTints(wall: DioramaFennKit.tint(skin, over: .whitewash),
+                                             trim: DioramaFennKit.tint(trim, over: .trimWhite),
+                                             deck: DioramaFennKit.tint(DarTowerGenerator.rgb("#C9C2B6"), over: .roofConcrete))
+        let bottom: (DV2) -> Double = { p in terrain.height(p) - ground - 0.25 }
+        let savedTint = mesh.tint
+        defer { mesh.tint = savedTint }
+
+        func facades(_ shell: DioramaFennKit.Shell, _ datum: DarArchitecturePlan) -> (Int) -> DioramaFacade {
+            let n = shell.points.count
+            let lengths = (0..<n).map { shell.points[$0].distance(to: shell.points[($0 + 1) % n]) }
+            let longest = lengths.max() ?? 1
+            return { i in
+                let out = (shell.points[(i + 1) % n] - shell.points[i]).normalized.right
+                let style: DioramaFacade.Style
+                if lengths[i] < 3 {
+                    style = .plain
+                } else {
+                    switch design.family {
+                    case .glass: style = .curtain
+                    case .ribbon: style = .ribbon
+                    case .modernist: style = lengths[i] < longest * 0.48 ? .plain : .masonry
+                    case .kisutu, .tiled: style = .masonry
+                    case .coastal: style = lengths[i] >= 5 && abs(out.dot(front.out)) > 0.8 ? .gallery : .masonry
+                    }
+                }
+                return DioramaFacade(style: style, storey: datum.storey, groundFloor: datum.groundFloor)
+            }
         }
-        guard let inner = DioramaPolygon.offset(ring, by: -thickness), inner.count == n else { return z }
-        for i in 0..<n where !flags[i] {
-            let j = (i + 1) % n
-            mesh.quad(DV3(ring[i], z + rise), DV3(ring[j], z + rise), DV3(inner[j], z + rise), DV3(inner[i], z + rise), color, normal: .up)
-            mesh.wall(inner[j], inner[i], z0: z, z1: z + rise, color)
+        func frontIndex(_ shell: DioramaFennKit.Shell) -> Int {
+            var best = -1, bestDistance = Double.infinity
+            for i in shell.points.indices where !shell.fillet[i] {
+                let mid = (shell.points[i] + shell.points[(i + 1) % shell.points.count]) * 0.5
+                let d = mid.distance(to: front.mid)
+                if d < bestDistance { bestDistance = d; best = i }
+            }
+            return best
         }
-        return z
+        func raise(_ shell: DioramaFennKit.Shell, _ datum: DarArchitecturePlan, from base: @escaping (DV2) -> Double, to top: Double) {
+            mesh.tint = savedTint * tints.wall
+            DioramaFennKit.walls(shell, bottom: base, top: top, .whitewash, front: frontIndex(shell),
+                                 facade: facades(shell, datum), into: &mesh)
+            mesh.tint = savedTint
+        }
+
+        let hip = recipe.crown == "hip" && ["teal", "terracotta"].contains(recipe.roof)
+        var crownShell = DioramaFennKit.shell(plan.envelope, radius: radius, segments: segments)
+        var crownPlan = plan
+        let inset = min(2.4, bounds.halfWidth * 0.16)
+        if design.hasUpperSetback, !hip,
+           let upperRing = DarArchitecturePlan.inset(plan.envelope, distance: inset),
+           let upper = DarArchitecturePlan(footprint: upperRing, site: recipe) {
+            let split = max(3, plan.levels - (design.variant == 3 ? 3 : 2))
+            let terrace = plan.floor(split)
+            raise(crownShell, plan, from: bottom, to: terrace)
+            _ = DioramaFennKit.flatRoof(crownShell, z: terrace, parapet: true, parapetProfile: DioramaFennKit.parapet(rise: 0.75),
+                                        wall: .whitewash, trim: .trimWhite, deck: .roofConcrete, tints: tints, into: &mesh)
+            let upperShell = DioramaFennKit.shell(upper.envelope, radius: radius * 0.8, segments: segments)
+            raise(upperShell, plan, from: { _ in terrace }, to: upper.height)
+            crownShell = upperShell
+            crownPlan = upper
+        } else {
+            raise(crownShell, plan, from: bottom, to: plan.height)
+        }
+
+        var pitched = false
+        if hip {
+            pitched = DioramaRoofBuilder.hip(plan.source, flags: Array(repeating: false, count: plan.source.count), z: plan.height,
+                pitch: 22 * .pi / 180, overhang: 0, maxRise: 5, color: recipe.roof == "teal" ? .roofTeal : .roofTerracotta,
+                fascia: .trimWhite, into: &mesh, footprint: plan.source)
+        }
+        if !pitched {
+            let rise = design.family == .glass ? 0.25 : (design.family == .modernist ? 0.4 : 0.5)
+            let deck = DioramaFennKit.flatRoof(crownShell, z: crownPlan.height, parapet: true,
+                                               parapetProfile: DioramaFennKit.parapet(rise: rise),
+                                               wall: .whitewash, trim: .trimWhite, deck: .roofConcrete, tints: tints, into: &mesh)
+            if let ring = deck.ring {
+                let office = [.glass, .ribbon, .modernist].contains(design.family)
+                DioramaFennKit.roofProps(on: ring, z: deck.z, seed: f.id, tanks: design.tankCount,
+                                         stairHead: design.hasRoofAccess, condensers: office ? 3 : 1, kit: kit, into: &mesh)
+            }
+        }
+        if lights {
+            pointLights.append(.init(position: DV3(front.mid + front.out * 0.6, ground + 2.9),
+                color: SIMD3(1, 0.82, 0.58), radius: 7, intensity: 0.55))
+        }
+        return DioramaBuilt(feature: f, kind: kind, floors: plan.levels, height: crownPlan.height, box: box,
+                            flatRoof: !pitched, wallColor: wallColor, entrance: front.mid, entranceOut: front.out)
     }
 
     // MARK: District character

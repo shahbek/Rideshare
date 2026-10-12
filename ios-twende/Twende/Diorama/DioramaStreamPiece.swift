@@ -156,6 +156,9 @@ nonisolated enum DioramaStreamPiece {
         /// Lit entirely at bake time (vertex colours and ground image); drawn with the sample-only
         /// shader. Absent on pieces that carry the full lighting rig.
         let stylised: Bool?
+        /// Harbour buildings in this piece come from the stylized-map-renderer skill (generator 40+).
+        /// Harbour pieces without it carry retired procedural buildings and are never mounted.
+        var skill: Bool? = nil
     }
 
     /// What a bake measured for one piece (only measured values are ever shown).
@@ -532,7 +535,8 @@ nonisolated enum DioramaStreamPiece {
             shadowLow: shadow ? slice.shadowLow : nil, shadowHigh: shadow ? slice.shadowHigh : nil,
             foliage: materialCounts.x, architecture: materialCounts.y,
             labels: labels.map { LabelRecord(id: $0.id, title: $0.title, anchor: $0.anchor, footprint: $0.footprint.flatMap { [$0.x, $0.y] }, named: $0.isNamed) },
-            sections: sections, sourceTriangles: slice.indices.count / 3, stylised: stylised ? true : nil)
+            sections: sections, sourceTriangles: slice.indices.count / 3, stylised: stylised ? true : nil,
+            skill: DioramaRegion.of(id.tile) == .harbour ? true : nil)
         let encoder = JSONEncoder()
         encoder.nonConformingFloatEncodingStrategy = .convertToString(positiveInfinity: "inf", negativeInfinity: "-inf", nan: "nan")
         let json = try encoder.encode(header)
@@ -563,6 +567,7 @@ nonisolated enum DioramaStreamPiece {
         let decoder = JSONDecoder()
         decoder.nonConformingFloatDecodingStrategy = .convertFromString(positiveInfinity: "inf", negativeInfinity: "-inf", nan: "nan")
         let h = try decoder.decode(Header.self, from: data.subdata(in: headerStart..<(headerStart + headerLength)))
+        guard DioramaRegion.of(id.tile) != .harbour || h.skill == true else { throw DioramaTileArchive.ArchiveError.incompatible }
         guard h.format == format, h.z == id.tile.z, h.x == id.tile.x, h.y == id.tile.y, h.ring == id.ring, h.column == id.column, h.row == id.row,
               h.bounds.count == 4, h.bounds.allSatisfy({ $0.isFinite && abs($0) < 100_000 }),
               h.vertexCount >= 0, h.indexCount >= 0, h.indexCount % 3 == 0, h.instanceCount >= 0, h.vertexCount < 1 << 24,

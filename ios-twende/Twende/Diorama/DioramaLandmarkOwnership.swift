@@ -22,7 +22,9 @@ nonisolated enum DioramaLandmarkOwnership {
                 result.append(contentsOf: catalog.sites)
             }
         }
+        // Harbour buildings come only from the stylized-map-renderer skill: no bespoke owner there.
         return result.filter { $0.ring.count >= 4 && $0.ring.allSatisfy { $0.count == 2 && $0.allSatisfy(\.isFinite) } }
+            .filter { !DioramaRegion.isHarbour(ring: $0.ring) }
     }()
 
     private struct Mask {

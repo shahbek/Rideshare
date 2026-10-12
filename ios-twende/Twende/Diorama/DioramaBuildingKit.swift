@@ -241,6 +241,14 @@ nonisolated struct DioramaBuildingKit {
 
     /// Stair head / lift motor room on apartment roofs.
     func roofHead(at p: DV2, axis: DV2, z0: Double, into mesh: inout DioramaMesh) {
+        if let registry = mesh.primitiveRegistry {
+            // One library mesh for every stair head; each roof only stores a placement.
+            let prototype = registry.prototype(kind: "roof stair heads", parameters: [detail], flags: [], doubleSided: mesh.doubleSided) { model in
+                roofHead(at: .zero, axis: DV2(1, 0), z0: 0, into: &model)
+            }
+            mesh.architecturalInstance(prototype, .init(rotation: atan2(axis.y, axis.x), translation: DV3(p, z0)))
+            return
+        }
         let ring = DarArchitecturalKit.roundedPlan(.init(centre: p, axis: axis, halfLength: 1.4, halfWidth: 1.1), radius: 0.38)
         DarArchitecturalKit.solid(ring, bottom: z0, top: z0 + 2.3, shoulder: 0.24, color: .trimWhite, into: &mesh)
         let front = p - axis.left * 1.1

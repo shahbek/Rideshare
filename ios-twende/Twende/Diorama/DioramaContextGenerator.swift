@@ -16,7 +16,10 @@ nonisolated enum DioramaContextGenerator {
         let kit = DioramaBuildingKit(config: config)
         let district = DioramaDistrict.of(data.tile)
         let classifier = DioramaBuildingGenerator(config: config, roads: roads, terrain: terrain, district: district)
-        for feature in data.buildings {
+        // Harbour: only the stylized-map-renderer skill's LOD2 shells (placed during packing below).
+        let skill = DioramaRegion.of(data.tile) == .harbour ? DioramaSkillBuildings.load() : nil
+        let harbour = DioramaRegion.of(data.tile) == .harbour
+        for feature in data.buildings where !harbour {
             try Task.checkCancellation()
             if feature.id == DioramaSeaCliffSite.buildingID {
                 _ = DioramaSeaCliffGenerator(data: data, terrain: terrain, config: config)
@@ -36,8 +39,16 @@ nonisolated enum DioramaContextGenerator {
             let override = config.buildingOverrides[feature.id]
             let picked = rng.pick(district.wallColors(kind, config: config))
             let color = override?.wallColor ?? picked
-            if floors >= 4, height >= 12, override == nil, !feature.clipped.contains(true), feature.area > 60 {
-                let recipe = classifier.architecturalRecipe(feature, kind: kind, floors: floors, height: height, wallColor: color)
+            let towerRecipe: DarSkylineSite? = floors >= 4 && height >= 12 && override == nil && !feature.clipped.contains(true) && feature.area > 60
+                ? classifier.architecturalRecipe(feature, kind: kind, floors: floors, height: height, wallColor: color) : nil
+            if DioramaConfig.shaderFacades {
+                // Stylised kit LOD2: the repaired outline as a plain prism under a flat deck or the
+                // same pitched roof as full detail. No rounding, trims or props at this distance.
+                prism(feature, kind: kind, floors: floors, height: height, color: color, override: override,
+                      tower: towerRecipe, district: district, rng: &rng, terrain: terrain, config: config, into: &buildings)
+                continue
+            }
+            if let recipe = towerRecipe {
                 var generator = DarTowerGenerator(site: recipe)
                 let base = terrain.buildingHeight(feature)
                 terrain.foundation(feature.ring, top: base, swatch: color, into: &buildings)
@@ -92,7 +103,14 @@ nonisolated enum DioramaContextGenerator {
         try Task.checkCancellation()
         var vertices: [BuildingRenderVertex] = [], indices: [UInt32] = []
         var ranges: [DioramaRenderLayer.Range] = [], parts: [DioramaTileArtifacts.Part] = []
-        for (category, mesh) in [(DioramaCategory.ground, ground), (.buildings, buildings), (.water, water)] where !mesh.indices.isEmpty {
+        var groups: [DioramaInstanceGroup] = [], instances: [DioramaInstanceData] = []
+        for (category, mesh) in [(DioramaCategory.ground, ground), (.buildings, buildings), (.water, water)] {
+            if let skill, category == .water {
+                _ = skill.place(in: data, terrain: terrain, config: config, detail: .context, binSize: DioramaTileGenerator.binSize,
+                                vertices: &vertices, indices: &indices, ranges: &ranges, groups: &groups,
+                                allInstances: &instances, parts: &parts)
+            }
+            guard !mesh.indices.isEmpty else { continue }
             let base = UInt32(vertices.count), start = indices.count
             var low = SIMD3<Float>(repeating: .greatestFiniteMagnitude), high = SIMD3<Float>(repeating: -.greatestFiniteMagnitude)
             for i in mesh.positions.indices {
@@ -117,5 +135,55 @@ nonisolated enum DioramaContextGenerator {
             parts: parts, lights: [], lightGrid: DioramaLightGrid.build([], rect: data.rect, cells: 1, perCell: 1),
             waterHeight: terrain.waterLevel, shorelineReport: [], generationSeconds: Date().timeIntervalSince(started),
             groundImage: painter.image(), hasMapboxCoverage: data.hasMapboxCoverage)
+    }
+
+    private static func prism(_ feature: DioramaBuildingFeature, kind: DioramaBuildingKind, floors: Int, height: Double,
+                              color: DioramaSwatch, override: DioramaBuildingOverride?, tower: DarSkylineSite?,
+                              district: DioramaDistrict, rng: inout DioramaRandom, terrain: DioramaTerrain,
+                              config: DioramaConfig, into buildings: inout DioramaMesh) {
+        let isCut = feature.clipped.contains(true)
+        let ring = isCut ? feature.ring : DioramaFennKit.repair(feature.ring)
+        let flags = isCut ? feature.clipped : Array(repeating: false, count: ring.count)
+        var pitched = kind == .villa
+        if kind == .villa, rng.chance(1 - config.hipRoofShare) { pitched = false }
+        if district == .masaki, kind == .apartments, floors <= 10, rng.chance(0.5) { pitched = true }
+        if district == .city, kind == .villa, floors >= 2 { pitched = rng.chance(0.25) }
+        var roofColor = override?.roofColor ?? rng.pick(district.pitchedRoofColors)
+        var roofRoll = DioramaRandom(seed: feature.id, salt: 0x52_4F_4F_46)
+        let roll = roofRoll.unit()
+        if !pitched, override == nil, kind != .villa, floors <= 2, roofRoll.chance(district == .masaki ? 0.25 : 0.6) { pitched = true }
+        var wall = color
+        let savedTint = buildings.tint
+        defer { buildings.tint = savedTint; buildings.baseZ = 0; buildings.recordsHeight = false }
+        if let tower {
+            let hip = tower.crown == "hip" && ["teal", "terracotta"].contains(tower.roof)
+            pitched = hip
+            roofColor = tower.roof == "teal" ? .roofTeal : .roofTerracotta
+            let design = DarBuildingDesign(site: tower)
+            wall = .whitewash
+            buildings.tint = DioramaFennKit.tint(DarTowerGenerator.rgb(design.family == .glass ? tower.glass : tower.wall), over: .whitewash)
+        }
+        let base = terrain.buildingHeight(feature)
+        if DioramaFennKit.needsSkirt(ring, terrain: terrain) {
+            terrain.foundation(ring, top: base, swatch: color, into: &buildings)
+        }
+        buildings.baseZ = base
+        buildings.recordsHeight = true
+        buildings.extrude(ring, z0: -0.25, z1: height, wall, skip: flags)
+        buildings.tint = savedTint
+        var roofed = false
+        if pitched, !(override?.flatRoof ?? false), !isCut {
+            let shape = DioramaRoofKit.shape(of: ring)
+            for form in DioramaRoofKit.candidates(for: shape, roll: roll, modern: district == .masaki && kind == .villa) {
+                if DioramaRoofKit.build(form, ring: ring, flags: flags, z: height,
+                                        pitch: config.roofPitchDegrees * Double.pi / 180, overhang: 0.4,
+                                        maxRise: config.hipRoofMaxRise, color: roofColor, fascia: .trimWhite,
+                                        gable: color, into: &buildings) {
+                    roofed = true
+                    break
+                }
+            }
+        }
+        if !roofed { buildings.polygon(ring, z: height, override?.roofColor ?? .roofConcrete) }
     }
 }

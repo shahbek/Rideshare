@@ -196,7 +196,22 @@ nonisolated enum DioramaTileGenerator {
         built.reserveCapacity(data.buildings.count)
         var porchLights: [DioramaLight] = []
         let mosqueIDs = DioramaMosqueGenerator.buildingIDs(in: data)
-        for feature in data.buildings {
+        // Measured per stylised-kit building: unique triangles it added and props it placed as instances.
+        var kitStats: [(kind: String, triangles: Int, props: Int)] = []
+        // Harbour buildings come only from the stylized-map-renderer skill's bundled output (placed
+        // during packing below). No procedural building, landmark or skyline generator runs here.
+        let harbour = DioramaRegion.of(data.tile) == .harbour
+        let skill = harbour ? DioramaSkillBuildings.load() : nil
+        if harbour { built = skill?.footprints(for: data, roads: roadIndex) ?? [] }
+        for feature in data.buildings where !harbour {
+            let trianglesBefore = buildings.triangleCount, instancesBefore = buildings.instances.count
+            defer {
+                if feature.id != DioramaSeaCliffSite.buildingID, !mosqueIDs.contains(feature.id),
+                   !DioramaSlipwayPavilion.buildingIDs.contains(feature.id), !DioramaHotelGenerator.ids.contains(feature.id) {
+                    kitStats.append((feature.occupiedPieces.isEmpty ? "ordinary" : "courtyard/cut",
+                                     buildings.triangleCount - trianglesBefore, buildings.instances.count - instancesBefore))
+                }
+            }
             if feature.id == DioramaSeaCliffSite.buildingID {
                 built.append(DioramaSeaCliffGenerator(data: data, terrain: terrain, config: config).build(feature, mesh: &buildings, glow: &windowGlow))
             } else if !feature.occupiedPieces.isEmpty {
@@ -303,7 +318,17 @@ nonisolated enum DioramaTileGenerator {
             return result
         }
 
-        for (category, mesh) in meshes where !mesh.isEmpty {
+        var skillReport = DioramaSkillBuildings.Report()
+        var skillPlaced = false
+        for (category, mesh) in meshes {
+            // Skill buildings join the opaque categories right after `.buildings`, before any halo.
+            if let skill, !skillPlaced, category == .walls {
+                skillPlaced = true
+                skillReport = skill.place(in: data, terrain: terrain, config: config, detail: .full, binSize: Self.binSize,
+                                          vertices: &vertices, indices: &indices, ranges: &ranges, groups: &groups,
+                                          allInstances: &allInstances, parts: &parts)
+            }
+            guard !mesh.isEmpty else { continue }
             let start = indices.count
             let base = bake(mesh, category: category)
             let count = mesh.positions.count
@@ -424,7 +449,7 @@ nonisolated enum DioramaTileGenerator {
             groundImage: image,
             buildingLabels: DioramaBuildingLabel.makeAll(built, data: data, terrain: terrain, config: config),
             hasMapboxCoverage: data.hasMapboxCoverage,
-            optimizationReport: registry.report, stageTimings: stageTimings
+            optimizationReport: (harbour ? skillReport.lines : Self.kitReport(kitStats)) + registry.report, stageTimings: stageTimings
         )
         try Task.checkCancellation()
         if audit == nil {
@@ -436,5 +461,18 @@ nonisolated enum DioramaTileGenerator {
             cacheLock.unlock()
         }
         return artifacts
+    }
+
+    /// Measured stylised-kit building geometry per recipe: count, mean and largest unique
+    /// triangles per building (instanced props excluded) and instanced prop placements.
+    nonisolated static func kitReport(_ stats: [(kind: String, triangles: Int, props: Int)]) -> [String] {
+        Dictionary(grouping: stats, by: \.kind).keys.sorted().compactMap { kind in
+            let group = stats.filter { $0.kind == kind }
+            guard !group.isEmpty else { return nil }
+            let total = group.reduce(0) { $0 + $1.triangles }
+            let largest = group.map(\.triangles).max() ?? 0
+            let props = group.reduce(0) { $0 + $1.props }
+            return "Stylised kit \(kind) buildings: \(group.count) · \(total) unique tris · mean \(total / group.count) · max \(largest) · \(props) instanced roof props"
+        }
     }
 }

@@ -21,8 +21,6 @@ enum DarLandmarkGeometry {
         ))
         scene.rootNode.addChildNode(root)
         if site.kind == "tower" { PSPFTowerGeometry.build(site, ring: local, root: root) }
-        else if site.kind == "johari-rotana" { JohariRotanaGeometry.build(site, root: root) }
-        else if site.kind == "bandari-tower" { BandariTowerGeometry.build(site, ring: local, root: root) }
         else { DarChurchGeometry.build(site, ring: local, root: root) }
         if !site.isHarbourArchitecture { DioramaLandmarkEnvironment.add(to: scene, ring: ring, airtel: false) }
         return scene

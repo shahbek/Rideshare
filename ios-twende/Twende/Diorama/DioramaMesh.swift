@@ -280,9 +280,11 @@ nonisolated struct DioramaMesh: Sendable {
                    sharpStart: sharpStart, sharpEnd: sharpEnd, front: front)
     }
 
-    /// Shader-facade quad from `a` to `b` (outward to the right of travel).
+    /// Shader-facade quad from `a` to `b` (outward to the right of travel). `normalA`/`normalB`
+    /// override the shading normal at each end (corner fillets shade as the curve they replace).
     mutating func facadeWall(_ a: DV2, _ b: DV2, bottomA: Double, bottomB: Double, top: Double, _ s: DioramaSwatch,
-                             facade: DioramaFacade, sharpStart: Bool, sharpEnd: Bool, front: Bool) {
+                             facade: DioramaFacade, sharpStart: Bool, sharpEnd: Bool, front: Bool,
+                             normalA: DV3? = nil, normalB: DV3? = nil) {
         guard top > max(bottomA, bottomB) + 1e-3, a.distance(to: b) > 0.05 else { return }
         let out = DV3((b - a).normalized.right, 0)
         let saved = surface
@@ -292,7 +294,8 @@ nonisolated struct DioramaMesh: Sendable {
         reserve(4)
         func corner(_ p: DV2, _ z: Double, _ along: Float) -> UInt32 {
             surface = SIMD2(facade.materialCode(along: along), flags)
-            return vertex(DV3(p, z), out, uv, attribute: facade.heightAttribute(z))
+            let n = (along < 0.5 ? normalA : normalB) ?? out
+            return vertex(DV3(p, z), n, uv, attribute: facade.heightAttribute(z))
         }
         let v0 = corner(a, bottomA, 0), v1 = corner(b, bottomB, 1)
         let v2 = corner(b, top, 1), v3 = corner(a, top, 0)

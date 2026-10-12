@@ -5,6 +5,9 @@ import Foundation
 nonisolated enum DioramaClippedBuilding {
     static func build(_ f: DioramaBuildingFeature, terrain: DioramaTerrain, config: DioramaConfig,
                       mesh: inout DioramaMesh, glow: inout DioramaMesh, lights: Bool, includesWindows: Bool = true) -> DioramaBuilt {
+        if DioramaConfig.shaderFacades {
+            return stylised(f, terrain: terrain, config: config, mesh: &mesh, includesTrim: includesWindows)
+        }
         let ground = terrain.buildingHeight(f)
         let height = max(2.8, f.height ?? 3.2)
         let floors = max(1, Int((height / config.floorHeight).rounded()))
@@ -110,6 +113,65 @@ nonisolated enum DioramaClippedBuilding {
                     }
                 }
                 for floor in 1..<floors { kit.stringCourse(ring, flags: flags, z: Double(floor) * storey, into: &mesh) }
+            }
+        }
+        return DioramaBuilt(feature: f, kind: floors > 2 ? .apartments : .villa, floors: floors, height: height,
+            box: DioramaPolygon.minimumAreaRectangle(f.ring), flatRoof: true, wallColor: color,
+            entrance: entrance, entranceOut: entranceOut)
+    }
+
+    /// Stylised kit (`DioramaFennKit`): every boundary loop is one shader-facade quad per edge
+    /// (windows on real mapped edges, blank render on cuts and courtyard returns) and a rounded
+    /// parapet swept along the uncut edges. Replaces modelled window cells, string courses and
+    /// the six-step crown. Coarse context drops the parapet.
+    private static func stylised(_ f: DioramaBuildingFeature, terrain: DioramaTerrain, config: DioramaConfig,
+                                 mesh: inout DioramaMesh, includesTrim: Bool) -> DioramaBuilt {
+        let ground = terrain.buildingHeight(f)
+        let rawHeight = max(2.8, f.height ?? 3.2)
+        let floors = max(1, Int((rawHeight / config.floorHeight).rounded()))
+        let storey = DioramaFacade.snapStorey(rawHeight / Double(floors))
+        let height = storey * Double(floors)
+        var rng = DioramaRandom(seed: f.id, salt: 2)
+        let color = config.buildingOverrides[f.id]?.wallColor ?? rng.pick(floors > 2 ? config.apartmentWallColors : config.wallColors)
+        let savedBase = mesh.baseZ, savedTint = mesh.tint, savedHeight = mesh.recordsHeight
+        mesh.baseZ = ground; mesh.recordsHeight = true
+        let shift = Float(rng.range(-1...1)) * config.hueShift
+        mesh.tint = SIMD3(1 + shift, 1 + shift * 0.35, 1 - shift)
+        defer { mesh.baseZ = savedBase; mesh.tint = savedTint; mesh.recordsHeight = savedHeight }
+
+        let exclusions = DioramaGroundCutouts(polygons: f.occupiedPieces).subtract(from: f.ring)
+        let pieces = DioramaGroundCutouts(polygons: exclusions).subtract(from: f.ring)
+        let boundaries = loops(DioramaStreetSurface(pieces).boundary())
+        let rings = boundaries.isEmpty ? loops(DioramaStreetSurface(f.occupiedPieces).boundary()) : boundaries
+        for piece in pieces { mesh.polygon(piece, z: height, .roofConcrete) }
+        func isTileCut(_ midpoint: DV2) -> Bool {
+            f.ring.indices.contains { edge in
+                edge < f.clipped.count && f.clipped[edge]
+                    && DioramaPolygon.distanceToSegment(midpoint, f.ring[edge], f.ring[(edge + 1) % f.ring.count]) < 0.15
+            }
+        }
+        let style: DioramaFacade.Style = floors > 2 ? .masonry : .villa
+        var entrance = f.centroid, entranceOut = DV2(1, 0), entranceLength = 0.0
+        for ring in rings where ring.count >= 3 {
+            let n = ring.count
+            var cut: [Bool] = [], real: [Bool] = []
+            for i in 0..<n {
+                let a = ring[i], b = ring[(i + 1) % n], midpoint = (a + b) * 0.5
+                let tileCut = isTileCut(midpoint)
+                cut.append(tileCut)
+                real.append(!tileCut && DioramaPolygon.distanceToRing(f.ring, midpoint) < 0.15)
+                let length = a.distance(to: b)
+                if real[i], length > entranceLength { entrance = midpoint; entranceOut = (b - a).normalized.right; entranceLength = length }
+            }
+            let shell = DioramaFennKit.Shell(points: ring, cut: Array(repeating: false, count: n), fillet: Array(repeating: false, count: n))
+            DioramaFennKit.walls(shell, bottom: { p in terrain.height(p) - ground - 0.25 }, top: height, color, front: -1, facade: { i in
+                let long = ring[i].distance(to: ring[(i + 1) % n]) >= 3
+                return DioramaFacade(style: includesTrim && real[i] && long ? style : .plain, storey: storey)
+            }, into: &mesh)
+            if includesTrim {
+                let trim = DioramaFennKit.Shell(points: ring, cut: cut, fillet: Array(repeating: false, count: n))
+                DioramaFennKit.sweep(trim, z: height, profile: DioramaFennKit.parapet().withoutDeckStrip,
+                                     wall: color, trim: .trimWhite, deck: .roofConcrete, into: &mesh)
             }
         }
         return DioramaBuilt(feature: f, kind: floors > 2 ? .apartments : .villa, floors: floors, height: height,

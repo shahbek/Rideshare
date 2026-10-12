@@ -119,7 +119,9 @@ actor DioramaVisualUpgrade {
         var removed: Set<Int> = []
         var roofCount = 0, skippedRoofs = 0
         // offline=true is unconditional: even a missing source must never turn into a download.
-        let data = context ? nil : await DioramaMasakiSource.load(tile: base.tile, config: config, token: "", offline: true)
+        // Harbour buildings are the skill's own output; no procedural roof replacement there.
+        let data = context || DioramaRegion.of(base.tile) == .harbour ? nil
+            : await DioramaMasakiSource.load(tile: base.tile, config: config, token: "", offline: true)
         if let data {
             let terrain = (data.sourceTerrain ?? DioramaTerrain.load(rect: data.rect, config: config)).resolvingSurfaces(in: data)
             let builder = DioramaBuildingGenerator(config: config,
