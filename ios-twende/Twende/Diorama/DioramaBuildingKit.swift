@@ -13,7 +13,7 @@ nonisolated struct DioramaBuildingKit {
     /// Plain plaster wall segment with smooth normals on short radiused edges (rounded corners).
     func wall(_ ring: [DV2], edge i: Int, z0: Double, z1: Double, _ color: DioramaSwatch, into mesh: inout DioramaMesh) {
         let a = ring[i], b = ring[(i + 1) % ring.count]
-        if a.distance(to: b) < config.cornerRadius * 1.2 {
+        if a.distance(to: b) < DioramaMesh.filletEdgeLength {
             mesh.mouldedWall(ring, edge: i, z0: z0, z1: z1, color)
         } else {
             mesh.wall(a, b, z0: z0, z1: z1, color)

@@ -52,7 +52,7 @@ nonisolated enum DioramaContextGenerator {
             if district == .city, kind == .villa, floors >= 2 { pitched = rng.chance(0.25) }
             let roofColor = override?.roofColor ?? rng.pick(district.pitchedRoofColors)
             let deck: DioramaSwatch = pitched && !(override?.flatRoof ?? false) && !feature.clipped.contains(true) ? roofColor : (override?.roofColor ?? .roofConcrete)
-            let rounded = DioramaPolygon.rounded(feature.ring, flags: feature.clipped, radius: config.cornerRadius, segments: 6)
+            let rounded = DioramaPolygon.rounded(feature.ring, flags: feature.clipped, radius: config.cornerRadius)
             let base = terrain.buildingHeight(feature)
             terrain.foundation(rounded.points, top: base, swatch: color, into: &buildings)
             buildings.baseZ = base

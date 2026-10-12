@@ -121,7 +121,7 @@ nonisolated struct DioramaBuildingGenerator {
         let height = max(f.height ?? Double(floors) * config.floorHeight, 2.8)
         let storeyHeight = height / Double(floors)
         let box = DioramaPolygon.minimumAreaRectangle(f.ring)
-        let (ring, flags) = DioramaPolygon.rounded(f.ring, flags: f.clipped, radius: config.cornerRadius, segments: 6)
+        let (ring, flags) = DioramaPolygon.rounded(f.ring, flags: f.clipped, radius: config.cornerRadius)
         let kit = self.kit
 
         let override = config.buildingOverrides[f.id]

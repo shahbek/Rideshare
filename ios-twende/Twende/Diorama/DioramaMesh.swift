@@ -216,19 +216,32 @@ nonisolated struct DioramaMesh: Sendable {
         }
     }
 
-    /// Smooth vertex normals on radiused ring segments; true angular corners retain hard edges.
+    /// Ring edges shorter than this are fillets (a chamfer standing in for a rounded corner); longer
+    /// ones are walls. Footprint corners are rounded with a single chamfer of at most 1.5 m.
+    static let filletEdgeLength = 2.0
+
+    /// Fillet edge of a ring, shaded as the curve it stands in for: a single flat chamfer whose
+    /// vertex normals are the normals of the two walls it joins, so the lighting sweeps from one
+    /// wall to the other across the chamfer and the corner reads as a quarter cylinder. Walls keep
+    /// their flat normal; true angular corners retain hard edges.
     mutating func mouldedWall(_ ring: [DV2], edge i: Int, z0: Double, z1: Double, _ s: DioramaSwatch) {
         guard ring.count >= 3, z1 > z0 else { return }
-        let j = (i + 1) % ring.count
+        let n = ring.count
+        let j = (i + 1) % n
         let a = ring[i], b = ring[j]
         let face = (b - a).normalized.right
-        func normal(_ index: Int) -> DV3 {
-            let before = (ring[index] - ring[(index + ring.count - 1) % ring.count]).normalized.right
-            let after = (ring[(index + 1) % ring.count] - ring[index]).normalized.right
-            return DV3(before.dot(after) > 0.9 ? (before + after).normalized : face, 0)
+        let isFillet = a.distance(to: b) < Self.filletEdgeLength
+        func normal(_ index: Int, neighbour: Int) -> DV3 {
+            guard isFillet else { return DV3(face, 0) }
+            let p = ring[neighbour], q = ring[(neighbour + 1) % n]
+            let other = (q - p).normalized.right
+            guard other.dot(face) > 0.3 else { return DV3(face, 0) }
+            // Next to a wall, continue the wall's normal; between two fillet segments, average.
+            let neighbourIsWall = p.distance(to: q) >= Self.filletEdgeLength
+            return DV3(neighbourIsWall ? other : (other + face).normalized, 0)
         }
         let uv = DioramaAtlas.uv(s, dark: false)
-        let na = normal(i), nb = normal(j)
+        let na = normal(i, neighbour: (i + n - 1) % n), nb = normal(j, neighbour: j)
         let v0 = vertex(DV3(a, z0), na, uv), v1 = vertex(DV3(b, z0), nb, uv)
         let v2 = vertex(DV3(b, z1), nb, uv), v3 = vertex(DV3(a, z1), na, uv)
         let out = DV3(face, 0)
@@ -240,7 +253,7 @@ nonisolated struct DioramaMesh: Sendable {
         let n = ring.count
         guard n >= 3 else { return }
         for i in 0..<n where !(skip?[i] ?? false) {
-            if ao == 0, ring[i].distance(to: ring[(i + 1) % n]) < 2 {
+            if ao == 0, ring[i].distance(to: ring[(i + 1) % n]) < Self.filletEdgeLength {
                 mouldedWall(ring, edge: i, z0: z0, z1: z1, s)
             } else {
                 wall(ring[i], ring[(i + 1) % n], z0: z0, z1: z1, s, ao: ao)
@@ -290,7 +303,29 @@ nonisolated struct DioramaMesh: Sendable {
         doubleSided = wasDoubleSided
     }
 
-    /// Upright box with optional softly bevelled vertical corners and top edge.
+    /// Flat polygon whose rim normals lean outward, so a lid shades like one with a rounded top edge
+    /// without the ring of bevel faces: the edge highlight the map camera sees comes from the normal
+    /// gradient alone. Interior shading interpolates towards straight up.
+    mutating func softLid(_ ring: [DV2], z: Double, lean: Double, _ s: DioramaSwatch) {
+        let ccw = DioramaPolygon.counterClockwise(ring)
+        let n = ccw.count
+        guard n >= 3 else { return }
+        reserve(n)
+        let uv = DioramaAtlas.uv(s, dark: false)
+        let base = positions.count
+        for i in 0..<n {
+            let before = (ccw[i] - ccw[(i + n - 1) % n]).normalized.right
+            let after = (ccw[(i + 1) % n] - ccw[i]).normalized.right
+            let out = (before + after).normalized
+            vertex(DV3(ccw[i], z), (DV3(out, 0) * lean + DV3.up).normalized, uv)
+        }
+        for (a, b, c) in DioramaPolygon.triangulate(ccw) {
+            face(UInt32(base + a), UInt32(base + b), UInt32(base + c))
+        }
+    }
+
+    /// Upright box with optional softly bevelled vertical corners and top edge. The vertical bevels
+    /// are single chamfers shaded as curves; the top bevel is a lid whose rim normals lean outward.
     mutating func box(
         centre: DV2, z0: Double, axis: DV2 = DV2(1, 0), halfLength: Double, halfWidth: Double, height: Double,
         _ s: DioramaSwatch, top: DioramaSwatch? = nil, ao: Double = 0, bevel: Double = 0, bottom: Bool = false
@@ -309,17 +344,10 @@ nonisolated struct DioramaMesh: Sendable {
         let lid = top ?? s
         if bevel > 0.005, min(halfLength, halfWidth) > bevel * 1.6, height > bevel * 2 {
             let outer = DioramaPolygon.chamferedCorners(rect.corners, by: bevel)
-            let innerRect = rect.expanded(by: -bevel * 0.8)
-            let inner = DioramaPolygon.chamferedCorners(innerRect.corners, by: bevel * 0.5)
-            extrude(outer, z0: z0, z1: z1 - bevel, s, ao: ao)
-            let n = outer.count
-            for i in 0..<n {
-                let j = (i + 1) % n
-                let edgeOut = DV3((outer[j] - outer[i]).normalized.right, 0)
-                quad(DV3(outer[i], z1 - bevel), DV3(outer[j], z1 - bevel), DV3(inner[j], z1), DV3(inner[i], z1), lid,
-                     normal: (edgeOut + DV3.up).normalized)
-            }
-            polygon(inner, z: z1, lid)
+            extrude(outer, z0: z0, z1: z1, s, ao: ao)
+            // The lean grows with the bevel's share of the box so a rail reads rounder than a car roof.
+            let lean = min(0.9, 0.35 + bevel / min(halfLength, halfWidth) * 1.2)
+            softLid(outer, z: z1, lean: lean, lid)
             if bottom { polygon(outer, z: z0, s, facingUp: false) }
         } else {
             extrude(rect.corners, z0: z0, z1: z1, s, ao: ao)
@@ -375,7 +403,10 @@ nonisolated struct DioramaMesh: Sendable {
         let helper = abs(axis.z) < 0.9 ? DV3.up : DV3(1, 0, 0)
         let u = axis.cross(helper).normalized
         let v = axis.cross(u).normalized
-        let count = max(sides, 3)
+        // Smooth radial normals make six sides read as round below 25 cm and eight below 60 cm;
+        // more sides only add triangles the map camera cannot resolve.
+        let widest = max(r0, r1)
+        let count = max(min(sides, widest < 0.25 ? 6 : (widest < 0.6 ? 8 : 12)), 3)
         reserve(count * 2 + (cap ? count + 1 : 0))
         let uv = DioramaAtlas.uv(s, dark: dark)
         let base = positions.count
@@ -411,8 +442,8 @@ nonisolated struct DioramaMesh: Sendable {
         tube(from: DV3(centre, z0), to: DV3(centre, z1), r0: r0, r1: r1, sides: sides, s, cap: cap)
     }
 
-    /// Smooth ellipsoid: distant stand-ins use 20 faces (detail -1), small details 80, visible
-    /// rounded forms 320.
+    /// Smooth ellipsoid: 20 faces for distant stand-ins and small details (detail ≤ 0), 80 for
+    /// visible rounded forms. Interpolated normals carry the curve; 320 faces looked no rounder.
     mutating func sphere(centre: DV3, radii: DV3, _ s: DioramaSwatch, detail: Int = 1) {
         if let registry = primitiveRegistry, radii.x >= 1e-4, radii.y >= 1e-4, radii.z >= 1e-4 {
             let prototype = registry.prototype(kind: "spheres / reef", parameters: [], flags: [s.rawValue, detail], doubleSided: doubleSided) { mesh in
@@ -421,7 +452,7 @@ nonisolated struct DioramaMesh: Sendable {
             architecturalInstance(prototype, .init(scale: radii, translation: centre))
             return
         }
-        let shape = detail >= 1 ? DioramaIcosphere.level2 : (detail == 0 ? DioramaIcosphere.level1 : DioramaIcosphere.level0)
+        let shape = detail >= 1 ? DioramaIcosphere.level1 : DioramaIcosphere.level0
         reserve(shape.vertices.count)
         let uv = DioramaAtlas.uv(s, dark: false)
         let base = positions.count
@@ -442,9 +473,9 @@ nonisolated struct DioramaMesh: Sendable {
     /// surface so the lumps shade softly.
     mutating func blob(centre: DV3, radii: DV3, seed: UInt64, amplitude: Double, frequency: Double,
                        lower: DioramaSwatch, mid: DioramaSwatch, upper: DioramaSwatch, flattenBottom: Double = 0.3, light: Bool = false) {
-        // 320 smooth-shaded faces read as one moulded crown from the map camera; the distant
-        // version keeps the silhouette with 80. Thousands of canopies are instanced per tile.
-        let shape = light ? DioramaIcosphere.level1 : DioramaIcosphere.level2
+        // 80 smooth-shaded faces read as one moulded crown from the map camera; the distant
+        // version keeps the silhouette with 20. Thousands of canopies are instanced per tile.
+        let shape = light ? DioramaIcosphere.level0 : DioramaIcosphere.level1
         var rng = DioramaRandom(seed: seed, salt: 91)
         var waves: [(dir: DV3, freq: Double, phase: Double, amp: Double)] = []
         for k in 0..<5 {
@@ -577,9 +608,12 @@ extension DioramaPolygon {
         return out
     }
 
-    /// Rounds convex corners of a footprint with a short arc (the "Apple Maps toy" silhouette). Corners
-    /// next to clipped tile-edge edges are left alone. Edge flags follow the same convention as `chamfer`.
-    nonisolated static func rounded(_ ring: [DV2], flags: [Bool], radius r: Double, segments: Int = 4) -> (points: [DV2], flags: [Bool]) {
+    /// Rounds convex corners of a footprint (the "Apple Maps toy" silhouette). Two segments keep the
+    /// roof outline within half a pixel of the arc at a 1 m radius while `DioramaMesh.mouldedWall`
+    /// shades the two chamfers as a quarter cylinder; more segments only add walls, bands and roof
+    /// vertices for every corner. Corners next to clipped tile-edge edges are left alone. Edge flags
+    /// follow the same convention as `chamfer`.
+    nonisolated static func rounded(_ ring: [DV2], flags: [Bool], radius r: Double, segments: Int = 2) -> (points: [DV2], flags: [Bool]) {
         let n = ring.count
         guard n >= 3, r > 0, flags.count == n else { return (ring, flags) }
         var points: [DV2] = []

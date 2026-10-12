@@ -36,7 +36,7 @@ nonisolated struct DarArchitecturePlan {
         let bounds = DioramaPolygon.minimumAreaRectangle(source)
         let design = DarBuildingDesign(site: site)
         let radius = min(design.cornerRadius, max(0.25, bounds.halfWidth * 0.14))
-        let round = DioramaPolygon.rounded(source, flags: Array(repeating: false, count: source.count), radius: radius, segments: 5).points
+        let round = DioramaPolygon.rounded(source, flags: Array(repeating: false, count: source.count), radius: radius).points
         let compact = Self.compactContour(round)
         let ring = Self.fits(compact, inside: source, clearance: -0.03) ? compact : source
         envelope = ring

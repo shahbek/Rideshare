@@ -148,7 +148,7 @@ actor DioramaVisualUpgrade {
                 let color: DioramaSwatch = rng.chance(config.terracottaRoofShare) ? .roofTerracotta : rng.pick(config.metalRoofColors)
                 let floors = builder.classify(feature).1
                 let height = max(feature.height ?? Double(floors) * config.floorHeight, 2.8)
-                let rounded = DioramaPolygon.rounded(feature.ring, flags: feature.clipped, radius: config.cornerRadius, segments: 6)
+                let rounded = DioramaPolygon.rounded(feature.ring, flags: feature.clipped, radius: config.cornerRadius)
                 var original = DioramaMesh()
                 original.baseZ = terrain.buildingHeight(feature); original.recordsHeight = true
                 original.tint = SIMD3(1 + shift, 1 + shift * 0.35, 1 - shift)

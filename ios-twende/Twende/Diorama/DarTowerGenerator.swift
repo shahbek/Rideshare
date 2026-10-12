@@ -285,28 +285,47 @@ nonisolated struct DarTowerGenerator {
         }
     }
 
-    /// Four solid wall portions leave a genuine opening and supply its sill/lintel/jamb returns.
+    /// A genuine recessed opening in a solid wall: only the faces the map camera can see are built.
+    /// The wall around the opening is four flat quads, the opening shows its two jamb returns and the
+    /// top of its sill. The lintel's soffit, the backs of the wall, the ends shared with the next bay
+    /// and the undersides are never visible, so the bay costs 7 quads instead of four closed blocks.
     private func openingBay(a: DV2, b: DV2, out: DV2, low: Double, high: Double, sill: Double, lintel: Double,
                             share: Double, recess: Double, pigment: SIMD3<Float>, lit: Bool,
                             into mesh: inout DioramaMesh, glow: inout DioramaMesh) {
         let left = a + (b - a) * ((1 - share) * 0.5)
         let right = b - (b - a) * ((1 - share) * 0.5)
         let depth = max(0.08, recess)
+        let dir = (b - a).normalized
+        let face = DV3(out, 0)
+        let sillZ = low + sill, headZ = high - lintel
         use(pigment, .whitewash, &mesh)
-        panel(a: a, b: left, out: out, lower: low, upper: high, depth: depth, into: &mesh)
-        panel(a: right, b: b, out: out, lower: low, upper: high, depth: depth, into: &mesh)
-        panel(a: left, b: right, out: out, lower: low, upper: low + sill, depth: depth, into: &mesh)
-        panel(a: left, b: right, out: out, lower: high - lintel, upper: high, depth: depth, into: &mesh)
-        pane(left - out * depth, right - out * depth, out: out, low: low + sill, high: high - lintel,
+        if left.distance(to: a) > 0.005 {
+            mesh.quad(DV3(a, low), DV3(left, low), DV3(left, high), DV3(a, high), .whitewash, normal: face)
+        }
+        if b.distance(to: right) > 0.005 {
+            mesh.quad(DV3(right, low), DV3(b, low), DV3(b, high), DV3(right, high), .whitewash, normal: face)
+        }
+        guard headZ > sillZ, right.distance(to: left) > 0.005 else { return }
+        if sill > 0.005 {
+            mesh.quad(DV3(left, low), DV3(right, low), DV3(right, sillZ), DV3(left, sillZ), .whitewash, normal: face)
+        }
+        if lintel > 0.005 {
+            mesh.quad(DV3(left, headZ), DV3(right, headZ), DV3(right, high), DV3(left, high), .whitewash, normal: face)
+        }
+        let innerLeft = left - out * depth, innerRight = right - out * depth
+        mesh.quad(DV3(left, sillZ), DV3(innerLeft, sillZ), DV3(innerLeft, headZ), DV3(left, headZ), .whitewash, normal: DV3(dir, 0))
+        mesh.quad(DV3(right, sillZ), DV3(innerRight, sillZ), DV3(innerRight, headZ), DV3(right, headZ), .whitewash, normal: DV3(-dir, 0))
+        mesh.quad(DV3(left, sillZ), DV3(right, sillZ), DV3(innerRight, sillZ), DV3(innerLeft, sillZ), .whitewash, normal: .up)
+        pane(innerLeft, innerRight, out: out, low: sillZ, high: headZ,
             lit: lit, mullion: true, into: &mesh, glow: &glow)
     }
 
+    /// Balustrade panel: a closed block without its underside, which faces the gallery floor.
     private func panel(a: DV2, b: DV2, out: DV2, lower: Double, upper: Double, depth: Double,
                        color: DioramaSwatch = .whitewash, into mesh: inout DioramaMesh) {
         guard upper > lower, a.distance(to: b) > 0.005 else { return }
         let ring = DioramaPolygon.counterClockwise([a, b, b - out * depth, a - out * depth])
         mesh.extrude(ring, z0: lower, z1: upper, color, top: color)
-        mesh.polygon(ring, z: lower, color, facingUp: false)
     }
 
     private mutating func buildRoof(_ plan: DarArchitecturePlan, services: Bool = true, into mesh: inout DioramaMesh) {

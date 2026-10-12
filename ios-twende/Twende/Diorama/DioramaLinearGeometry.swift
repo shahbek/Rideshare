@@ -69,8 +69,8 @@ nonisolated enum DioramaLinearGeometry {
 }
 
 extension DioramaMesh {
-    /// Closed, smoothly shaded rounded-rectangle sweep. Adjacent spans share the exact same
-    /// cross-section. Noise deforms a single box-like foliage skin, never stacks separate blobs.
+    /// Smoothly shaded rounded-rectangle sweep, open at the ground. Adjacent spans share the exact
+    /// same cross-section. Noise deforms a single box-like foliage skin, never stacks separate blobs.
     nonisolated mutating func mouldedStrip(
         _ path: [DV2], halfWidth: Double, height: Double, radius: Double,
         lateralOffset: Double = 0, foliage: Bool = false,
@@ -86,20 +86,22 @@ extension DioramaMesh {
             squareStrip(clean, halfWidth: halfWidth, height: height, lateralOffset: lateralOffset, swatch: swatch, base: base)
             return
         }
-        let line = DioramaPolygon.densify(clean, maxStep: foliage ? 0.65 : 1.5)
+        let line = DioramaPolygon.densify(clean, maxStep: foliage ? 1.0 : 1.5)
         let closed = line[0].distance(to: line[line.count - 1]) < 0.0002
         let count = line.count
         let r = min(radius, halfWidth * 0.95, height * 0.45)
-        var profile: [DV2] = []
-        // Counter-clockwise in lateral/height coordinates.
-        for corner in 0..<4 {
-            let centres = [DV2(halfWidth - r, r), DV2(halfWidth - r, height - r),
-                           DV2(-halfWidth + r, height - r), DV2(-halfWidth + r, r)]
-            for k in 0...3 {
-                let angle = -Double.pi / 2 + Double(corner) * .pi / 2 + Double(k) * .pi / 6
+        // Open profile, counter-clockwise in lateral/height coordinates: right side up, two top
+        // corners of two segments each (smooth normals carry the curve), left side down. The lower
+        // corners and the bottom are in the ground and are not built: 7 faces per span, not 16.
+        var profile: [DV2] = [DV2(halfWidth, 0)]
+        for corner in 0..<2 {
+            let centres = [DV2(halfWidth - r, height - r), DV2(-halfWidth + r, height - r)]
+            for k in 0...2 {
+                let angle = Double(corner) * .pi / 2 + Double(k) * .pi / 4
                 profile.append(centres[corner] + DV2(cos(angle), sin(angle)) * r)
             }
         }
+        profile.append(DV2(-halfWidth, 0))
         let width = profile.count
         var points: [DV3] = []
         var sections: [[DV2]] = []
@@ -133,8 +135,8 @@ extension DioramaMesh {
         var faces: [(Int, Int, Int)] = []
         var normals = [DV3](repeating: DV3(0, 0, 0), count: points.count)
         for i in 0..<(count - 1) {
-            for j in 0..<width {
-                let k = (j + 1) % width
+            for j in 0..<(width - 1) {
+                let k = j + 1
                 let delta = profile[k] - profile[j]
                 let out = DV3((sides[i] + sides[i + 1]).normalized * delta.y, -delta.x)
                 let a = i * width + j, b = (i + 1) * width + j

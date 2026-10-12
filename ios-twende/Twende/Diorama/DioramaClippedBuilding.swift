@@ -23,7 +23,7 @@ nonisolated enum DioramaClippedBuilding {
         let rawLoops = loops(original.boundary())
         // Only shave genuine exterior corners; never expand into another owner's cutout.
         let exclusions = DioramaGroundCutouts(polygons: f.occupiedPieces).subtract(from: f.ring)
-        let rounded = DioramaPolygon.rounded(f.ring, flags: f.clipped, radius: config.cornerRadius, segments: 6).points
+        let rounded = DioramaPolygon.rounded(f.ring, flags: f.clipped, radius: config.cornerRadius).points
         let pieces = DioramaGroundCutouts(polygons: exclusions).subtract(from: rounded)
         let surface = DioramaStreetSurface(pieces)
         let boundaries = loops(surface.boundary())
