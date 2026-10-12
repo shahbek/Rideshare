@@ -531,8 +531,8 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost, @unchecke
             depthState = metalDevice.makeDepthStencilState(descriptor: depth)
             noWriteDepthState = metalDevice.makeDepthStencilState(descriptor: noWrite)
             // Optional: a failure here only means every ground fragment keeps computing its grade live.
-            // Stylised scenes never read the grade field: nothing is computed per ground fragment.
-            if !stylised, let fullscreen = library.makeFunction(name: "dioramaFullscreenVertex"),
+            // Clay and stylised scenes never read the grade field: no bake pass, no texture.
+            if !stylised, !DioramaConfig.clayRendering, let fullscreen = library.makeFunction(name: "dioramaFullscreenVertex"),
                let bake = library.makeFunction(name: "dioramaGradeBakeFragment") {
                 let d = MTLRenderPipelineDescriptor()
                 d.label = "Diorama ground grade bake"
@@ -556,8 +556,10 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost, @unchecke
                 }
             }
             geometryChunks = DioramaGeometryChunks(device: metalDevice, context: contextOnly)
-            surfaceTexture = DioramaSurfaceTexture.texture(device: metalDevice)
-            buildingMaterials = DioramaBuildingMaterials.texture(device: metalDevice)
+            // Clay: no grain or material layers exist; the fragment binding keeps its declared type
+            // through a 1×1 neutral array that is never sampled.
+            surfaceTexture = DioramaConfig.clayRendering ? nil : DioramaSurfaceTexture.texture(device: metalDevice)
+            buildingMaterials = DioramaConfig.clayRendering ? DioramaBuildingMaterials.neutral(device: metalDevice) : DioramaBuildingMaterials.texture(device: metalDevice)
             lightBuffer = upload(lightGrid.lights, fallback: DioramaShaderLight(position: .zero, color: .zero))
             lightTableBuffer = upload(lightGrid.table, fallback: SIMD2<UInt32>(0, 0))
             lightIndexBuffer = upload(lightGrid.indices, fallback: UInt32(0))
@@ -582,7 +584,7 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost, @unchecke
             print("[Diorama material] legacy_foliage_vertices=\(materialCounts.x) legacy_architecture_vertices=\(materialCounts.y) preset=\(timeOfDay.rawValue) color_format=\(colorPixelFormat) vertex=packed32 resident=\(resident != nil)")
             #endif
 
-            if resident == nil, let groundImage {
+            if resident == nil, !DioramaConfig.clayRendering, let groundImage {
                 let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba8Unorm, width: groundImage.size, height: groundImage.size, mipmapped: true)
                 descriptor.usage = [.shaderRead]
                 descriptor.storageMode = .shared
@@ -621,7 +623,7 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost, @unchecke
                   lightBuffer != nil, lightTableBuffer != nil, lightIndexBuffer != nil,
                   paintBuffer != nil, paintTableBuffer != nil, paintIndexBuffer != nil,
                   depthState != nil, noWriteDepthState != nil, blankReflection != nil,
-                  (resident == nil ? groundImage == nil : resident?.groundTexture == nil) || groundTexture != nil else {
+                  DioramaConfig.clayRendering || (resident == nil ? groundImage == nil : resident?.groundTexture == nil) || groundTexture != nil else {
                 setDiagnostic("GPU resource allocation failed")
                 onInitializationFailed?()
                 return
@@ -808,6 +810,7 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost, @unchecke
 
         var uniforms = DioramaLighting.uniforms(for: timeOfDay, eye: eye)
         uniforms.groundColor.w = surfaceTexture == nil ? 0 : 1
+        uniforms.style.z = DioramaConfig.clayRendering ? 1 : 0
         uniforms.reveal = reveal
         uniforms.lifecycleReveal = lifecycleReveal
         uniforms.tileBounds = SIMD4(Float(groundRect.minX), Float(groundRect.minY), Float(groundRect.maxX), Float(groundRect.maxY))
@@ -910,7 +913,9 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost, @unchecke
         let hasOpaque = mainRanges.contains { $0.category != .water && !$0.category.isEmissive }
             || drawnGroups.contains { !$0.category.isEmissive }
         let hasEmission = mainRanges.contains { $0.category.isEmissive } || drawnGroups.contains { $0.category.isEmissive }
-        let aoStrength: Float = effectsOn && hasOpaque ? postSettings.ao : 0
+        // Clay keeps no screen-space occlusion: that pass re-drew every opaque triangle into a
+        // position/normal buffer each time the camera moved more than a texel.
+        let aoStrength: Float = effectsOn && hasOpaque && !DioramaConfig.clayRendering ? postSettings.ao : 0
         let bloomStrength: Float = effectsOn && glowOn && hasEmission ? postSettings.bloom : 0
         uniforms.post = SIMD4<Float>(aoStrength, bloomStrength, postSettings.grade, postSettings.haze)
         let lodDistance: Float = 140

@@ -5,6 +5,11 @@ import Metal
 import simd
 
 /// Owns typography, projection and label collisions; no Mapbox symbol layer or glyph service.
+///
+/// Cost model: the Metal pipeline is compiled once per device and formats, and a title's plate is
+/// rasterised once per process (shared by every tile and reload that shows it), on its first
+/// visible frame rather than when the tile installs. Installing a tile with 400 labels therefore
+/// costs nothing until the camera is close enough to read them.
 nonisolated final class DioramaLabelRenderer {
     private struct Vertex {
         var position: SIMD4<Float>
@@ -15,15 +20,46 @@ nonisolated final class DioramaLabelRenderer {
         let width: Float
         let height: Float
     }
+    private struct PipelineKey: Hashable {
+        let device: ObjectIdentifier
+        let color: MTLPixelFormat
+        let depth: MTLPixelFormat
+    }
+    private struct ImageKey: Hashable {
+        let device: ObjectIdentifier
+        let title: String
+        let scale: Float
+    }
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var pipelines: [PipelineKey: (MTLRenderPipelineState, MTLDepthStencilState)] = [:]
+    nonisolated(unsafe) private static var sharedImages: [ImageKey: Image] = [:]
+    nonisolated(unsafe) private static var sharedOrder: [ImageKey] = []
+    /// Plates are about 100 KB each at 3×; 512 of them stay under 64 MB, well beyond one view's need.
+    private static let sharedLimit = 512
+
+    private let device: MTLDevice
     private let labels: [DioramaBuildingLabel]
     private let scale: Float
-    private var images: [String: Image] = [:]
     private let pipeline: MTLRenderPipelineState
     private let depth: MTLDepthStencilState
 
     init?(device: MTLDevice, labels: [DioramaBuildingLabel], scale: Float, color: MTLPixelFormat, depthFormat: MTLPixelFormat) {
+        self.device = device
         self.labels = labels.sorted { $0.isNamed != $1.isNamed ? $0.isNamed : $0.id < $1.id }
         self.scale = max(1, scale)
+        guard let (pipeline, depth) = Self.pipeline(device: device, color: color, depthFormat: depthFormat) else {
+            print("[Diorama] custom label pipeline unavailable")
+            return nil
+        }
+        self.pipeline = pipeline
+        self.depth = depth
+    }
+
+    private static func pipeline(device: MTLDevice, color: MTLPixelFormat, depthFormat: MTLPixelFormat) -> (MTLRenderPipelineState, MTLDepthStencilState)? {
+        let key = PipelineKey(device: ObjectIdentifier(device), color: color, depth: depthFormat)
+        lock.lock()
+        defer { lock.unlock() }
+        if let cached = pipelines[key] { return cached }
         let source = """
         #include <metal_stdlib>
         using namespace metal;
@@ -54,19 +90,32 @@ nonisolated final class DioramaLabelRenderer {
             descriptor.colorAttachments[0].destinationAlphaBlendFactor = .oneMinusSourceAlpha
             descriptor.depthAttachmentPixelFormat = depthFormat
             descriptor.stencilAttachmentPixelFormat = depthFormat
-            pipeline = try device.makeRenderPipelineState(descriptor: descriptor)
+            let pipeline = try device.makeRenderPipelineState(descriptor: descriptor)
             let d = MTLDepthStencilDescriptor()
             d.depthCompareFunction = .lessEqual
             d.isDepthWriteEnabled = false
             guard let state = device.makeDepthStencilState(descriptor: d) else { return nil }
-            depth = state
-            for title in Set(labels.map(\.title)) {
-                images[title] = Self.raster(title, device: device, scale: self.scale)
-            }
+            pipelines[key] = (pipeline, state)
+            return (pipeline, state)
         } catch {
-            print("[Diorama] custom label pipeline unavailable")
             return nil
         }
+    }
+
+    /// A title's plate, rasterised on first use and shared process-wide (bounded, oldest evicted).
+    private func image(for title: String) -> Image? {
+        let key = ImageKey(device: ObjectIdentifier(device), title: title, scale: scale)
+        Self.lock.lock()
+        defer { Self.lock.unlock() }
+        if let cached = Self.sharedImages[key] { return cached }
+        guard let image = Self.raster(title, device: device, scale: scale) else { return nil }
+        Self.sharedImages[key] = image
+        Self.sharedOrder.append(key)
+        if Self.sharedOrder.count > Self.sharedLimit {
+            let evicted = Self.sharedOrder.removeFirst()
+            Self.sharedImages[evicted] = nil
+        }
+        return image
     }
 
     /// Uses the same unique-title raster dimensions as allocation, without creating any textures.
@@ -129,7 +178,7 @@ nonisolated final class DioramaLabelRenderer {
         var occupied: [CGRect] = []
         let w = Float(width), h = Float(height)
         for label in labels {
-            guard label.isNamed || zoom >= 17.8, occupied.count < 18, let image = images[label.title] else { continue }
+            guard label.isNamed || zoom >= 17.8, occupied.count < 18, let image = image(for: label.title) else { continue }
             let revealed = DioramaRevealStyle.sceneCoverage(label.anchor, reveal: uniforms.reveal,
                 bounds: uniforms.tileBounds, edges: uniforms.focusEdges, state: uniforms.tileState, frame: uniforms.materialFrame)
                 * DioramaRevealStyle.coverage(label.anchor, reveal: uniforms.lifecycleReveal, bounds: uniforms.tileBounds)

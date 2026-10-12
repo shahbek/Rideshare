@@ -335,7 +335,8 @@ nonisolated extension DioramaTileArchive {
         // Ground: decoded rows go straight into a mipmapped texture.
         var groundTexture: MTLTexture?
         guard sGround.bytes == m.imageSize * m.imageSize * 4 else { throw ArchiveError.invalid }
-        if m.imageSize > 0 {
+        // Clay: the saved raster stays on disk, unread; nothing is decoded, uploaded or mipmapped.
+        if m.imageSize > 0, !DioramaConfig.clayRendering {
             let size = m.imageSize, rowBytes = size * 4
             let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba8Unorm, width: size, height: size, mipmapped: true)
             descriptor.usage = [.shaderRead]; descriptor.storageMode = .shared

@@ -111,7 +111,10 @@ nonisolated enum DioramaResidentSnapshot {
     private static var root: URL {
         FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("DioramaResident", isDirectory: true)
     }
-    private static func name(_ tile: DioramaTileID, context: Bool) -> String { "\(tile.key)-\(context ? "context" : "focus")" }
+    /// Clay snapshots carry no ground image, so they are kept apart from textured ones.
+    private static func name(_ tile: DioramaTileID, context: Bool) -> String {
+        "\(tile.key)-\(context ? "context" : "focus")\(DioramaConfig.clayRendering ? "-clay" : "")"
+    }
     private static func hex(_ digest: SHA256.Digest) -> String { digest.map { String(format: "%02x", $0) }.joined() }
 
     /// Everything the decoded result depends on: package manifest (which carries every block digest),
@@ -284,7 +287,7 @@ nonisolated enum DioramaResidentSnapshot {
         if Task.isCancelled { return nil }
 
         var groundTexture: MTLTexture?
-        if h.imageSize > 0 {
+        if h.imageSize > 0, !DioramaConfig.clayRendering {
             guard h.imageSize <= 4096, let texels = buffer("texture", minimum: 0) else { return nil }
             let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba8Unorm, width: h.imageSize, height: h.imageSize, mipmapped: true)
             guard descriptor.mipmapLevelCount == h.mipOffsets.count else { return nil }

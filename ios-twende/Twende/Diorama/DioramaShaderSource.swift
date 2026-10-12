@@ -52,7 +52,8 @@ nonisolated struct DioramaShaderUniforms {
     var tint: SIMD4<Float> = SIMD4(1.025, 1, 0.985, 0.58)
     /// rgb: distance haze colour, w: haze amount.
     var hazeTone: SIMD4<Float> = SIMD4(0.89, 0.91, 0.89, 0.65)
-    /// x: contrast, y: exposure, z/w: reserved.
+    /// x: contrast, y: exposure, z: clay rendering (1 = no stored images are sampled; procedural
+    /// ground, soft wrapped light, rounded rim), w: reserved.
     var style: SIMD4<Float> = SIMD4(1, 1, 0, 0)
 }
 
@@ -786,6 +787,9 @@ nonisolated enum DioramaShaderSource {
             // Clear architectural glazing: no sky mix, Fresnel, specular or reflected scene.
             return dioramaRevealColor(in.color.rgb, clamp(in.color.a, 0.025, 0.08), revealAlpha, u);
         }
+        // Clay: the scene is coloured by its vertices and shaped by its smooth normals; no texture
+        // (ground raster, material layers, grain, grade field, occlusion) is read anywhere below.
+        bool clay = u.style.z > 0.5;
         float3 albedo = in.color.rgb;
         float3 surfacePosition = in.worldPosition;
         float3 surfaceNormal = n;
@@ -813,16 +817,19 @@ nonisolated enum DioramaShaderSource {
         // Pixel footprint in metres, taken outside the material branches. Where one pixel covers more
         // than one pre-baked grade texel, the baked low-frequency fields replace live evaluation.
         float footprint = max(length(fwidth(wp)), 1e-4);
-        float gradeSize = float(gradeField.get_width());
+        float gradeSize = clay ? 0.0 : float(gradeField.get_width());
         bool bakedGrade = gradeSize >= 64.0 && footprint * u.groundImage.z * gradeSize > 1.0;
         float2 gradeUV = (wp - u.groundImage.xy) * u.groundImage.zw;
         constexpr sampler gradeSampler(coord::normalized, address::clamp_to_edge, filter::linear);
-        bool airportHD = paintedGround && u.airportDetailBounds.z > u.airportDetailBounds.x
+        bool airportHD = !clay && paintedGround && u.airportDetailBounds.z > u.airportDetailBounds.x
             && all(wp >= u.airportDetailBounds.xy) && all(wp < u.airportDetailBounds.zw);
         float4 paintFrame = airportHD ? u.airportDetailImage : u.groundImage;
         float2 vegetationPosition = wp * u.materialFrame.z + u.materialFrame.xy;
         bool analyticAirport = paintedGround && u.materialFrame.w > 0.5 && u.materialFrame.w < 1.5;
-        bool hybridFinish = paintedGround && u.materialFrame.w > 1.5 && !airportHD;
+        // Clay ground never reads the raster: everything not covered by a vector finish is natural
+        // ground, and the vector layers (asphalt, pavements, paving, clay courts) composite over it.
+        bool clayGround = clay && paintedGround && !analyticAirport;
+        bool hybridFinish = paintedGround && (u.materialFrame.w > 1.5 || clayGround) && !airportHD;
         float4 rasterEpochs = float4(0.0);
         float2 rasterF = float2(0.0);
         // Organic breakup is only evaluated where a pixel is small enough to see it (no far aliasing).
@@ -836,7 +843,15 @@ nonisolated enum DioramaShaderSource {
             ? dioramaOrganic(saturate(in.appearance.z), breakup * 0.65 + breakupFine * 0.35, 1.1) : 0.0;
         float3 paintedPigment = albedo;
         float mown = 0.0;
-        if (paintedGround && !analyticAirport) {
+        if (clayGround) {
+            // Source lawn swatch as the pigment the procedural turf grades from; the vertex colour
+            // (coast sand) still feathers in through `coastCoverage` like the painted path.
+            float3 lawn = float3(131.0, 173.0, 50.0) / 255.0;
+            albedo = mix(lawn, in.color.rgb, coastCoverage);
+            paintedPigment = lawn;
+            tex = 1.0;
+            finish = dioramaFinishCoverage(1.0);
+        } else if (paintedGround && !analyticAirport) {
             // Painted ground: albedo from the tile image, grain code from its alpha (×32).
             constexpr sampler groundSampler(coord::normalized, address::clamp_to_edge, filter::linear, mip_filter::linear, max_anisotropy(8));
             float2 guv = (wp - paintFrame.xy) * paintFrame.zw;
@@ -1258,7 +1273,9 @@ nonisolated enum DioramaShaderSource {
             ao = 1.0 - u.post.x * revealCoverage * (1.0 - occlusion.sample(aoSampler, suv).r);
         }
         float ndl = dot(detailNormal, u.sunDirection.xyz);
-        float wrap = foliage ? u.look.w : 0.0;
+        // Clay wraps the sun a little around every rounded form so chamfers shade as continuous
+        // curves instead of a hard terminator at the single bevel.
+        float wrap = foliage ? u.look.w : (clay ? 0.16 : 0.0);
         float sun = saturate((ndl + wrap) / (1.0 + wrap));
         // Faces turned from the sun only use visibility for specular materials.
         float visibility = dioramaShadow(litPos, litN, u, shadowMap,
@@ -1272,8 +1289,9 @@ nonisolated enum DioramaShaderSource {
         // pooling; roofs catch only a little of it.
         float3 cityGlow = float3(0.0);
         float street = 0.0;
-        if (glow > 0.01 && gradeSize >= 64.0) {
-            street = gradeField.sample(gradeSampler, gradeUV).a;
+        if (glow > 0.01 && (gradeSize >= 64.0 || clay)) {
+            // Clay has no baked road-density field: an even, slightly pooled sodium wash stands in.
+            street = clay ? 0.42 : gradeField.sample(gradeSampler, gradeUV).a;
             if (street > 0.001) {
                 float pooling = 0.72 + 0.28 * dioramaNoise(wp * 0.085 + float2(3.7, -1.3));
                 float facing = roofSurface ? 0.28 : (0.55 + 0.45 * saturate(litN.z));
@@ -1392,7 +1410,8 @@ nonisolated enum DioramaShaderSource {
             float gloss = pow(saturate(dot(n, halfway)), mix(96.0, 12.0, rough));
             color += u.sunColor.rgb * gloss * visibility * (1.0 - rough) * 0.25;
         }
-        float rim = pow(1.0 - saturate(dot(n, view)), 4.0) * 0.035;
+        // Rounded clay rim: a soft sky lift on grazing faces reads every form as a smooth solid.
+        float rim = pow(1.0 - saturate(dot(n, view)), clay ? 3.0 : 4.0) * (clay ? 0.07 : 0.035);
         color += u.skyColor.rgb * rim;
         // Lamp pools stay warm: the moonlit night grade applies to sky and sun light only.
         float3 lampColor = albedo * lampLight;

@@ -125,6 +125,13 @@ nonisolated struct DioramaBuildingOverride: Sendable {
 
 /// One place to tune the whole look without touching generation code.
 nonisolated struct DioramaConfig: Sendable {
+    /// Clay rendering (2026-10-12 direction): rounded low-poly geometry lit by the shader alone.
+    /// Nothing is sampled from a stored image: no per-tile ground raster (1024–4096 px), no
+    /// building-material layers, no microdetail grain, no baked grade field, no screen-space
+    /// occlusion pass. Natural ground, asphalt, plaster and roofs are procedural in the fragment;
+    /// roads, pavements and lane paint stay exact vector layers. Pieces and packages decoded under
+    /// this flag skip their ground image entirely (never read, never uploaded, never mipmapped).
+    static let clayRendering = true
     /// Bump to invalidate every cached tile.
     var generatorVersion: Int = 37
     /// Reuse full-detail architectural primitives without changing their tessellation.

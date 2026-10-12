@@ -664,7 +664,8 @@ nonisolated enum DioramaStreamPiece {
         if Task.isCancelled { throw CancellationError() }
 
         var groundTexture: MTLTexture?
-        if h.imageWidth > 0, h.imageHeight > 0 {
+        // Clay never reads a piece's ground image: older pieces that carry one are decoded without it.
+        if h.imageWidth > 0, h.imageHeight > 0, !DioramaConfig.clayRendering {
             let texels = try values("texture", UInt8.self)
             let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba8Unorm, width: h.imageWidth, height: h.imageHeight, mipmapped: true)
             descriptor.usage = [.shaderRead]; descriptor.storageMode = .shared

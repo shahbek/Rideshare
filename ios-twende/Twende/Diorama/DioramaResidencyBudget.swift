@@ -91,7 +91,8 @@ final class DioramaResidencyBudget {
     /// 2048² shadow depth and label textures, plus each host's bounded geometry chunk cache.
     /// Coarse hosts allocate only the chunk cache allowance, not the screen/shadow effects.
     nonisolated static func effectBytes(context: Bool, labelTitles: [String], size: CGSize, scale: Float) -> Int {
-        let grade = DioramaRenderLayer.gradeFieldSize(context: context)
+        // Clay allocates no grade field and shares label plates process-wide (counted once below).
+        let grade = DioramaConfig.clayRendering ? 0 : DioramaRenderLayer.gradeFieldSize(context: context)
         let chunks = DioramaGeometryChunks.reservationBytes(context: context) + grade * grade * 8
         guard !context else { return chunks }
         let w = Int(max(1, size.width)), h = Int(max(1, size.height))
@@ -115,7 +116,8 @@ final class DioramaResidencyBudget {
         let indices = plan.indexCapacity * 4
         let instances = plan.instanceCount * MemoryLayout<DioramaInstanceData>.stride
         let groupCPU = plan.groupInstances * MemoryLayout<DioramaInstanceData>.stride
-        let ground = plan.imageSize * plan.imageSize * 4 * 4 / 3
+        // Clay never uploads the saved raster: no texture, no mip chain, no decode scratch for it.
+        let ground = DioramaConfig.clayRendering ? 0 : plan.imageSize * plan.imageSize * 4 * 4 / 3
         let gpu = vertices + indices + instances + ground + plan.paintBytes + plan.lightBytes + plan.lodBytes
         // Painted-ground lookup grid: offsets plus at most a few cell references per triangle.
         let groundGrid = min(plan.indexCapacity / 3 * 8, 4 * 1_048_576)

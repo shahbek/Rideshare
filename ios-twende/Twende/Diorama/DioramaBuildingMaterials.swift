@@ -60,6 +60,18 @@ nonisolated enum DioramaBuildingMaterials {
         return texture
     }
 
+    /// 1×1 neutral array for clay rendering, which declares the binding but never samples it.
+    static func neutral(device: MTLDevice) -> MTLTexture? {
+        lock.lock()
+        defer { lock.unlock() }
+        let key = ObjectIdentifier(device)
+        if let cached = neutrals[key] { return cached }
+        let texture = fallback(device: device)
+        neutrals[key] = texture
+        return texture
+    }
+    nonisolated(unsafe) private static var neutrals: [ObjectIdentifier: MTLTexture] = [:]
+
     private static func fallback(device: MTLDevice) -> MTLTexture? {
         let descriptor = MTLTextureDescriptor()
         descriptor.textureType = .type2DArray
