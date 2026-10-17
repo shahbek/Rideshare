@@ -511,10 +511,12 @@ nonisolated enum DioramaShaderSource {
         // Far away one screen pixel already spans the whole filter disk: the nine taps would only
         // alias, so the hardware 2x2 comparison (one tap) or a five-tap cross gives the same result.
         float pixelUV = max(length(dx), length(dy));
-        int count = pixelUV > stepSize.x * 2.5 ? 1 : (pixelUV > stepSize.x * 1.2 ? 5 : 9);
+        // Device log 2026-10-17: shadow sampling cost 5.5 ms of an 18.9 ms city frame. The hardware
+        // already filters each comparison over 2x2 texels, so four rotated taps replace the nine.
+        int count = pixelUV > stepSize.x * 1.6 ? 1 : 4;
         float visibility = 0.0;
         for (int i = 0; i < count; i++) {
-            float2 offset = taps[i] * stepSize;
+            float2 offset = taps[count == 1 ? 0 : i + 1] * stepSize;
             float receiverDepth = q.z + dot(gradient, offset) - bias - footprintBias;
             visibility += shadowMap.sample_compare(shadowSampler, uv + offset, receiverDepth);
         }
@@ -1039,16 +1041,20 @@ nonisolated enum DioramaShaderSource {
             // lump. Paving and asphalt take a much gentler version; detail fades past ~0.6 m/px.
             float bumpFade = 1.0 - smoothstep(0.1, 0.6, footprint);
             float relief = (naturalArea > 0.0001 ? 1.0 : 0.0) * (1.0 - naturalCoverage * 0.5)
-                         + finish.z * 0.22 + ((tex > 1.5 && tex < 2.5) || (tex > 3.5 && tex < 4.5) ? 0.3 : 0.0);
+                         + ((tex > 1.5 && tex < 2.5) || (tex > 3.5 && tex < 4.5) ? 0.3 : 0.0);
             relief = saturate(relief) * bumpFade;
             if (relief > 0.001) {
                 const float e = 0.3;
                 float2 bp = vegetationPosition * 0.42 + float2(5.3, -2.1);
                 float h0 = dioramaNoise(bp);
                 float2 slope = float2(dioramaNoise(bp + float2(e, 0.0)) - h0, dioramaNoise(bp + float2(0.0, e)) - h0) / e * 0.42 * 0.34;
-                float2 bq = vegetationPosition * 1.6 + float2(-3.7, 8.4);
-                float g0 = dioramaNoise(bq);
-                slope += float2(dioramaNoise(bq + float2(e, 0.0)) - g0, dioramaNoise(bq + float2(0.0, e)) - g0) / e * 1.6 * 0.05;
+                // The 0.6 m octave is below a pixel past ~0.15 m/px: skip its three noise reads there.
+                float fineFade = 1.0 - smoothstep(0.06, 0.15, footprint);
+                if (fineFade > 0.001) {
+                    float2 bq = vegetationPosition * 1.6 + float2(-3.7, 8.4);
+                    float g0 = dioramaNoise(bq);
+                    slope += float2(dioramaNoise(bq + float2(e, 0.0)) - g0, dioramaNoise(bq + float2(0.0, e)) - g0) / e * 1.6 * 0.05 * fineFade;
+                }
                 detailNormal = normalize(detailNormal + float3(-slope * relief, 0.0));
                 albedo *= 1.0 + (h0 - 0.5) * 0.10 * relief;
             }
