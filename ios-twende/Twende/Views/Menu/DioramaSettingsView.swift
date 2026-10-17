@@ -25,6 +25,8 @@ struct DioramaSettingsView: View {
                     .pickerStyle(.segmented)
                 }
                 section("Performance") {
+                    DioramaProfilerView()
+                    RowDivider(leading: 0)
                     DioramaPerformancePanel(state: state)
                 }
                 section("Downloads") {

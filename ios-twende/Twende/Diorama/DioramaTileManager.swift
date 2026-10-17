@@ -146,6 +146,9 @@ final class DioramaTileManager {
 
     func install(on map: MapboxMap) {
         self.map = map; installed = true
+        DioramaProfiler.shared.registerRepaint(owner: self) { [weak self] in
+            DispatchQueue.main.async { self?.map?.triggerRepaint() }
+        }
         DioramaSceneryStreamer.shared.onInstall = { [weak self] tile in
             self?.contextTiles.packageArrived(tile); self?.hdTiles.packageArrived(tile)
             self?.scheduleUpdate(delay: 0)

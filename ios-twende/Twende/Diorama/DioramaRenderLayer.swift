@@ -977,6 +977,11 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost, @unchecke
         }
         let labelCount = labelIDs.count
         let lightCount = debug.pointLights ? lightGrid.lights.count : 0
+        let profileFrame: DioramaProfiler.Frame? = DioramaProfiler.shared.isRecording
+            ? DioramaProfiler.Frame(t: 0, host: hostID.hashValue, zoom: Double(parameters.zoom), pitch: Double(parameters.pitch),
+                bearing: Double(parameters.bearing), latitude: Double(parameters.latitude), longitude: Double(parameters.longitude),
+                cpuMS: cpuMS, gpuMS: nil)
+            : nil
         DioramaDebugSwitches.shared.record(hostID) { stats in
             stats.triangles = perCategory; stats.drawCalls = drawCalls; stats.shadowTriangles = casterTriangles
             stats.labels = labelCount; stats.lights = lightCount
@@ -986,6 +991,10 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost, @unchecke
             self?.didComplete(reveal, lifecycle: lifecycleReveal, union: unionState)
             let gpuMS = command.gpuEndTime > command.gpuStartTime ? (command.gpuEndTime - command.gpuStartTime) * 1000 : nil
             DioramaDebugSwitches.shared.record(hostID) { $0.gpuMS = gpuMS }
+            if var sample = profileFrame {
+                sample.t = CACurrentMediaTime(); sample.gpuMS = gpuMS
+                DioramaProfiler.shared.record(sample)
+            }
             if let report = metrics.record(triangles: triangles, cpuMS: cpuMS, gpuMS: gpuMS, drawCalls: drawCalls,
                 unmergedDrawCalls: unmergedDrawCalls, chunkCopiedBytes: chunkCopiedBytes,
                 chunkCacheHits: chunkCacheHits, chunkFallbackDraws: chunkFallbackDraws) { callback?(report) }
