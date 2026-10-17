@@ -43,13 +43,30 @@ sc = bpy.context.scene
 sc.render.engine = 'CYCLES'; sc.cycles.samples = 256; sc.cycles.use_denoising = True
 sc.view_settings.view_transform = 'AgX'
 w = sc.world or bpy.data.worlds.new('World'); sc.world = w; w.use_nodes = True
+w.use_nodes = True
 sky = w.node_tree.nodes.new('ShaderNodeTexSky'); bg = next(n for n in w.node_tree.nodes if n.type == 'BACKGROUND')
 w.node_tree.links.new(sky.outputs['Color'], bg.inputs['Color'])
-sc.use_nodes = True
-nt = sc.node_tree
-if not any(n.type == 'GLARE' for n in nt.nodes):
-    rl = next((n for n in nt.nodes if n.type == 'R_LAYERS'), nt.nodes.new('CompositorNodeRLayers'))
-    comp = next((n for n in nt.nodes if n.type == 'COMPOSITE'), nt.nodes.new('CompositorNodeComposite'))
-    gl = nt.nodes.new('CompositorNodeGlare'); gl.glare_type = 'BLOOM' if hasattr(gl, 'glare_type') else None
-    nt.links.new(rl.outputs['Image'], gl.inputs['Image']); nt.links.new(gl.outputs['Image'], comp.inputs['Image'])
+def bloom():
+    if hasattr(sc, 'compositing_node_group'):  # Blender 5+
+        nt = sc.compositing_node_group
+        if nt is None:
+            nt = bpy.data.node_groups.new('Zuri Compositor', 'CompositorNodeTree'); sc.compositing_node_group = nt
+        nt.nodes.clear()
+        rl = nt.nodes.new('CompositorNodeRLayers'); gl = nt.nodes.new('CompositorNodeGlare')
+        if hasattr(gl, 'glare_type'): gl.glare_type = 'BLOOM'
+        nt.interface.new_socket('Image', in_out='OUTPUT', socket_type='NodeSocketColor')
+        out = nt.nodes.new('NodeGroupOutput')
+        nt.links.new(rl.outputs['Image'], gl.inputs['Image']); nt.links.new(gl.outputs['Image'], out.inputs[0])
+    else:
+        sc.use_nodes = True
+        nt = sc.node_tree
+        rl = next((n for n in nt.nodes if n.type == 'R_LAYERS'), None) or nt.nodes.new('CompositorNodeRLayers')
+        comp = next((n for n in nt.nodes if n.type == 'COMPOSITE'), None) or nt.nodes.new('CompositorNodeComposite')
+        gl = nt.nodes.new('CompositorNodeGlare'); gl.glare_type = 'BLOOM'
+        nt.links.new(rl.outputs['Image'], gl.inputs['Image']); nt.links.new(gl.outputs['Image'], comp.inputs['Image'])
+
+try:
+    bloom()
+except Exception as e:
+    print('Bloom not set up automatically (' + str(e) + '). Add a Glare node (Bloom) in the Compositing workspace.')
 print('Zuri harbour ready: lamps are point lights, glow is emissive, ground carries the road texture.')
