@@ -117,24 +117,37 @@ def main():
             if cat == 'water': pos = pos + np.array([0, 0, 0.04], np.float32)
             m = g.mesh(f'{NICE.get(cat, cat)}', pos, nrm, None if cat in ('water', 'windowGlow', 'propGlow') else col, t, mat, uv)
             g.nodes.append({'name': f'{NICE.get(cat, cat)}{"_2sided" if dbl else ""}_{tx}', 'mesh': m}); children.append(len(g.nodes) - 1)
+        merged = {}
         for gi, gr in enumerate(h['groups']):
             if gr['p'] or gr['n'] == 0 or gr['fc'] == 0 or gr['c'] == 'shorelineDebug': continue
             tri = idx[gr['fs']:gr['fs'] + gr['fc']].reshape(-1, 3)
             pos, nrm, col, t = submesh(v, tri)
-            cat = gr['c']
-            m = g.mesh(f'{NICE.get(cat, cat)}_proto{gi}', pos, nrm, None if cat in ('windowGlow', 'propGlow') else col, t, material(g, cat, bool(gr['d'])))
-            centre = pos.mean(0) if cat == 'propGlow' else None
-            for k in range(gr['first'], gr['first'] + gr['n']):
-                p = inst[k]; a = float(p[3]) * 0.5
-                if centre is not None:
-                    ca, sa = np.cos(p[3]), np.sin(p[3]); c = centre * p[4:7]
-                    wp = [float(p[0] + ca * c[0] - sa * c[1]), float(p[1] + sa * c[0] + ca * c[1]), float(p[2] + c[2])]
-                    g.lights.append({'type': 'point', 'color': [1.0, 0.62, 0.22], 'intensity': 9000.0, 'name': 'Lamp'})
-                    g.nodes.append({'name': f'Lamp_{tx}_{k}', 'translation': wp, 'extensions': {'KHR_lights_punctual': {'light': len(g.lights) - 1}}})
+            cat = gr['c']; P = inst[gr['first']:gr['first'] + gr['n']]
+            ca = np.cos(P[:, 3])[:, None]; sa = np.sin(P[:, 3])[:, None]
+            x = pos[None, :, 0] * P[:, 4:5]; y = pos[None, :, 1] * P[:, 5:6]; z = pos[None, :, 2] * P[:, 6:7]
+            out = np.stack([ca * x - sa * y + P[:, 0:1], sa * x + ca * y + P[:, 1:2], z + P[:, 2:3]], -1).reshape(-1, 3)
+            nx, ny = nrm[None, :, 0], nrm[None, :, 1]
+            on = np.stack([ca * nx - sa * ny, sa * nx + ca * ny, np.broadcast_to(nrm[None, :, 2], (len(P), len(pos)))], -1).reshape(-1, 3)
+            oc = np.tile(col, (len(P), 1)) if col is not None else None
+            ot = (t.reshape(1, -1) + (np.arange(len(P)) * len(pos))[:, None]).reshape(-1, 3)
+            merged.setdefault((cat, bool(gr['d'])), []).append((out.astype('<f4'), on.astype('<f4'), oc, ot.astype('<u4')))
+            if cat == 'propGlow':
+                centre = pos.mean(0)
+                for p in P:
+                    c = centre * p[4:7]; ca1, sa1 = np.cos(p[3]), np.sin(p[3])
+                    wp = [float(p[0] + ca1 * c[0] - sa1 * c[1]), float(p[1] + sa1 * c[0] + ca1 * c[1]), float(p[2] + c[2])]
+                    g.lights.append({'type': 'point', 'color': [1.0, 0.62, 0.22], 'intensity': 400.0, 'name': 'Lamp'})
+                    g.nodes.append({'name': 'Lamp', 'translation': wp, 'extensions': {'KHR_lights_punctual': {'light': len(g.lights) - 1}}})
                     children.append(len(g.nodes) - 1)
-                g.nodes.append({'mesh': m, 'translation': [float(p[0]), float(p[1]), float(p[2])],
-                                'rotation': [0, 0, float(np.sin(a)), float(np.cos(a))], 'scale': [float(p[4]), float(p[5]), float(p[6])]})
-                children.append(len(g.nodes) - 1)
+        for (cat, dbl), parts in merged.items():
+            base = 0; Ps, Ns, Cs, Ts = [], [], [], []
+            for p_, n_, c_, t_ in parts:
+                Ps.append(p_); Ns.append(n_); Ts.append(t_ + base); base += len(p_)
+                if c_ is not None: Cs.append(c_)
+            col = np.concatenate(Cs) if Cs and len(Cs) == len(parts) else None
+            nm = NICE.get(cat, cat)
+            m = g.mesh(f'{nm}_merged', np.concatenate(Ps), np.concatenate(Ns), None if cat in ('windowGlow', 'propGlow') else col, np.concatenate(Ts), material(g, cat, dbl))
+            g.nodes.append({'name': f'{nm}_merged_{tx}', 'mesh': m}); children.append(len(g.nodes) - 1)
         g.nodes.append({'name': f'Tile_{tx}', 'translation': [offset, 0, 0], 'children': children})
         tile_roots.append(len(g.nodes) - 1)
         print(os.path.basename(f), 'objects', len(children))
