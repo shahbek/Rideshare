@@ -36,6 +36,7 @@ def load(path):
         assert len(raw) == s['length']
         if s['codec'] in LAYOUTS: raw = _undo_planes(raw, LAYOUTS[s['codec']])
         secs[s['name']] = raw
+    global LAST; LAST = secs
     v = np.frombuffer(secs['vertices'], dtype=np.dtype([('p','<f4',4),('n','<u2',4),('c','<u2',4)]))
     idx = np.frombuffer(secs['indices'], dtype='<u4')
     inst = np.frombuffer(secs['instances'], dtype='<f4').reshape(-1, 16)
