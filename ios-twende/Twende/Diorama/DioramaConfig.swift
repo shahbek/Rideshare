@@ -141,6 +141,9 @@ nonisolated struct DioramaConfig: Sendable {
     /// its plate atlas never rasterised or budgeted and its draw never encoded. The component is
     /// kept intact for a later, redesigned label system.
     static let buildingLabels = false
+    /// Tile-wide static sun shadows: the shadow map is fitted to the whole tile, so it is drawn
+    /// once per tile and lighting preset and never again while the camera pans or zooms.
+    static let tileStaticShadows = true
     /// Bump to invalidate every cached tile.
     var generatorVersion: Int = 44
     /// Reuse full-detail architectural primitives without changing their tessellation.

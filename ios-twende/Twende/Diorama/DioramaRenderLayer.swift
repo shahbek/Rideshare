@@ -805,7 +805,7 @@ nonisolated final class DioramaRenderLayer: NSObject, CustomLayerHost, @unchecke
         }
         let castingGroups = eligibleCasters
         if debug.shadows, reveal.w < 0.5, lifecycleReveal.w < 0.5, unionState.x < 0.5, let shadowMap, let shadowMatrix = shadowMap.update(command: mtlCommandBuffer, vertices: vertexBuffer, indices: indexBuffer, instances: instanceBuffer,
-            ranges: drawn, groups: castingGroups, focus: viewLow.x.isFinite && viewHigh.x > viewLow.x ? (viewLow, viewHigh) : nil,
+            ranges: drawn, groups: castingGroups, focus: !DioramaConfig.tileStaticShadows && viewLow.x.isFinite && viewHigh.x > viewLow.x ? (viewLow, viewHigh) : nil,
             sun: SIMD3(uniforms.sunDirection.x, uniforms.sunDirection.y, uniforms.sunDirection.z), preset: timeOfDay, landmarkPresent: landmarks,
             chunks: geometryChunks, lod: lodBase, timing: timing) {
             uniforms.shadowMatrix = shadowMatrix
